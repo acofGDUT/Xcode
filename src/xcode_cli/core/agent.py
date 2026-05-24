@@ -8,11 +8,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.shortcuts import radiolist_dialog
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import ANSI
 from rich.console import Console
-from rich.panel import Panel
 from rich.table import Table
 
 from xcode_cli.core.permissions import PermissionManager
@@ -100,8 +100,12 @@ class AgentRuntime:
         self.cwd = str(resolve_project_root(os.getcwd()))
         self.task_tracker = TaskTracker()
         self.memory = MemoryManager(cwd=self.cwd)
-        self.permissions = PermissionManager(cwd=self.cwd, console=self.console)
+        self.permissions = PermissionManager(cwd=self.cwd)
         self.plan_mode = PlanMode()
+        self._session_start = time.monotonic()
+        self._tool_call_count = 0
+        self._estimated_tokens = 0
+        self._session_auto_approve: dict[str, bool] = {"write": False, "shell": False}
         self.tools = ToolRegistry()
         for t in ALL_TOOLS:
             self.tools.register(t)
@@ -162,36 +166,17 @@ class AgentRuntime:
                 self._show_plan_and_ask_approval()
 
     def _render_welcome(self) -> None:
-        rg_bootstrap_message = ensure_ripgrep_installed()
+        ensure_ripgrep_installed()
 
         cfg = self.config_store.load()
         enabled = ", ".join(cfg.enabled_skills) if cfg.enabled_skills else "none"
         has_key = bool(cfg.api_key or os.getenv("XCODE_API_KEY") or os.getenv("OPENAI_API_KEY"))
-        key_state = "set" if has_key else "not set"
-        mascot = r"""
-██╗  ██╗  ██████╗ ██████╗ ██████╗ ███████╗
-╚██╗██╔╝ ██╔════╝██╔═══██╗██╔══██╗██╔════╝
- ╚███╔╝  ██║     ██║   ██║██║  ██║█████╗
- ██╔██╗  ██║     ██║   ██║██║  ██║██╔══╝
-██╔╝ ██╗ ╚██████╗╚██████╔╝██████╔╝███████╗
-╚═╝  ╚═╝  ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝
+        key_state = "ready" if has_key else "missing-key"
 
-      /\_/\
-     ( •.• )   Your coding copilot
-      > ^ <
-"""
-        self.console.print(Panel.fit(mascot, title="Welcome to Xcode", border_style="bright_green"))
-
-        info = Table(show_header=False, box=None, pad_edge=False)
-        info.add_row("[bold cyan]Skills[/bold cyan]", enabled)
-        info.add_row("[bold cyan]API Key[/bold cyan]", key_state)
-        info.add_row("[bold cyan]Config[/bold cyan]", str(self.config_store.path))
-        info.add_row("[bold cyan]Project Root[/bold cyan]", self.cwd)
-        self.console.print(info)
-        if not rg_bootstrap_message.startswith("ripgrep already installed"):
-            self.console.print(f"[dim]{rg_bootstrap_message}[/dim]")
-
-        self.console.print("[dim]Type normally to chat · Type / for commands · Tab to accept suggestion[/dim]\n")
+        self.console.print("[bold]Xcode[/bold] v0.1.0  /\\_/\\")
+        self.console.print("terminal-native AI agent  (•.•)")
+        self.console.print(f"[dim]Skills:[/dim] {enabled} | [dim]API:[/dim] {key_state} | [dim]Project:[/dim] {self.cwd}")
+        self.console.print("[dim]Type normally to chat · / for commands · Tab to complete[/dim]")
 
     def _show_command_suggestions(self) -> None:
         table = Table(show_header=True, header_style="bold cyan", box=None, pad_edge=False)
@@ -208,14 +193,17 @@ class AgentRuntime:
     def _bottom_toolbar(self) -> str:
         cfg = self.config_store.load()
         model = cfg.model or os.getenv("XCODE_MODEL", "gpt-4o-mini")
-        provider = cfg.provider or os.getenv("XCODE_PROVIDER", "openai-compatible")
-        skills_count = len(cfg.enabled_skills)
         has_key = bool(cfg.api_key or os.getenv("XCODE_API_KEY") or os.getenv("OPENAI_API_KEY"))
         api = "ready" if has_key else "missing-key"
-        return f" model={model} | provider={provider} | skills={skills_count} | api={api} "
+        elapsed = int(time.monotonic() - self._session_start)
+        minutes, seconds = divmod(elapsed, 60)
+        session_str = f"{minutes}m{seconds}s" if minutes else f"{seconds}s"
+        tok_k = self._estimated_tokens // 1000 if self._estimated_tokens else 0
+        max_tok_k = max((cfg.max_tokens or 0) // 1000, 1)
+        return f" {model} | tokens≈{tok_k}k/{max_tok_k}k | tools:{self._tool_call_count} | session {session_str} | {api} "
 
     def _print_user_bubble(self, text: str) -> None:
-        self.console.print(Panel(text, title="you", border_style="bright_cyan", title_align="left"))
+        self.console.print(f"[dim]▸ {text}[/dim]")
 
     def _print_assistant_bubble(self, text: str) -> None:
         OutputRenderer.render(self.console, text)
@@ -458,6 +446,35 @@ class AgentRuntime:
             return True
         return False
 
+    def _render_tool_call(self, tool_name: str, args: dict[str, Any]) -> None:
+        self.console.print(f"  [bold cyan]## tool.{tool_name}[/bold cyan]")
+        for key, value in args.items():
+            val_str = str(value)
+            if len(val_str) > 120:
+                val_str = val_str[:120] + "..."
+            self.console.print(f"    [dim]{key}:[/dim] {val_str}")
+
+    def _approval_scope_for_tool(self, tool_name: str) -> str | None:
+        if tool_name in {"edit_file", "write_file"}:
+            return "write"
+        if tool_name == "run_shell":
+            return "shell"
+        return None
+
+    def _prompt_tool_approval(self, tool_name: str) -> str:
+        choice = radiolist_dialog(
+            title="Tool Approval",
+            text=f"Review complete. Allow tool call now? ({tool_name})",
+            values=[
+                ("yes", "Yes"),
+                ("yes_all", "Yes, for this conversation"),
+                ("no", "No"),
+            ],
+            default="yes",
+        ).run()
+        if choice is None:
+            return "no"
+        return choice
 
     def _run_llm_loop(self, history: list[dict[str, Any]], system_prompt: str) -> str:
         max_tool_rounds = 10
@@ -465,7 +482,6 @@ class AgentRuntime:
         render_mode = cfg.response_render_mode
         stream_text = render_mode == "streaming_plus_final_render"
 
-        self.console.print("[magenta]assistant[/magenta] ▸ ", end="")
 
         for _ in range(max_tool_rounds):
             if self.context.should_compress(history):
@@ -477,22 +493,35 @@ class AgentRuntime:
             start_time = time.monotonic()
             first_text_token_elapsed_ms: float | None = None
             self.console.print("[dim]Thinking...[/dim]")
+            assistant_prefix_printed = False
+
+            stream_state = {"in_code_block": False, "fence_ticks": 0}
 
             def on_token(token: str) -> None:
-                nonlocal first_text_token_elapsed_ms
+                nonlocal first_text_token_elapsed_ms, assistant_prefix_printed
                 if first_text_token_elapsed_ms is None:
                     elapsed = time.monotonic() - start_time
                     first_text_token_elapsed_ms = elapsed * 1000
-                    if stream_text:
-                        self.console.print(f"[dim]({elapsed:.1f}s)[/dim]", end=" ")
                 content_buffer.append(token)
-                if stream_text:
-                    self.console.print(token, end="", markup=False)
+                if not stream_text:
+                    return
+                if not assistant_prefix_printed:
+                    self.console.print("[magenta]assistant[/magenta] ▸ ", end="")
+                    assistant_prefix_printed = True
+                # stream plain text, but buffer code blocks to avoid double-render
+                for ch in token:
+                    if ch == "`":
+                        stream_state["fence_ticks"] += 1
+                    else:
+                        stream_state["fence_ticks"] = 0
+                    if stream_state["fence_ticks"] == 3:
+                        stream_state["in_code_block"] = not stream_state["in_code_block"]
+                        stream_state["fence_ticks"] = 0
+                    if not stream_state["in_code_block"]:
+                        self.console.print(ch, end="", markup=False)
 
             def on_reasoning_token(token: str) -> None:
                 reasoning_buffer.append(token)
-                if stream_text:
-                    self.console.print(token, end="", markup=False, style="dim")
 
             response = self.llm.complete(
                 system_prompt=system_prompt,
@@ -501,6 +530,7 @@ class AgentRuntime:
                 on_text_token=on_token,
                 on_reasoning_token=on_reasoning_token,
             )
+            self._estimated_tokens = self.context.estimate_tokens(history)
 
             total_ms = (time.monotonic() - start_time) * 1000
 
@@ -525,49 +555,70 @@ class AgentRuntime:
 
             executed_calls: list[tuple[Any, str]] = []
             for tc in response.tool_calls:
-                self.console.print(f"[dim]## tool.{tc.name}[/dim]")
+                self._render_tool_call(tc.name, tc.args)
 
                 level = self.permissions.check(tc.name)
                 if level == "deny":
                     result = f"Permission denied for tool: {tc.name}"
-                    self.console.print(f"[dim]{result[:200]}[/dim]")
+                    self.console.print(f"  [bold red]{result}[/bold red]")
                     executed_calls.append((tc, result))
                     continue
 
-                if level == "ask":
-                    approved = self.permissions.prompt_user(tc.name, tc.args)
-                    if not approved:
-                        result = f"User denied tool: {tc.name}"
-                        self.console.print(f"[dim]{result[:200]}[/dim]")
-                        executed_calls.append((tc, result))
-                        continue
+                scope = self._approval_scope_for_tool(tc.name)
 
-                old_text = ""
-                new_text = ""
-                file_path = ""
-                show_diff = False
                 if tc.name in {"edit_file", "write_file"}:
                     file_path = str(tc.args.get("path", ""))
+                    old_text = ""
                     if file_path:
-                        show_diff = True
                         try:
                             with open(file_path, "r", encoding="utf-8") as f:
                                 old_text = f.read()
-                        except Exception:
+                        except FileNotFoundError:
                             old_text = ""
 
-                result = self.tools.execute(tc.name, tc.args)
-                self.console.print(f"[dim]{result[:200]}[/dim]")
+                    if tc.name == "write_file":
+                        new_text = str(tc.args.get("content", ""))
+                    else:
+                        old_string = str(tc.args.get("old_string", ""))
+                        new_string = str(tc.args.get("new_string", ""))
+                        replace_all = bool(tc.args.get("replace_all", False))
+                        count = -1 if replace_all else 1
+                        new_text = old_text.replace(old_string, new_string, count)
 
-                if show_diff and not str(result).startswith("Error:") and file_path:
-                    try:
-                        with open(file_path, "r", encoding="utf-8") as f:
-                            new_text = f.read()
-                    except Exception:
-                        new_text = ""
-                    OutputRenderer.render_diff(self.console, old_text, new_text, file_path)
+                    if file_path:
+                        self.console.print("  [dim]Review: diff preview before approval[/dim]")
+                        OutputRenderer.render_diff(self.console, old_text, new_text, file_path)
 
-                executed_calls.append((tc, result))
+                if scope and self._session_auto_approve.get(scope):
+                    self.console.print("  [dim]approval: auto-yes (this conversation)[/dim]")
+                elif level == "ask":
+                    if tc.name == "run_shell":
+                        cmd = str(tc.args.get("command", ""))
+                        self.console.print("  [dim]Review: command preview before approval[/dim]")
+                        self.console.print(f"  [bold yellow]$ {cmd}[/bold yellow]")
+                    approval = self._prompt_tool_approval(tc.name)
+                    if approval == "no":
+                        result = f"User denied tool: {tc.name}"
+                        self.console.print(f"  [dim]{result}[/dim]")
+                        executed_calls.append((tc, result))
+                        continue
+                    if approval == "yes_all" and scope:
+                        self._session_auto_approve[scope] = True
+
+                try:
+                    result = self.tools.execute(tc.name, tc.args)
+                except KeyboardInterrupt:
+                    self.console.print("  [dim]Interrupted.[/dim]")
+                    result = "Error: user interrupted the operation"
+
+                result_str = str(result)
+                self._tool_call_count += 1
+                if result_str.startswith("Error:"):
+                    self.console.print(f"  [bold red]{result_str}[/bold red]")
+                else:
+                    self.console.print(f"  [dim]→ done ({len(result_str)} chars)[/dim]")
+
+                executed_calls.append((tc, result_str))
 
             assistant_msg: dict[str, Any] = {
                 "role": "assistant",

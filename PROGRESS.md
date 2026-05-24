@@ -1,6 +1,6 @@
 # Xcode 项目进度表
 
-> 最后更新：2026-05-23
+> 最后更新：2026-05-24
 
 ---
 
@@ -11,7 +11,7 @@
 | Phase 1 | 协议与工具升级 | ✅ 完成 | PHASE1_ACCEPTANCE.md |
 | Phase 2 | Agent 架构升级 | ✅ 完成 | PHASE2_ACCEPTANCE.md |
 | Phase 3 | 计划与记忆 | ✅ 完成 | PHASE3_ACCEPTANCE.md |
-| Phase 4 | 安全与体验 | ⚠️ 2/4 通过，2 项待修复 | PHASE4_ACCEPTANCE.md |
+| Phase 4 | 安全与体验 | ⚠️ 3/4 通过 + UI 重构完成，4.3 部分修复 | PHASE4_ACCEPTANCE.md |
 | Phase 5 | 生态扩展 | 🔲 未开始 | — |
 
 ---
@@ -56,8 +56,9 @@
 | Task | 内容 | 状态 | 文件 |
 |------|------|:---:|------|
 | 4.1 | 权限系统 | ✅ 通过 | `permissions.py` |
-| 4.2 | UI 升级（Markdown/Diff 渲染） | ❌ 未完成（render 未集成） | `ui/renderer.py` |
-| 4.3 | 上下文管理（Token 压缩） | ⚠️ MAX_TOKENS 硬编码 200k | `context.py` |
+| 4.2 | UI 升级（Markdown/Diff 渲染） | ✅ 通过 | `ui/renderer.py` |
+| 4.2b | UI 重构 v2（先审后执行、气泡、状态栏、流式修复） | ✅ 通过 | `agent.py` + `permissions.py` + `renderer.py` |
+| 4.3 | 上下文管理（Token 压缩） | ⚠️ Config.max_tokens 已加，ContextManager 硬编码 + /env + 摘要中文待修 | `context.py` + `config.py` |
 | 4.4 | 流式思考展示与耗时统计 | ✅ 通过 | `llm.py` + `agent.py` |
 
 ---
@@ -111,6 +112,6 @@
 
 ## 下一步
 
-1. **验收 Phase 4**：权限/UI/上下文/思考展示已全部集成，需要端到端测试
-2. **Phase 5**：按需选择 WebFetch / Git / Hooks 等功能实现
-3. **Prompt 完善**：记忆系统的 BASE_SYSTEM_PROMPT 规则需要落地到 `prompting.py`
+1. **修复 Task 4.3 剩余 3 项**：ContextManager 动态读取 Config.max_tokens + `/env max-tokens` 命令 + 摘要英文化
+2. **修复 test_phase3.py**：`save_auto_memory` 已删除，测试需更新
+3. **Phase 5**：按需选择 Git 集成 / WebFetch / Hooks 等功能实现

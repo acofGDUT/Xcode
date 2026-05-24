@@ -82,7 +82,6 @@ class OutputRenderer:
         if not parts:
             parts = [("markdown", "", text)]
 
-        console.print(Panel.fit("assistant", title="assistant", border_style="magenta", title_align="left"))
         for kind, lang, payload in parts:
             if kind == "markdown":
                 if payload.strip():

@@ -1028,6 +1028,8 @@ for tc in response.tool_calls:
 
 **目标**：更好的 Markdown 渲染、代码块语法高亮、内联 diff。
 
+**详细设计**：见 `UI_REDESIGN.md`（对话气泡重构、先审后执行、工具展示、状态栏增强、欢迎屏简化）。
+
 **新建文件**：`src/xcode_cli/ui/renderer.py`
 
 ```python
@@ -1061,7 +1063,9 @@ class OutputRenderer:
 
 **目的**：当对话历史超过 token 限制时，自动压缩/截断旧消息，避免 API 调用失败。
 
-**新建文件**：`src/xcode_cli/core/context.py`
+**文件**：`src/xcode_cli/core/context.py`（新建）、`src/xcode_cli/core/config.py`（修改）、`src/xcode_cli/core/agent.py`（修改）
+
+#### 4.3.1 核心逻辑
 
 ```python
 class ContextManager:
@@ -1070,11 +1074,12 @@ class ContextManager:
     
     策略：
     1. 粗略估算 token 数（英文：~4 字符/token，中文：~1.5 字符/token）
-    2. 当预估 token 超过 MAX_TOKENS 的 80% 时触发压缩
+    2. 当预估 token 超过 max_tokens 的 80% 时触发压缩
     3. 压缩方式：保留 system prompt + 最近 N 轮完整对话，中间的对话用 LLM 做摘要
     """
     
-    MAX_TOKENS = 200000  # 保守估计，大部分模型的上下文窗口远大于此
+    def __init__(self, config: Config) -> None:
+        self.max_tokens = config.max_tokens
     
     def estimate_tokens(self, messages: list[dict]) -> int: ...
     def should_compress(self, messages: list[dict]) -> bool: ...
@@ -1082,11 +1087,70 @@ class ContextManager:
         """
         压缩策略：
         1. 保留首条 user 消息（用户初始需求）
-        2. 保留最后 16 轮完整对话
-        3. 中间部分：调用 LLM 生成一段 2000 字以内的摘要
+        2. 保留最后 8 轮完整对话
+        3. 中间部分：调用 LLM 生成一段摘要
         4. 将摘要作为 system 消息插入
         """
 ```
+
+#### 4.3.2 MAX_TOKENS 动态化（2026-05-24 设计）
+
+**问题**：当前 `MAX_TOKENS = 200000` 硬编码，`should_compress()` 阈值 = 200k × 0.8 = 160k。默认模型 `gpt-4o-mini` 上下文窗口仅 128k，压缩永远不会触发，API 在到达阈值前就返回 "context length exceeded"。
+
+**方案**：
+
+**Step 1 — Config 增加 `max_tokens` 字段**（`config.py`）：
+
+```python
+@dataclass
+class Config:
+    # ... 现有字段 ...
+    max_tokens: int = 128000  # 默认匹配 gpt-4o-mini/4o 的 128k 窗口
+```
+
+`ConfigStore.load()` / `save()` 同步读写该字段。
+
+**Step 2 — ContextManager 从 Config 读取**（`context.py`）：
+
+- 移除类常量 `MAX_TOKENS = 200000`
+- `__init__(self, config: Config)` 接收 Config，`self.max_tokens = config.max_tokens`
+- `should_compress()` 用 `self.max_tokens` 替代硬编码值
+
+**Step 3 — Agent 传入 Config**（`agent.py`）：
+
+```python
+# 构造时传入
+self.context = ContextManager(config=self.config_store.load())
+```
+
+**Step 4 — 用户可手动覆盖**（可选，`/env max-tokens <value>`）：
+
+在 `_handle_env_command()` 中增加 `max-tokens` 子命令，允许用户切换模型后手动调整上下文窗口大小。
+
+**后期可选增强**：根据 model 名称自动推断（如 `gpt-4o-mini` → 128k, `deepseek-chat` → 64k, `claude-3.5-sonnet` → 200k），但当前手动配置已覆盖需求。
+
+#### 4.3.3 摘要提示词英文化
+
+`compress()` 中的中文摘要提示词改为英文，与 `BASE_SYSTEM_PROMPT` 风格一致：
+
+```python
+# 当前（中文，不一致）
+summary_prompt = "请将以下对话压缩为 200 字以内摘要，保留关键需求、已完成操作、未完成事项、约束条件。"
+
+# 改为（英文，与 system prompt 一致）
+summary_prompt = (
+    "Summarize the following conversation in under 200 words. "
+    "Keep: key requirements, completed actions, pending items, constraints."
+)
+```
+
+#### 4.3.4 改动文件清单
+
+| 文件 | 改动 |
+|------|------|
+| `config.py` | Config 增加 `max_tokens: int = 128000`；ConfigStore 读写该字段 |
+| `context.py` | 移除 `MAX_TOKENS` 常量；`__init__` 接收 Config；摘要提示词改英文 |
+| `agent.py` | `ContextManager(config=...)` 构造传参；可选 `/env max-tokens` 命令 |
 
 ---
 
@@ -1175,7 +1239,9 @@ assistant ▸ Thinking... (3.2s)
 - [ ] shell 命令需要用户确认才能执行（如果权限设为 ask）
 - [ ] Markdown 代码块有语法高亮
 - [ ] edit_file 执行后展示 diff 对比
-- [ ] 长对话自动压缩，不会因为 token 超限而报错
+- [ ] 长对话自动压缩，压缩阈值根据 Config.max_tokens 动态计算（不再硬编码 200k）
+- [ ] `/env max-tokens <value>` 可手动调整上下文窗口大小
+- [ ] 压缩摘要提示词与 BASE_SYSTEM_PROMPT 语言一致（英文）
 - [ ] 等待首个 token 时显示 Thinking... 指示
 - [ ] 思考模型（DeepSeek R1 等）的推理过程以 dim 样式流式展示
 - [ ] 每轮 LLM 调用完成后显示耗时
@@ -1434,7 +1500,9 @@ class Config:
     model: str
     provider: str
     auto_memory: bool = True  # Phase 3 新增
+    max_tokens: int = 128000  # Phase 4.3 新增 — 上下文窗口大小
     permissions: dict = {}     # Phase 4 新增
+    response_render_mode: str = "buffer_then_render"  # Phase 4.2 新增
 
 # 计划模式
 @dataclass

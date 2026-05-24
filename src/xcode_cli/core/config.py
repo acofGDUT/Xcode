@@ -15,6 +15,7 @@ class Config:
     model: str = ""
     provider: str = "openai-compatible"
     auto_memory: bool = True
+    max_tokens: int = 128000
     response_render_mode: str = "buffer_then_render"
 
 
@@ -31,6 +32,10 @@ class ConfigStore:
         if response_render_mode not in {"streaming_plus_final_render", "buffer_then_render"}:
             response_render_mode = "buffer_then_render"
 
+        max_tokens = data.get("max_tokens", 128000)
+        if not isinstance(max_tokens, int) or max_tokens <= 0:
+            max_tokens = 128000
+
         return Config(
             enabled_skills=data.get("enabled_skills", []),
             api_key=data.get("api_key", ""),
@@ -38,6 +43,7 @@ class ConfigStore:
             model=data.get("model", ""),
             provider=data.get("provider", "openai-compatible"),
             auto_memory=data.get("auto_memory", True),
+            max_tokens=max_tokens,
             response_render_mode=response_render_mode,
         )
 
@@ -49,6 +55,7 @@ class ConfigStore:
             "model": config.model,
             "provider": config.provider,
             "auto_memory": config.auto_memory,
+            "max_tokens": config.max_tokens,
             "response_render_mode": config.response_render_mode,
         }
         self.path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")

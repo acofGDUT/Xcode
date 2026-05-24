@@ -3,9 +3,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
-
-from rich.console import Console
 
 
 @dataclass
@@ -17,9 +14,8 @@ class ToolPermission:
 class PermissionManager:
     VALID_LEVELS = {"allow", "deny", "ask"}
 
-    def __init__(self, cwd: str, console: Console) -> None:
+    def __init__(self, cwd: str) -> None:
         self.cwd = Path(cwd)
-        self.console = console
         self.session_rules: dict[str, str] = {}
 
     def set_session_rule(self, tool_name: str, level: str) -> None:
@@ -41,21 +37,6 @@ class PermissionManager:
             return global_level
 
         return self._default_level(tool_name)
-
-    def prompt_user(self, tool_name: str, args: dict[str, Any]) -> bool:
-        args_preview = json.dumps(args, ensure_ascii=False)
-        if len(args_preview) > 200:
-            args_preview = args_preview[:200] + "..."
-        self.console.print(f"[yellow]Permission required[/yellow]: {tool_name}")
-        self.console.print(f"[dim]args: {args_preview}[/dim]")
-
-        try:
-            value = input(f"Allow tool '{tool_name}'? [y/N]: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            self.console.print("[red]Permission prompt interrupted. Denied.[/red]")
-            return False
-
-        return value in {"y", "yes"}
 
     def _load_project_rules(self) -> dict[str, str]:
         project_settings = self.cwd / ".xcode" / "settings.json"
