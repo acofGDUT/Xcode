@@ -56,7 +56,8 @@
 |------|------|------|
 | 用户记忆 | `~/.xcode/XCODE.md` | 跨项目共享的长期偏好 |
 | 项目记忆 | `{cwd}/XCODE.md` | 当前项目的约束和约定 |
-| 自动记忆 | `~/.xcode/memory/auto/{timestamp}.md` | 时间戳文件，受 auto_memory 开关控制 |
+| 自动记忆索引 | `~/.xcode/projects/<project>/memory/MEMORY.md` | 单条记忆的索引和 hook |
+| 单条自动记忆 | `~/.xcode/projects/<project>/memory/<slug>.md` | 一条主题一个文件，内容由 prompt 约束 |
 
 #### 2.2 MemoryManager API 验证
 
@@ -70,25 +71,26 @@
 | `read_project_memory()` | 内容或空字符串 | PASS |
 | `write_project_memory(content, append)` | 创建/追加 | PASS |
 | `write_user_memory(content, append)` | 创建/追加 | PASS |
-| `save_auto_memory(content)` | 时间戳文件 | PASS |
-| `read_auto_memory_context(limit=5)` | 最近 5 条 | PASS |
+| `memory_dir_path()` | 返回项目 memory 目录 | PASS |
+| `memory_index_path()` | 返回 `MEMORY.md` 路径 | PASS |
+| `read_memory_index()` | 读取索引内容或空字符串 | PASS |
 | `is_auto_memory_enabled(cfg)` | 读取 Config.auto_memory | PASS |
 
 #### 2.3 get_context_for_prompt 注入验证
 
 | 条件 | 注入内容 | 结果 |
 |------|----------|------|
-| 有项目记忆 + 用户记忆 | 两段 + Auto Memory（若开启） | PASS |
+| 有项目记忆 + 用户记忆 | 两段 + Auto Memory Index（若开启） | PASS |
 | 仅有项目记忆 | Project Memory block | PASS |
 | 仅有用户记忆 | User Memory block | PASS |
 | 无任何记忆 | 空字符串 | PASS |
-| auto_memory=False | 无 Auto Memory block | PASS |
+| auto_memory=False | 无 Auto Memory Index block | PASS |
 | 超长内容 (3000 chars) | 截断至 ~5000 chars 总上限 | PASS |
 
 **注入优先级**（已确认）：
 1. `## Project Memory (XCODE.md)` → 上限 2000 chars
 2. `## User Memory (XCODE.md)` → 上限 2000 chars
-3. `## Auto Memory` → 上限 1200 chars（仅 auto_memory=True）
+3. `## Auto Memory Index` → 上限 1200 chars（仅 auto_memory=True）
 4. **总计上限 5000 chars**
 
 #### 2.4 删除内容确认
@@ -96,13 +98,16 @@
 | 旧组件 | 状态 |
 |--------|------|
 | `MemoryEntry` dataclass | 已删除 |
-| `MEMORY.md` 索引文件 | 已删除 |
-| frontmatter 解析 (`_parse_file`) | 已删除 |
-| `list_memories()` / `update_index()` | 已删除 |
+| `save_auto_memory()` 写入链 | 已删除 |
+| `read_auto_memory_context()` | 已删除 |
+| `read_auto_memory_entries()` | 已删除 |
+| 代码内 frontmatter 解析 | 已删除 |
 | `memory_list` 工具 | 已删除 |
 | `memory_get` 工具 | 已删除 |
 | `memory_save` 工具 | 已删除 |
 | `memory_delete` 工具 | 已删除 |
+
+**说明**：`MEMORY.md` 在当前模型中不是被删除，而是作为 auto memory 索引保留；删除的是“由代码直接维护和解析单文件 auto memory 条目”的旧实现。
 
 ---
 
@@ -187,8 +192,8 @@ class Config:
 
 | 差异 | 原设计 (ROADMAP) | 当前实现 | 原因 |
 |------|-----------------|----------|------|
-| 记忆文件结构 | `memory/*.md` + `MEMORY.md` 索引 | `XCODE.md` 双文件 + `auto/` 目录 | 降低认知负担 |
-| 记忆类型标签 | 4 类（user/feedback/project/reference）+ frontmatter | 3 层（project/user/auto） | 极简化 |
+| 记忆文件结构 | `memory/*.md` + `MEMORY.md` 索引 | `XCODE.md` 双文件 + `projects/<name>/memory/` | 项目语义更清晰 |
+| auto memory 模型 | 代码维护条目内容 | prompt 驱动的 `<slug>.md` + `MEMORY.md` 索引 | 代码更轻、行为可审计 |
 | 记忆 CRUD 工具 | 4 个专用工具 | 0 个（Agent 用 write_file/edit_file） | 对齐 Claude Code |
 | `/memory` 命令 | 无 | `/memory` + `/memory auto on/off` | 新增 |
 | `auto_memory` 开关 | 无 | Config 字段 + 持久化 | 新增 |
@@ -210,4 +215,4 @@ class Config:
 
 ## 结论
 
-Phase 3 "计划与记忆" 全部 8 项验收通过。记忆系统从旧的多文件索引体系重构为 XCODE.md 双文件 + auto_memory 模型，对标 Claude Code 的无专用工具 + 自动注入模式。计划模式状态机完整，用户审批流程通畅。旧 memory CRUD 工具已全部下线。可以进入 Phase 4 开发。
+Phase 3 "计划与记忆" 全部 8 项验收通过。当前记忆系统模型是：项目 XCODE、用户 XCODE，以及 `~/.xcode/projects/<project>/memory/` 下由 prompt 驱动维护的单条记忆文件 + `MEMORY.md` 索引。计划模式状态机完整，用户审批流程通畅。旧 memory CRUD 工具已全部下线。可以进入后续阶段开发。

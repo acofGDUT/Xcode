@@ -71,8 +71,9 @@ AgentRuntime (agent.py)
 build_system_prompt() 拼接顺序：
   1. BASE_SYSTEM_PROMPT          (prompting.py, 基础行为规范)
   2. Working directory           (当前工作目录)
-  3. Enabled skills              (各技能 SKILL.md 原文注入)
-  4. Memory context              (MemoryManager.get_context_for_prompt)
+  3. Resolved memory paths       (当前项目的 project/user/dir/index 真实路径)
+  4. Enabled skills              (各技能 SKILL.md 原文注入)
+  5. Memory context              (MemoryManager.get_context_for_prompt)
        ├── Project XCODE.md      (上限 2000 chars)
        ├── User XCODE.md         (上限 2000 chars)
        └── Auto memory           (上限 1200 chars, 总计 5000)
@@ -82,9 +83,10 @@ build_system_prompt() 拼接顺序：
 
 **auto memory 存储格式**：
 
-- 文件位置：`~/.xcode/projects/<project>/memory/memory.md`
-- 单条格式：`- type: <user|feedback|project|reference> | note: <content>`
-- 写入方式：LLM 调用 `write_file(path=memory.md, content="...", append=true)`
+- 目录位置：`~/.xcode/projects/<project>/memory/`
+- 索引文件：`MEMORY.md`
+- 单条记忆：一个主题一个 `.md` 文件，文件名由 slug 决定
+- 写入方式：LLM 先创建单条记忆文件，再追加一行到 `MEMORY.md` 作为索引
 
 ```
 写入:
@@ -92,20 +94,23 @@ build_system_prompt() 拼接顺序：
     │
     ├─ 项目级长期记忆 → edit_file <project>/XCODE.md (append under ## Project)
     ├─ 用户级长期记忆 → edit_file ~/.xcode/XCODE.md (append under ## User)
-    └─ 自动记忆 → write_file(path=memory.md, content="- type: X | note: Y", append=true)
+    └─ 自动记忆 →
+         1. write_file(path=<memory_dir>/<slug>.md, content=<frontmatter + body>)
+         2. write_file(path=<memory_dir>/MEMORY.md, content="- [Title](<slug>.md) — hook", append=true)
          │
          └─ 所有「何时存/存什么/存什么类型/不存什么」的判断由 BASE_SYSTEM_PROMPT 驱动
-            MemoryManager 不参与写入，不做事后过滤
+            MemoryManager 不参与写入，只负责路径和 prompt 注入
 
 读取（自动注入）:
   每次 build_system_prompt() →
+    先注入当前项目的 resolved memory paths，减少 Windows 下路径猜测错误
     MemoryManager.get_context_for_prompt(cfg)
       ├─ Project XCODE.md (截断 2000)
       ├─ User XCODE.md (截断 2000)
-      └─ read_auto_memory_context(limit=5)
-           ├─ read_auto_memory_entries() 解析 memory.md 中所有有效条目
-           ├─ 取最后 N 条（默认 5）
-           └─ 拼成多行文本 (截断 1200, 仅 auto_memory=True)
+      └─ read_memory_index()
+           ├─ 读取 `MEMORY.md` 索引内容
+           ├─ 截断到 1200 chars（仅 auto_memory=True）
+           └─ 需要详细内容时，再由 Agent 用 `read_file` 读取对应记忆文件
 ```
 
 ## 3. 关键设计决策
@@ -120,7 +125,7 @@ build_system_prompt() 拼接顺序：
 
 ### 3.3 记忆系统无专用 CRUD 工具
 
-对标 Claude Code，不使用 `memory_save/list/get/delete` 工具。Agent 通过 `write_file`/`edit_file` 直接操作 `XCODE.md` 文件。`MemoryManager` 仅负责 context 注入和 auto_memory 质量过滤。
+对标 Claude Code，不使用 `memory_save/list/get/delete` 工具。Agent 通过 `write_file`/`edit_file` 直接操作 `XCODE.md`、单条 auto memory 文件和 `MEMORY.md` 索引。`MemoryManager` 仅负责路径管理和 context 注入；真实 memory 路径由 `build_system_prompt()` 显式暴露给模型。
 
 ### 3.4 权限系统三级优先级
 
@@ -184,7 +189,8 @@ src/xcode_cli/
   XCODE.md                 # 用户记忆
   settings.json            # 权限配置
   projects/<name>/memory/
-    memory.md              # 自动记忆
+    MEMORY.md              # 自动记忆索引
+    *.md                   # 单条自动记忆文件
   plans/                   # 计划文件
   sessions/                # 聊天日志
   skills/                  # 已安装技能

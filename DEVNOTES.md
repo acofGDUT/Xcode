@@ -14,9 +14,15 @@
 
 **根因**：`radiolist_dialog` 是为独立 CLI 工具设计的对话框，不适合嵌入持续的对话式交互。它启动独立的 event loop，接管整个终端渲染。
 
-**修复方向**：换成内联审批——`PromptSession.prompt()` 单行输入，diff 保持显示不滚动。详见 `UI_APPROVAL_FIX.md`。
+**修复方向**：换成内联审批——diff 保持显示不滚动，审批区直接在当前上下文里渲染，而不是弹出全屏对话框。详见 `UI_APPROVAL_FIX.md`。
 
-**状态**：✅ 已修复（V3，2026-05-25）。`radiolist_dialog` 已删除，改为内联 `input()`：`Apply {tool} for {scope}? [Y]es / [n]o / [a]ll`
+**状态**：✅ 已修复（V3，2026-05-25）。`radiolist_dialog` 已删除，TTY 环境下改为内联三选项菜单：
+
+- `Yes`
+- `No`
+- `Yes, for this conversation`
+
+支持 `↑/↓` 和 `Enter` 选择，也保留 `y/n/a` 快捷键；仅在非 TTY fallback 场景下才退回单行 `input()`。
 
 ---
 
@@ -58,15 +64,20 @@
 
 ---
 
-### 5. auto_memory 分类逻辑基于关键词匹配
+### 5. auto_memory 现为 prompt 驱动的索引模型
 
-**现象**：`MemoryManager._classify_auto_memory_type()` 用硬编码的关键词列表判断记忆类型。
+**现状**：当前实现不再由 `MemoryManager` 用关键词分类、解析或过滤 auto memory。类型判断、slug 命名、frontmatter 结构、索引维护规则都由 `BASE_SYSTEM_PROMPT` 驱动，`MemoryManager` 只负责：
 
-**局限**：中英文关键词各覆盖不完全，可能漏分类或误分类。当前覆盖了常见模式，但边缘 case 存在。
+- 暴露 `memory/` 目录与 `MEMORY.md` 索引路径
+- 在 prompt 中注入项目 XCODE、用户 XCODE 和 `MEMORY.md` 索引内容
 
-**改进方向**：改为 prompt 驱动——在 BASE_SYSTEM_PROMPT 中定义四种类型的语义和示例，让 LLM 自行判断类型。参考 `prompts/memory_system_prompt.md`。
+**当前模型**：
 
-**当前存储格式已到位**：`- type: <user|feedback|project|reference> | note: <content>`，单文件 `memory.md`，解析 + 去重逻辑完整。问题只在「谁来判断类型」——是函数还是 LLM。
+- 单条记忆：`~/.xcode/projects/<project>/memory/<slug>.md`
+- 索引文件：`~/.xcode/projects/<project>/memory/MEMORY.md`
+- 注入方式：只自动注入 `MEMORY.md` 索引；需要细节时，Agent 再自行 `read_file` 对应记忆文件
+
+**影响**：智能判断几乎全部在 prompt 层，不在 `memory.py` 里。这让代码更简单，但也意味着 prompt 文档和实现模型必须始终保持一致。
 
 ---
 
@@ -119,6 +130,24 @@ buffer_then_render：不流式，完整后一次渲染（最美观）
 
 ---
 
+### 10. Phase 4.5 Batch 2 review closure：记忆模型验证与 Windows 路径回归已收口（2026-05-25，Codex review）
+
+**结果**：当前 memory 模型已补齐一轮真实测试基线，覆盖 `MemoryManager` 路径与读写、`build_system_prompt()` 的 memory 集成，以及 `AgentRuntime._handle_memory_command()` 的真实命令路径。
+
+**已补充的测试**：
+- `tests/test_memory.py`
+- `tests/test_prompting_memory.py`
+- `tests/test_agent_memory_command.py`
+- `tests/test_agent_memory_bug.py`
+
+**实现收口**：
+- `build_system_prompt()` 现在会显式注入当前项目的 resolved memory paths，减少模型在 Windows 下自行拼接 `%USERNAME%` 或把 `<project>` 误替换成完整工作目录的概率
+- `agent.py` 中 `write_file` / `edit_file` 的 diff preview 读取目标文件时，已将 `OSError` 视为可恢复预览失败，不再因为非法路径把主循环打崩
+
+**结论**：Phase 4.5 Batch 2 的 memory 校验与回归修复已关闭。后续与 memory 相关的工作不再是“补当前模型测试基线”，而是更高层的能力扩展，例如会话恢复、费用估算和原生 Windows 端到端验收。
+
+---
+
 
 ## 设计取舍
 
@@ -158,24 +187,24 @@ ROADMAP 原设计期望 Agent 自动判断任务复杂度并进入计划模式�
 - 异步会传染 `complete()` → `_run_llm_loop()` → `run_chat()` 整个调用链
 - 当前代码量 ~2400 行，不值得引入异步复杂度
 
-### 为什么 auto memory 用 write_file + append 而不是内联格式
+### 为什么 auto memory 用“单条记忆文件 + MEMORY.md 索引”而不是内联格式
 
 **两种方案**：
 
 | | 路径 A（内联格式） | 路径 B（write_file + append） |
 |---|---|---|
-| 机制 | LLM 在回复中夹带 `- type: X \| note: Y`，代码正则抓取 | LLM 显式调用 `write_file(append=true)` |
+| 机制 | LLM 在回复中夹带 `- type: X \| note: Y`，代码正则抓取 | LLM 显式创建 `<slug>.md` 并维护 `MEMORY.md` 索引 |
 | 触发 | `_try_persist_auto_memory` 只在无 tool_calls 时触发 | 任何时刻 LLM 都可以调用工具 |
 | 可见性 | 用户看不到（被系统消费） | 对话中显示为工具调用，可审计 |
-| memory.py | ~190 行（解析、过滤、去重、写入） | ~120 行（只读取 + 注入） |
+| memory.py | ~190 行（解析、过滤、去重、写入） | ~120 行（路径管理 + 索引读取 + 注入） |
 | 判断逻辑 | 代码层 `_is_durable_note` 关键词过滤 | prompt 驱动，LLM 自行判断 |
 
 **选择路径 B 的理由**：
 - 路径 A 的触发窗口太窄（`agent.py:523` 只在 `not response.tool_calls` 时触发），多轮工具调用中的记忆会丢失
 - 路径 A 依赖 LLM 在自然语言中严格输出格式行，不可靠
 - 路径 B 中 LLM 显式调工具，行为有审计记录
-- 路径 B 让 memory.py 退化到纯 I/O，所有智能在 prompt 里——改 prompt 不改变代码
-- 代价：`write_file` 需要增加 `append` 参数（+8 行）
+- 路径 B 让 `memory.py` 退化到路径管理和注入层，所有智能在 prompt 里——改 prompt 不改变代码
+- 路径 B 允许“索引先提示、需要时再读详情”的两段式记忆访问，减少 prompt 膨胀
 
 **决策日期**：2026-05-24
 

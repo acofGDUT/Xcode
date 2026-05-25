@@ -8,7 +8,8 @@
 - **Streaming output**: real-time token streaming with thinking/reasoning display and timing stats
 - **Sub-agents**: EXPLORE / PLAN / GENERAL types with tool whitelist isolation, parallel execution via ThreadPoolExecutor
 - **Plan mode**: enter → explore → write plan → request user approval → execute
-- **Memory system**: project/user XCODE.md plus auto memory entries injected into prompts
+- **Memory system**: project/user XCODE.md plus indexed auto memory files under `~/.xcode/projects/<project>/memory/`, with resolved memory paths injected into the prompt for the active project
+- **Memory validation baseline**: covered by `tests/test_memory.py`, `tests/test_prompting_memory.py`, `tests/test_agent_memory_command.py`, and the Windows malformed-path regression test
 - **Permission system**: three-level (session > project > global), allow/deny/ask per tool
 - **Context management**: token estimation + automatic compression via LLM summarization with configurable `max_tokens`
 - **Skill system**: installable, pluggable skills with SKILL.md injection

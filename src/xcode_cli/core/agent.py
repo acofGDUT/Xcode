@@ -843,7 +843,7 @@ class AgentRuntime:
                         try:
                             with open(file_path, "r", encoding="utf-8") as f:
                                 old_text = f.read()
-                        except FileNotFoundError:
+                        except (FileNotFoundError, OSError):
                             old_text = ""
 
                     if tc.name == "write_file":

@@ -206,9 +206,19 @@ When in doubt: if it needs to survive beyond the current task and isn't derivabl
 
 def build_system_prompt(config: Config, skill_manager: SkillManager, cwd: str = "") -> str:
     sections: list[str] = [BASE_SYSTEM_PROMPT]
+    memory_manager = MemoryManager(cwd=cwd or None)
 
     if cwd:
         sections.append(f"\nWorking directory: {cwd}")
+        sections.append(
+            "\nResolved memory paths for this project:\n"
+            f"- Project XCODE.md: {memory_manager.project_memory_path()}\n"
+            f"- User XCODE.md: {memory_manager.user_memory_path()}\n"
+            f"- Auto memory dir: {memory_manager.memory_dir_path()}\n"
+            f"- Auto memory index: {memory_manager.memory_index_path()}\n"
+            "- When writing memory, use these exact resolved paths. "
+            "Do not invent %USERNAME% or replace <project> with the full working-directory path."
+        )
 
     if config.enabled_skills:
         sections.append("\nEnabled skills:")
@@ -222,7 +232,7 @@ def build_system_prompt(config: Config, skill_manager: SkillManager, cwd: str = 
                 sections.append(f"\n## Skill: {name}\n")
                 sections.append(skill_md.read_text(encoding="utf-8"))
 
-    memory_context = MemoryManager(cwd=cwd or None).get_context_for_prompt(config)
+    memory_context = memory_manager.get_context_for_prompt(config)
     if memory_context:
         sections.append("\n" + memory_context)
 

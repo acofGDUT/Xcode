@@ -805,9 +805,9 @@ if self.plan_mode.pending_approval:
 
 ---
 
-### Task 3.2 — 记忆系统（XCODE.md 双文件模型）
+### Task 3.2 — 记忆系统（XCODE.md + Auto Memory Index 模型）
 
-**核心理念**：废弃旧的多文件索引体系，统一为 `XCODE.md` 双文件模型，对标 Claude Code 记忆系统——无专用 memory 工具，Agent 通过自然语言判断何时写入，记忆自动注入 system prompt。
+**核心理念**：长期记忆使用 `XCODE.md` 双文件，自动记忆使用 `~/.xcode/projects/<project>/memory/` 目录下的单条记忆文件 + `MEMORY.md` 索引。无专用 memory 工具，Agent 通过已有文件工具读写，记忆自动注入 system prompt。
 
 **数据目录结构**：
 
@@ -815,13 +815,18 @@ if self.plan_mode.pending_approval:
 ~/.xcode/
   XCODE.md                              # 用户记忆（长期，跨项目共享）
   projects/<project>/memory/
-    memory.md                           # 自动记忆（单文件，每行一条分类条目）
+    MEMORY.md                           # 自动记忆索引
+    <slug>.md                           # 单条自动记忆文件
 
 <project_root>/
   XCODE.md                              # 项目记忆（项目内约束、约定、决策）
 ```
 
-**auto memory 条目格式**：`- type: <user|feedback|project|reference> | note: <content>`
+**auto memory 模型**：
+
+- 单条记忆：一个主题一个 `.md` 文件
+- 索引文件：`MEMORY.md`，每行一个 hook，例如 `- [Title](slug.md) — one-line hook`
+- 单条记忆文件内容：由 system prompt 约束 frontmatter + body 结构
 
 **与 Claude Code 记忆系统的对标**：
 
@@ -829,7 +834,7 @@ if self.plan_mode.pending_approval:
 |------|-------------|----------------|
 | 项目级指令 | `CLAUDE.md` / `.claude/CLAUDE.md` | `<project>/XCODE.md` |
 | 用户级记忆 | `~/.claude/projects/<name>/memory/` | `~/.xcode/XCODE.md` |
-| 自动记忆 | Agent 自主写入 `.md` 文件 | Agent 自主写入 `~/.xcode/projects/<project>/memory/memory.md` |
+| 自动记忆 | Agent 自主写入 `.md` 文件 | Agent 自主写入 `~/.xcode/projects/<project>/memory/<slug>.md` 并维护 `MEMORY.md` |
 | 专用 CRUD 工具 | 无（用 Write/Read 工具） | 无（用 write_file/read_file 工具） |
 | 注入方式 | 每次会话自动注入 system prompt | 每次会话自动注入 system prompt |
 | 开关控制 | 系统指令控制 | `auto_memory` 配置 + `/memory auto on/off` |
@@ -855,14 +860,14 @@ class MemoryManager:
     def write_user_memory(self, content: str, append: bool = True) -> None: ...
     def write_project_memory(self, content: str, append: bool = True) -> None: ...
 
-    # ── auto-memory 写入（由 LLM 通过 write_file 工具完成，MemoryManager 不参与）──
+    # ── auto-memory 写入（由 LLM 通过 write_file/edit_file 工具完成，MemoryManager 不参与）──
     def is_auto_memory_enabled(self, cfg: Config) -> bool: ...
+    def memory_dir_path(self) -> Path: ...
+    def memory_index_path(self) -> Path: ...
 
     # ── auto-memory 读取（供 prompt 注入用）──
-    def read_auto_memory_entries(self) -> list[tuple[str, str]]:
-        """解析 memory.md 返回 [(type, note), ...]. 仅内部使用."""
-    def read_auto_memory_context(self, limit: int = 5) -> str:
-        """取最后 limit 条，拼成多行文本返回."""
+    def read_memory_index(self) -> str:
+        """读取 MEMORY.md 索引文本."""
 
     # ── prompt 注入（核心方法） ──
     def get_context_for_prompt(self, cfg: Config) -> str:
@@ -870,23 +875,28 @@ class MemoryManager:
         拼接记忆上下文，注入优先级：
         1. Project XCODE.md  （上限 2000 chars）
         2. User XCODE.md     （上限 2000 chars）
-        3. Auto memory       （上限 1200 chars，仅 auto_memory=True 时）
+        3. Auto Memory Index （上限 1200 chars，仅 auto_memory=True 时）
         总上限 5000 chars
         “””
 ```
 
 **删除内容**：
 - `MemoryEntry` dataclass
-- `MEMORY.md` 索引文件
 - 4 个专用 memory 工具（`memory_list` / `memory_get` / `memory_save` / `memory_delete`）
-- frontmatter 解析逻辑
+- 代码内置的 auto memory 分类/抓取链
+- MemoryManager 对单条 auto memory 文件内容的解析逻辑
 
-**Agent 如何操作记忆**：Agent 使用已有的 `write_file` / `edit_file` 工具直接操作记忆文件。Auto memory 写入使用 `write_file(path=memory.md, content=”...”, append=true)`，长期记忆写入使用 `edit_file` 追加到 XCODE.md。system prompt 中描述完整的类型定义、负面清单、读写规则和验证步骤。
+**Agent 如何操作记忆**：Agent 使用已有的 `write_file` / `edit_file` 工具直接操作记忆文件。长期记忆写入使用 `XCODE.md`；auto memory 写入使用两步：
 
-**设计决策（2026-05-24）**：auto memory 写入从「内联格式 + 代码正则抓取」（路径 A）改为「write_file + append 工具调用」（路径 B）。理由：
+1. 创建 `<memory_dir>/<slug>.md`
+2. 追加一行到 `<memory_dir>/MEMORY.md`
+
+system prompt 中描述类型定义、负面清单、命名规则、索引维护和验证步骤。
+
+**设计决策（2026-05-24）**：auto memory 写入从「内联格式 + 代码正则抓取」（路径 A）改为「单条记忆文件 + `MEMORY.md` 索引，由文件工具显式维护」（路径 B）。理由：
 - 路径 A 要求 LLM 在自然语言中夹带格式行，不可靠；_try_persist_auto_memory 只在无 tool_calls 时触发，窗口太窄
 - 路径 B 中 LLM 显式调用工具，行为可审计（对话中可见工具调用），触发时机不受限
-- memory.py 从 236 行精简到 ~120 行，只保留读取 + 注入，所有智能判断由 prompt 驱动
+- `memory.py` 只保留路径管理、索引读取和 prompt 注入，所有智能判断由 prompt 驱动
 
 ---
 
@@ -917,6 +927,8 @@ class MemoryManager:
 
 ### Task 3.4 — Config 扩展 + /memory 命令
 
+**补充状态（2026-05-25）**：已补齐 `tests/test_memory.py`、`tests/test_prompting_memory.py`、`tests/test_agent_memory_command.py`，并新增 Windows 非法 memory 路径回归测试 `tests/test_agent_memory_bug.py`。相关实现已通过 review。
+
 **Config 新增字段**（`config.py`）：
 
 ```python
@@ -941,9 +953,9 @@ class Config:
 - [ ] `/plan enter` 进入计划模式，system prompt 切换为只读探索
 - [ ] `write_plan` + `exit_plan_mode` 完整流程可走通
 - [ ] 用户可通过 `approve`/`reject` 审批计划
-- [ ] `~/.xcode/XCODE.md` 用户记忆跨会话持久化
-- [ ] `<project>/XCODE.md` 项目记忆在新会话中自动注入 system prompt
-- [ ] `/memory` 命令显示状态，`/memory auto on/off` 持久化
+- [x] `~/.xcode/XCODE.md` 用户记忆跨会话持久化
+- [x] `<project>/XCODE.md` 项目记忆在新会话中自动注入 system prompt
+- [x] `/memory` 命令显示状态，`/memory auto on/off` 持久化
 - [ ] Project Root 解析统一生效（Agent / Memory / Search 使用同一根目录）
 - [ ] `grep/glob` 默认检索不再依赖随机 CWD，不会跨盘误扫
 - [ ] 默认拒绝在文件系统根目录执行检索（除非用户显式指定更窄 path）
@@ -1442,10 +1454,12 @@ Phase 2 后增加：
 
 Phase 3 后增加：
               ├── PlanMode(planning.py)
-              ├── MemoryManager(memory.py)   ← XCODE.md 双文件
-              │     ├── ~/.xcode/XCODE.md    ← 用户记忆
-              │     ├── {cwd}/XCODE.md       ← 项目记忆
-              │     └── memory/auto/         ← 自动记忆
+              ├── MemoryManager(memory.py)     ← XCODE.md + Auto Memory Index
+              │     ├── ~/.xcode/XCODE.md      ← 用户记忆
+              │     ├── {cwd}/XCODE.md         ← 项目记忆
+              │     └── ~/.xcode/projects/<project>/memory/
+              │           ├── MEMORY.md        ← 自动记忆索引
+              │           └── <slug>.md        ← 单条自动记忆
               ├── /plan 命令 (enter/show/approve/reject)
               └── /memory 命令 (状态查看 + auto on/off)
 
