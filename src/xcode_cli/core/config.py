@@ -17,6 +17,7 @@ class Config:
     auto_memory: bool = True
     max_tokens: int = 128000
     response_render_mode: str = "buffer_then_render"
+    syntax_theme: str = "monokai"
 
 
 class ConfigStore:
@@ -36,6 +37,10 @@ class ConfigStore:
         if not isinstance(max_tokens, int) or max_tokens <= 0:
             max_tokens = 128000
 
+        syntax_theme = data.get("syntax_theme", "monokai")
+        if not isinstance(syntax_theme, str) or not syntax_theme.strip():
+            syntax_theme = "monokai"
+
         return Config(
             enabled_skills=data.get("enabled_skills", []),
             api_key=data.get("api_key", ""),
@@ -45,6 +50,7 @@ class ConfigStore:
             auto_memory=data.get("auto_memory", True),
             max_tokens=max_tokens,
             response_render_mode=response_render_mode,
+            syntax_theme=syntax_theme.strip(),
         )
 
     def save(self, config: Config) -> None:
@@ -57,5 +63,6 @@ class ConfigStore:
             "auto_memory": config.auto_memory,
             "max_tokens": config.max_tokens,
             "response_render_mode": config.response_render_mode,
+            "syntax_theme": config.syntax_theme,
         }
         self.path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")

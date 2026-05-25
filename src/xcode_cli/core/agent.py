@@ -3,17 +3,20 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.shortcuts import radiolist_dialog
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import ANSI
 from rich.console import Console
+from rich.live import Live
+from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from xcode_cli.core.permissions import PermissionManager
 from xcode_cli.ui.renderer import OutputRenderer
@@ -37,6 +40,7 @@ from xcode_cli.skills.manager import SkillManager
 
 COMMANDS = {
     "/help": "Show available commands",
+    "/context": "Show token usage and context budget",
     "/dashboard": "Open API configuration dashboard",
     "/skill": "Manage skills (list/install/enable/disable)",
     "/env": "Manage API env for current process",
@@ -78,6 +82,7 @@ class SlashCompleter(Completer):
                 ("/env unset", "Unset API key from process and config"),
                 ("/env base-url ", "Set provider base URL"),
                 ("/env model ", "Set model name"),
+                ("/env theme ", "Set syntax highlight theme"),
                 ("/env edit", "Open ~/.xcode/config.json in default editor"),
             ]:
                 if cmd.startswith(text):
@@ -105,6 +110,7 @@ class AgentRuntime:
         self._session_start = time.monotonic()
         self._tool_call_count = 0
         self._estimated_tokens = 0
+        self._history: list[dict[str, Any]] = []
         self._session_auto_approve: dict[str, bool] = {"write": False, "shell": False}
         self.tools = ToolRegistry()
         for t in ALL_TOOLS:
@@ -120,7 +126,8 @@ class AgentRuntime:
         session_id = self.sessions.new_session_id()
         self._render_welcome()
 
-        history: list[dict[str, Any]] = []
+        self._history = []
+        history = self._history
 
         while True:
             user_input = self.prompt.prompt(ANSI("\x1b[96myou\x1b[0m ▸ "), bottom_toolbar=self._bottom_toolbar).strip()
@@ -183,6 +190,7 @@ class AgentRuntime:
         table.add_column("Command", style="green")
         table.add_column("Description", style="white")
         table.add_row("/help", "Show available commands")
+        table.add_row("/context", "Show token usage and context budget")
         table.add_row("/dashboard", "Open API configuration dashboard")
         table.add_row("/skill", "Manage skills")
         table.add_row("/env", "Configure API and model settings")
@@ -206,7 +214,7 @@ class AgentRuntime:
         self.console.print(f"[dim]▸ {text}[/dim]")
 
     def _print_assistant_bubble(self, text: str) -> None:
-        OutputRenderer.render(self.console, text)
+        OutputRenderer.render(self.console, text, syntax_theme=self.config_store.load().syntax_theme)
 
     def _handle_slash_command(self, command: str) -> None:
         parts = command.split()
@@ -215,9 +223,14 @@ class AgentRuntime:
         if head == "/help":
             self._show_command_suggestions()
             self.console.print("/skill list|install <path>|enable <name>|disable <name>")
-            self.console.print("/env show|set <api_key>|unset")
+            self.console.print("/env show|set <api_key>|unset|base-url <url>|model <name>|theme <name>")
+            self.console.print("/context")
             self.console.print("/memory | /memory auto on|off")
             self.console.print("/dashboard")
+            return
+
+        if head == "/context":
+            self._handle_context_command()
             return
 
         if head == "/dashboard":
@@ -281,16 +294,23 @@ class AgentRuntime:
 
     def _handle_env_command(self, parts: list[str]) -> None:
         if len(parts) == 1:
-            self.console.print("/env show | /env set <api_key> | /env unset | /env edit")
+            self.console.print(
+                "/env show | /env set <api_key> | /env unset | /env base-url <url> | "
+                "/env model <name> | /env theme <name> | /env edit"
+            )
             return
         action = parts[1].lower()
         if action == "show":
+            cfg = self.config_store.load()
             key = os.getenv("XCODE_API_KEY") or os.getenv("OPENAI_API_KEY")
             if not key:
                 self.console.print("API key is not set.")
             else:
                 masked = key[:6] + "..." + key[-4:] if len(key) > 12 else "(set)"
                 self.console.print(f"API key: {masked}")
+            self.console.print(f"model: {cfg.model or os.getenv('XCODE_MODEL', 'gpt-4o-mini')}")
+            self.console.print(f"base_url: {cfg.base_url or '(default)'}")
+            self.console.print(f"syntax theme: {cfg.syntax_theme}")
             return
         if action == "set" and len(parts) >= 3:
             key = " ".join(parts[2:])
@@ -326,6 +346,13 @@ class AgentRuntime:
             self.console.print(f"model saved to {self.config_store.path}")
             return
 
+        if action == "theme" and len(parts) >= 3:
+            cfg = self.config_store.load()
+            cfg.syntax_theme = " ".join(parts[2:]).strip() or "monokai"
+            self.config_store.save(cfg)
+            self.console.print(f"syntax theme saved to {self.config_store.path}")
+            return
+
         if action == "edit":
             config_path = self.config_store.path
             self.console.print(f"Config file: {config_path}")
@@ -342,7 +369,7 @@ class AgentRuntime:
                 self.console.print(f"Failed to open config file automatically: {exc}")
             return
 
-        self.console.print("Usage: /env show|set <api_key>|unset|base-url <url>|model <name>|edit")
+        self.console.print("Usage: /env show|set <api_key>|unset|base-url <url>|model <name>|theme <name>|edit")
 
     def _create_plan_memory_tools(self) -> list[ToolDef]:
         def write_plan(content: str) -> str:
@@ -446,6 +473,58 @@ class AgentRuntime:
             return True
         return False
 
+    def _current_system_prompt(self) -> str:
+        if self.plan_mode.is_active:
+            return self.plan_mode.get_system_prompt()
+        return build_system_prompt(self.config_store.load(), self.skills, self.cwd)
+
+    def _handle_context_command(self) -> None:
+        cfg = self.config_store.load()
+        system_prompt = self._current_system_prompt()
+        system_message = {"role": "system", "content": system_prompt}
+        system_tokens = self.context.estimate_tokens([system_message])
+        role_groups: dict[str, list[dict[str, Any]]] = {
+            "user": [],
+            "assistant": [],
+            "tool": [],
+            "system": [],
+            "other": [],
+        }
+        for message in self._history:
+            role = str(message.get("role", "other"))
+            if role not in role_groups:
+                role = "other"
+            role_groups[role].append(message)
+
+        role_tokens = {role: self.context.estimate_tokens(messages) for role, messages in role_groups.items()}
+        history_tokens = sum(role_tokens.values())
+        total_tokens = system_tokens + history_tokens
+        max_tokens = cfg.max_tokens or self.context.MAX_TOKENS
+        remaining_tokens = max(max_tokens - total_tokens, 0)
+        compression_threshold = int(self.context.MAX_TOKENS * 0.8)
+
+        table = Table(show_header=True, header_style="bold cyan", box=None, pad_edge=False)
+        table.add_column("Item", style="green")
+        table.add_column("Value", style="white")
+        table.add_row("model", cfg.model or os.getenv("XCODE_MODEL", "gpt-4o-mini"))
+        table.add_row("render mode", cfg.response_render_mode)
+        table.add_row("syntax theme", cfg.syntax_theme)
+        table.add_row("messages", str(len(self._history)))
+        table.add_row("system prompt", f"~{system_tokens} tokens")
+        table.add_row("user", f"{len(role_groups['user'])} msg / ~{role_tokens['user']} tokens")
+        table.add_row("assistant", f"{len(role_groups['assistant'])} msg / ~{role_tokens['assistant']} tokens")
+        table.add_row("tool", f"{len(role_groups['tool'])} msg / ~{role_tokens['tool']} tokens")
+        if role_groups["system"]:
+            table.add_row("history system", f"{len(role_groups['system'])} msg / ~{role_tokens['system']} tokens")
+        if role_groups["other"]:
+            table.add_row("other", f"{len(role_groups['other'])} msg / ~{role_tokens['other']} tokens")
+        table.add_row("chat history", f"~{history_tokens} tokens")
+        table.add_row("total", f"~{total_tokens} / {max_tokens}")
+        table.add_row("free", f"~{remaining_tokens}")
+        table.add_row("compression threshold", f"~{compression_threshold}")
+        table.add_row("auto-memory", "on" if cfg.auto_memory else "off")
+        self.console.print(Panel(table, title="Context", border_style="cyan"))
+
     def _render_tool_call(self, tool_name: str, args: dict[str, Any]) -> None:
         self.console.print(f"  [bold cyan]## tool.{tool_name}[/bold cyan]")
         for key, value in args.items():
@@ -461,75 +540,150 @@ class AgentRuntime:
             return "shell"
         return None
 
-    def _prompt_tool_approval(self, tool_name: str) -> str:
-        choice = radiolist_dialog(
-            title="Tool Approval",
-            text=f"Review complete. Allow tool call now? ({tool_name})",
-            values=[
-                ("yes", "Yes"),
-                ("yes_all", "Yes, for this conversation"),
-                ("no", "No"),
-            ],
-            default="yes",
-        ).run()
-        if choice is None:
+    def _prompt_tool_approval(self, tool_name: str, scope: str | None) -> str:
+        if scope and self._session_auto_approve.get(scope):
+            return "yes"
+
+        suffix = f" for {scope}" if scope else ""
+        try:
+            value = input(f"  Apply {tool_name}{suffix}? [Y]es / [n]o / [a]ll: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
             return "no"
-        return choice
+
+        if not value or value in {"y", "yes"}:
+            return "yes"
+        if scope and value in {"a", "all", "yes_all"}:
+            return "yes_all"
+        return "no"
+
+    def _render_assistant_prefix(self) -> None:
+        self.console.print("[magenta]assistant[/magenta] ▸ ", end="")
+
+    def _summarize_tool_result(self, tool_name: str, args: dict[str, Any], result: str) -> str:
+        if result.startswith("Error:"):
+            return result
+
+        if tool_name == "read_file":
+            line_count = len([line for line in result.splitlines() if line.strip()])
+            return f"read {line_count} line(s)"
+        if tool_name == "grep":
+            if result.startswith("No matches found"):
+                return "no matches"
+            return f"found {len(result.splitlines())} match line(s)"
+        if tool_name == "glob":
+            if result.startswith("No files matched"):
+                return "no files matched"
+            return f"matched {len(result.splitlines())} file(s)"
+        if tool_name == "run_shell":
+            exit_line = next((line for line in reversed(result.splitlines()) if line.startswith("exit_code=")), "")
+            return exit_line or "command finished"
+        if tool_name == "edit_file":
+            return result
+        if tool_name == "write_file":
+            path = args.get("path", "")
+            action = "appended" if args.get("append") else "wrote"
+            return f"{action} {path}"
+        return f"done ({len(result)} chars)"
 
     def _run_llm_loop(self, history: list[dict[str, Any]], system_prompt: str) -> str:
         max_tool_rounds = 10
         cfg = self.config_store.load()
         render_mode = cfg.response_render_mode
         stream_text = render_mode == "streaming_plus_final_render"
+        assistant_turn_started = False
 
 
         for _ in range(max_tool_rounds):
             if self.context.should_compress(history):
-                history[:] = self.context.compress(history, self.llm)
-                self.console.print("[dim]Context compressed to avoid token overflow.[/dim]")
+                before_messages = len(history)
+                before_tokens = self.context.estimate_tokens(history)
+                compressed = self.context.compress(history, self.llm)
+                after_messages = len(compressed)
+                after_tokens = self.context.estimate_tokens(compressed)
+                history[:] = compressed
+                saved_tokens = max(before_tokens - after_tokens, 0)
+                self.console.print(
+                    f"[dim]Context compressed: {before_messages} -> {after_messages} messages, "
+                    f"saved ~{saved_tokens} tokens.[/dim]"
+                )
 
             content_buffer: list[str] = []
             reasoning_buffer: list[str] = []
             start_time = time.monotonic()
             first_text_token_elapsed_ms: float | None = None
-            self.console.print("[dim]Thinking...[/dim]")
             assistant_prefix_printed = False
 
-            stream_state = {"in_code_block": False, "fence_ticks": 0}
+            stream_state = {"fence_ticks": 0}
+            thinking_stop = threading.Event()
+            thinking_thread: threading.Thread | None = None
+            thinking_live = Live(
+                Text("Thinking (0.0s)...", style="dim"),
+                console=self.console,
+                refresh_per_second=8,
+                transient=True,
+            )
+            thinking_stopped = False
+
+            def thinking_loop() -> None:
+                while not thinking_stop.is_set():
+                    elapsed = time.monotonic() - start_time
+                    thinking_live.update(Text(f"Thinking ({elapsed:.1f}s)...", style="dim"))
+                    time.sleep(0.1)
+
+            def stop_thinking() -> None:
+                nonlocal thinking_stopped
+                if thinking_stopped:
+                    return
+                thinking_stopped = True
+                thinking_stop.set()
+                if thinking_thread is not None:
+                    thinking_thread.join(timeout=0.2)
+                thinking_live.stop()
 
             def on_token(token: str) -> None:
-                nonlocal first_text_token_elapsed_ms, assistant_prefix_printed
+                nonlocal first_text_token_elapsed_ms, assistant_prefix_printed, assistant_turn_started
                 if first_text_token_elapsed_ms is None:
                     elapsed = time.monotonic() - start_time
                     first_text_token_elapsed_ms = elapsed * 1000
+                    stop_thinking()
                 content_buffer.append(token)
                 if not stream_text:
                     return
                 if not assistant_prefix_printed:
-                    self.console.print("[magenta]assistant[/magenta] ▸ ", end="")
+                    if not assistant_turn_started:
+                        self._render_assistant_prefix()
+                        assistant_turn_started = True
                     assistant_prefix_printed = True
-                # stream plain text, but buffer code blocks to avoid double-render
                 for ch in token:
                     if ch == "`":
                         stream_state["fence_ticks"] += 1
                     else:
                         stream_state["fence_ticks"] = 0
-                    if stream_state["fence_ticks"] == 3:
-                        stream_state["in_code_block"] = not stream_state["in_code_block"]
+                    if stream_state["fence_ticks"] >= 3:
                         stream_state["fence_ticks"] = 0
-                    if not stream_state["in_code_block"]:
-                        self.console.print(ch, end="", markup=False)
+                    self.console.print(ch, end="", markup=False)
 
             def on_reasoning_token(token: str) -> None:
                 reasoning_buffer.append(token)
 
-            response = self.llm.complete(
-                system_prompt=system_prompt,
-                messages=history,
-                tool_schemas=self.tools.get_openai_schemas(),
-                on_text_token=on_token,
-                on_reasoning_token=on_reasoning_token,
-            )
+            thinking_live.start()
+            thinking_thread = threading.Thread(target=thinking_loop, daemon=True)
+            thinking_thread.start()
+
+            try:
+                response = self.llm.complete(
+                    system_prompt=system_prompt,
+                    messages=history,
+                    tool_schemas=self.tools.get_openai_schemas(),
+                    on_text_token=on_token,
+                    on_reasoning_token=on_reasoning_token,
+                )
+            except KeyboardInterrupt:
+                stop_thinking()
+                self.console.print("[dim]Interrupted.[/dim]")
+                return "Interrupted."
+            finally:
+                stop_thinking()
             self._estimated_tokens = self.context.estimate_tokens(history)
 
             total_ms = (time.monotonic() - start_time) * 1000
@@ -546,10 +700,16 @@ class AgentRuntime:
                 if render_mode == "buffer_then_render":
                     if final_text:
                         self.console.print()
+                        if not assistant_turn_started:
+                            self._render_assistant_prefix()
+                            assistant_turn_started = True
                         self._print_assistant_bubble(final_text)
                 else:
                     if final_text and ("```" in final_text or "|" in final_text or "\n#" in final_text):
                         self.console.print()
+                        if not assistant_turn_started:
+                            self._render_assistant_prefix()
+                            assistant_turn_started = True
                         self._print_assistant_bubble(final_text)
                 return final_text
 
@@ -587,7 +747,14 @@ class AgentRuntime:
 
                     if file_path:
                         self.console.print("  [dim]Review: diff preview before approval[/dim]")
-                        OutputRenderer.render_diff(self.console, old_text, new_text, file_path)
+                        OutputRenderer.render_diff(
+                            self.console,
+                            old_text,
+                            new_text,
+                            file_path,
+                            syntax_theme=self.config_store.load().syntax_theme,
+                            line_numbers=True,
+                        )
 
                 if scope and self._session_auto_approve.get(scope):
                     self.console.print("  [dim]approval: auto-yes (this conversation)[/dim]")
@@ -596,7 +763,7 @@ class AgentRuntime:
                         cmd = str(tc.args.get("command", ""))
                         self.console.print("  [dim]Review: command preview before approval[/dim]")
                         self.console.print(f"  [bold yellow]$ {cmd}[/bold yellow]")
-                    approval = self._prompt_tool_approval(tc.name)
+                    approval = self._prompt_tool_approval(tc.name, scope)
                     if approval == "no":
                         result = f"User denied tool: {tc.name}"
                         self.console.print(f"  [dim]{result}[/dim]")
@@ -616,7 +783,8 @@ class AgentRuntime:
                 if result_str.startswith("Error:"):
                     self.console.print(f"  [bold red]{result_str}[/bold red]")
                 else:
-                    self.console.print(f"  [dim]→ done ({len(result_str)} chars)[/dim]")
+                    summary = self._summarize_tool_result(tc.name, tc.args, result_str)
+                    self.console.print(f"  [dim]→ {summary}[/dim]")
 
                 executed_calls.append((tc, result_str))
 

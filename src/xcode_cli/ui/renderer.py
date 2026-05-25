@@ -20,6 +20,13 @@ class OutputRenderer:
     )
 
     @staticmethod
+    def _build_syntax(text: str, lexer: str, theme: str, line_numbers: bool) -> Syntax:
+        try:
+            return Syntax(text, lexer, theme=theme, line_numbers=line_numbers)
+        except Exception:
+            return Syntax(text, lexer, theme="monokai", line_numbers=line_numbers)
+
+    @staticmethod
     def _render_markdown_with_tables(console: Console, payload: str) -> None:
         cursor = 0
         for match in OutputRenderer.TABLE_BLOCK_RE.finditer(payload):
@@ -63,7 +70,7 @@ class OutputRenderer:
         console.print(table)
 
     @staticmethod
-    def render(console: Console, text: str) -> None:
+    def render(console: Console, text: str, syntax_theme: str = "monokai") -> None:
         """Render markdown with syntax-highlighted code blocks and GFM-style tables."""
         parts: list[tuple[str, str, str]] = []
         cursor = 0
@@ -87,11 +94,23 @@ class OutputRenderer:
                 if payload.strip():
                     OutputRenderer._render_markdown_with_tables(console, payload)
             else:
-                syntax = Syntax(payload, lang or "text", theme="monokai", line_numbers=False)
+                syntax = OutputRenderer._build_syntax(
+                    payload,
+                    lang or "text",
+                    syntax_theme,
+                    line_numbers=False,
+                )
                 console.print(Panel(syntax, border_style="blue", title=f"code · {lang or 'text'}", title_align="left"))
 
     @staticmethod
-    def render_diff(console: Console, old: str, new: str, file_path: str) -> None:
+    def render_diff(
+        console: Console,
+        old: str,
+        new: str,
+        file_path: str,
+        syntax_theme: str = "monokai",
+        line_numbers: bool = True,
+    ) -> None:
         diff_lines = list(
             unified_diff(
                 old.splitlines(),
@@ -106,5 +125,10 @@ class OutputRenderer:
             console.print("[dim]No changes detected for diff preview.[/dim]")
             return
 
-        syntax = Syntax("\n".join(diff_lines), "diff", theme="monokai", line_numbers=False)
+        syntax = OutputRenderer._build_syntax(
+            "\n".join(diff_lines),
+            "diff",
+            syntax_theme,
+            line_numbers=line_numbers,
+        )
         console.print(Panel(syntax, title=f"Diff · {file_path}", border_style="cyan", title_align="left"))

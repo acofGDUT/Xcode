@@ -6,6 +6,20 @@
 
 ## 已知问题
 
+### 0. radiolist_dialog 全屏遮挡 diff（2026-05-24，Cursor Opus 4.7）
+
+**现象**：`_prompt_tool_approval()` 使用 `prompt_toolkit.shortcuts.radiolist_dialog`，它是全屏模态弹窗——清空终端后只显示 "Yes / Yes All / No" 三个选项。用户在审批时**完全看不到刚才的 diff**，只能凭记忆决定。
+
+**影响**：先审后执行的核心价值被抵消——diff 展示了但用户看不到，审批变成盲操作。`write_file`/`edit_file`/`run_shell` 全部受影响。
+
+**根因**：`radiolist_dialog` 是为独立 CLI 工具设计的对话框，不适合嵌入持续的对话式交互。它启动独立的 event loop，接管整个终端渲染。
+
+**修复方向**：换成内联审批——`PromptSession.prompt()` 单行输入，diff 保持显示不滚动。详见 `UI_APPROVAL_FIX.md`。
+
+**状态**：✅ 已修复（V3，2026-05-25）。`radiolist_dialog` 已删除，改为内联 `input()`：`Apply {tool} for {scope}? [Y]es / [n]o / [a]ll`
+
+---
+
 ### 1. prompt_toolkit 在非 Windows 控制台下无法启动
 
 **现象**：在 bash/cygwin/mingw 终端中运行 `xcode chat`，`PromptSession()` 抛出 `NoConsoleScreenBufferError`。
@@ -172,3 +186,6 @@ ROADMAP 原设计期望 Agent 自动判断任务复杂度并进入计划模式�
 3. **Config 合并**：项目 `.xcode/settings.json` 覆盖全局 `~/.xcode/config.json`
 4. **auto_memory 三态**：`on | off | ask`，当前仅 bool
 5. **XCODE.md 模板**：首次创建时提供结构化模板
+6. **`/context` 费用估算**：当前 `/context` 已能显示 token 用量分类，但还没有按模型定价做 approximate cost 估算。后续可以在 `Config` 或定价表中维护 per-1k token 价格，并接入 `/context` 与底部状态栏。
+7. **对话历史恢复**：当前 `SessionStore` 会写 JSONL 会话记录，但 CLI 还没有 `resume` / `continue` 入口，退出后无法直接继续上一轮会话。后续可以在 `main.py` 和 `AgentRuntime` 中接入“继续最近一次会话”和“按 session id 恢复”。
+8. **原生 Windows 端到端验收**：当前 v3 的大部分验证来自编译、局部冒烟和非原生 console 环境下的间接检查。由于 `prompt_toolkit` 在非原生控制台下有 `NoConsoleScreenBufferError` 这类已知限制，仍需要在原生 `cmd.exe` 或 PowerShell 中跑一轮 `xcode chat` 端到端验收。

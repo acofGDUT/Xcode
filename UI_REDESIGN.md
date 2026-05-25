@@ -1,6 +1,6 @@
 # UI 重新设计 — 对齐 Claude Code 体验
 
-> 2026-05-24 建立
+> 2026-05-24 建立 · 同日 v2 重构完成 · v2 验收 + 差距分析更新
 
 ---
 
@@ -521,17 +521,77 @@ except KeyboardInterrupt:
 
 ---
 
-## 九、改动文件清单
+## 九、v2 重构完成情况（2026-05-24）
 
-| 文件 | 改动内容 |
-|------|---------|
-| `agent.py` | `_print_user_bubble()` 重写、`_render_tool_call()` 新增、`_run_llm_loop()` 重构工具执行流程（先 diff 后执行）、`_bottom_toolbar()` 增强、`_render_welcome()` 简化 |
-| `renderer.py` | `render()` 去掉 Panel header、错误时红色高亮 |
-| `permissions.py` | `prompt_user()` 可选增加 diff 展示参数（或由 agent.py 调用前自行展示） |
+### 已实现
+
+| # | 改进 | 来源章节 | 实现方式 |
+|---|------|:---:|------|
+| 1 | Panel("assistant") header 删除 | 一 | `renderer.py:85` 删除行 |
+| 2 | 用户气泡去 Panel | 一 / 8.1 | `_print_user_bubble()` → `[dim]▸ {text}[/dim]` |
+| 3 | 欢迎屏精简 | 五 | 17 行 → 3 行 |
+| 4 | 工具调用展示 | 二 | `_render_tool_call()` 青色粗体 + args |
+| 5 | 先审后执行 | 三 | diff 在 execute 前构造并展示 |
+| 6 | Shell 命令预览 | 三 | `$ cmd` 黄色高亮 |
+| 7 | 状态栏增强 | 四 | token / 工具计数 / 会话时长 |
+| 8 | 会话自动批准 | 8.3 | `_session_auto_approve`，write/shell 分 scope |
+| 9 | 权限弹窗升级 | 8.3 | `input()` → `radiolist_dialog`（yes/yes_all/no） |
+| 10 | 流式代码块防重复 | 8.4 | fence 检测跳过代码块流式输出 |
+| 11 | Ctrl+C 工具中断 | 8.5 | `except KeyboardInterrupt` 捕获 |
+| 12 | 权限模块解耦 | — | `permissions.py` 移除 Console 依赖 |
+
+### 引入的新问题
+
+| # | 问题 | 严重度 | 说明 |
+|---|------|:---:|------|
+| B1 | `radiolist_dialog` 全屏遮挡 diff | 高 | 审批时终端被清空，用户看不到 diff，"先审后执行"变成盲审 |
+| B2 | buffer 模式无 assistant 标签 | 中 | render() 删了 header 后，buffer 模式完全看不出谁在说话 |
+| B3 | 流式代码块静默 | 中 | fence 检测跳过了代码块输出，用户看到长时间空白，有假死感 |
+
+### 未完成的原始设计项
+
+| # | 改进 | 来源章节 |
+|---|------|:---:|
+| U1 | 权限确认不用 `input()` 而用 prompt_toolkit | 8.3（用了 radiolist_dialog，反而更差） |
+| U2 | 多轮 LLM 不重复 assistant 标签 | 8.2 |
+| U3 | 错误展示红色高亮 | 六（部分完成，工具调用结果未完全覆盖） |
+| U4 | 费用估算 | 8.6 |
 
 ---
 
-## 十、依赖关系
+## 十、差距分析 — 与 Claude Code 对比（2026-05-24 更新）
+
+以下按优先级排列，**加粗 = v2 引入的新问题**。
+
+| 顺序 | 问题 | 当前行为 | Claude Code 行为 | 改动量 |
+|:---:|------|------|------|:---:|
+| **1** | **审批弹窗全屏遮挡 diff** | `radiolist_dialog` 清屏，diff 消失 | `Allow? [y/N]` 内联，diff 在上方不动 | ~30 行 |
+| **2** | **buffer 模式无 assistant 标签** | 无任何前缀，不知道谁在说话 | `⏺ assistant` 前缀始终可见 | ~5 行 |
+| **3** | **流式代码块静默（假死感）** | fence 检测后代码块内容一个字不显示 | 代码块内容实时流式显示 | ~20 行 |
+| 4 | **工具结果太贫瘠** | `done (482 chars)` 没有上下文 | `50 lines read` / `1 replacement` / `exit 0` | ~15 行 |
+| **5** | **Thinking 指示器静态** | 一个字面字符串，不更新不计时 | `⏺ Thinking (1.2s)…` 实时计时 | ~10 行 |
+| 6 | LLM 流式阶段无法中断 | 只抓了工具执行，LLM 输出期间 Ctrl+C 无效 | 任何时候 Ctrl+C → `Interrupted.` | ~10 行 |
+| 7 | 多轮 tool call 间 assistant 标签重复 | streaming 模式每轮 LLM 都打标签 | 标签只在整轮对话开始显示一次 | ~15 行 |
+| 8 | 无 `/context` 命令 | 完全没实现 | 显示 token 用量分类（system/tools/messages/free） | ~50 行 |
+| 9 | 压缩通知太简陋 | 只显示 "Context compressed" | 显示压缩前后消息数、节省 token 量 | ~10 行 |
+| 10 | Diff 无行号 | `unified_diff` 输出无行号列 | 可选行号显示 | ~5 行 |
+| 11 | 语法主题硬编码 monokai | 浅色终端不可读 | 自适应或可配置 | ~15 行 |
+| 12 | 无对话历史持久化 | SessionStore 有存但退出后丢失 | `--resume` / `--continue` | ~80 行 |
+| 13 | 无费用估算 | 状态栏有 token 但没费用 | `/context` 展示 token 用量，部分版本有价格 | ~20 行 |
+
+---
+
+## 十一、改动文件清单（更新）
+
+| 文件 | v2 已完成 | 待修改 |
+|------|:---:|------|
+| `agent.py` | 气泡、tool_call、先审后执行、状态栏、欢迎屏、Ctrl+C | 审批弹窗换内联、buffer 标签、流式代码块显示、Thinking 计时、工具结果语义化、LLM 流式中断、`/context` 命令 |
+| `renderer.py` | Panel header 删除 | Diff 行号可选、语法主题可配置 |
+| `permissions.py` | Console 依赖移除 | — |
+
+---
+
+## 十二、依赖关系
 
 本方案不引入新依赖，全部基于已有的 Rich + prompt-toolkit 能力：
 - `Panel` / `Syntax` / `Markdown` / `Table` — 已在用
@@ -540,40 +600,55 @@ except KeyboardInterrupt:
 
 ---
 
-## 十一、与 ROADMAP 的关系
+## 十三、与 ROADMAP 的关系
 
 本文件是 Phase 4 Task 4.2（UI 升级）的扩展设计。不引入新依赖，全部基于已有的 Rich + prompt_toolkit。
 
-## 十二、实施顺序
+## 十四、实施顺序（更新）
 
-本文件是 Phase 4 Task 4.2（UI 升级）的扩展设计。实现时按以下顺序：
+**v2 已完成**：对话气泡、工具调用展示、先审后执行、状态栏、欢迎屏、Ctrl+C 中断 → commit `87b60c9`
 
-1. **对话气泡重构**（renderer.py + agent.py）— 解决双重打印 + Panel 冗余，最基础
-2. **工具调用展示**（agent.py）— 提升工具可见性 + 多轮 LLM 视觉连续性
-3. **先审后执行**（agent.py _run_llm_loop 重构）— 核心交互改进 + 权限界面升级
-4. **中断/取消反馈**（agent.py）— 小改动，大体验提升
-5. **Streaming 双重渲染修复**（agent.py）— 消除 raw → Rich 重复显示
-6. **状态栏增强**（agent.py）— 锦上添花
-7. **欢迎屏简化**（agent.py）— 最小改动
-8. **费用估算**（agent.py）— 可选，后期
+**v3 待做（按优先级）**：
+
+1. **审批弹窗改内联**（agent.py ~30 行）— 修复 #1 盲审问题
+2. **buffer 模式加 assistant 标签**（agent.py ~5 行）— 修复 #2 对话可读性
+3. **流式代码块不静默**（agent.py ~20 行）— 修复 #3 假死感
+4. **工具结果语义化**（agent.py ~15 行）— 修复 #4 操作不透明
+5. **Thinking 动态计时**（agent.py ~10 行）— 修复 #5 等待体感
+6. **LLM 流式可中断**（agent.py ~10 行）— 修复 #6 交互完整
+7. **多轮 assistant 标签层级**（agent.py ~15 行）— 修复 #7 视觉层级
+8. **`/context` 命令**（agent.py ~50 行）— 修复 #8
+9. **压缩通知详细化**（agent.py ~10 行）— 修复 #9
+10. **Diff 行号 / 语法主题 / 历史持久化 / 费用** — 修复 #10-#13
 
 ---
 
-## 十三、验收标准
+## 十五、验收标准（更新）
 
-- [ ] 对话中不再出现 `Panel.fit("assistant")` header
-- [ ] 用户消息用 `[dim]▸ text[/dim]` 一行记录，不用 Panel 包裹，不重复打印
-- [ ] `edit_file` / `write_file` 执行前展示 diff
-- [ ] diff 展示后用户可 approve/deny，deny 则跳过写入（权限确认用 prompt_toolkit 而非裸 input()）
-- [ ] `run_shell` 执行前展示命令内容（当权限为 ask 时）
-- [ ] 工具调用展示参数摘要（key: value 格式），左缩进 2 格
-- [ ] 工具结果：成功显示一行确认，错误显示红色高亮
-- [ ] 多轮 LLM 调用时不重复打印 `assistant ▸`，助理文本左对齐、工具调用缩进 2 格
-- [ ] Streaming 模式下代码块不会 raw markdown + Rich 渲染双重显示
-- [ ] Ctrl+C 中断工具时显示 `[dim]Interrupted.[/dim]`
-- [ ] 底部状态栏显示 token 估算、工具调用次数、会话时长
-- [ ] 欢迎屏不超过 4 行
-- [ ] 可选：状态栏含 cost≈$0.00 费用估算
+### v2 已完成
+
+- [x] 对话中不再出现 `Panel.fit("assistant")` header
+- [x] 用户消息用 `[dim]▸ text[/dim]` 一行记录，不重复打印
+- [x] `edit_file` / `write_file` 执行前展示 diff
+- [x] diff 展示后用户可 approve/deny（yes/yes_all/no 三选一）
+- [x] `run_shell` 执行前展示命令内容
+- [x] 工具调用展示参数摘要（key: value 格式）
+- [x] Ctrl+C 中断工具时显示提示
+- [x] 底部状态栏显示 token 估算、工具调用次数、会话时长
+- [x] 欢迎屏不超过 4 行
+
+### v3 待验收（本次差距分析）
+
+- [ ] 审批时 diff 全程可见，不被清屏遮挡（内联 input 替代 radiolist_dialog）
+- [ ] buffer_then_render 模式有 assistant 标签前缀
+- [ ] 流式代码块显示内容不静默（有文字输出，不空白等待）
+- [ ] 工具结果显示语义化信息（文件行数 / 替换次数 / 退出码），而非仅 char 数
+- [ ] Thinking 指示器有实时计时（如 `Thinking (2.3s)…`）
+- [ ] LLM 流式输出期间 Ctrl+C 可中断
+- [ ] 多轮 tool call 不重复 assistant 标签，工具缩进 2 格
+- [ ] `/context` 命令显示 token 用量分类
+- [ ] 压缩通知包含消息数和节省量
+- [ ] 可选：语法主题可配置、Diff 带行号、对话持久化、费用估算
 
 ---
 

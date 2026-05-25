@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 
@@ -11,7 +12,20 @@ class ContextManager:
     def estimate_tokens(self, messages: list[dict[str, Any]]) -> int:
         total = 0
         for msg in messages:
-            content = str(msg.get("content", ""))
+            parts = [str(msg.get("content", ""))]
+            reasoning_content = msg.get("reasoning_content")
+            if reasoning_content:
+                parts.append(str(reasoning_content))
+            tool_calls = msg.get("tool_calls")
+            if tool_calls:
+                try:
+                    parts.append(json.dumps(tool_calls, ensure_ascii=False))
+                except Exception:
+                    parts.append(str(tool_calls))
+            tool_call_id = msg.get("tool_call_id")
+            if tool_call_id:
+                parts.append(str(tool_call_id))
+            content = "\n".join(part for part in parts if part)
             ascii_chars = sum(1 for ch in content if ord(ch) < 128)
             non_ascii_chars = len(content) - ascii_chars
             total += int(ascii_chars / 4 + non_ascii_chars / 1.5) + 12

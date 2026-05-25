@@ -1,6 +1,6 @@
 # Xcode 项目进度表
 
-> 最后更新：2026-05-24
+> 最后更新：2026-05-25
 
 ---
 
@@ -58,7 +58,8 @@
 | 4.1 | 权限系统 | ✅ 通过 | `permissions.py` |
 | 4.2 | UI 升级（Markdown/Diff 渲染） | ✅ 通过 | `ui/renderer.py` |
 | 4.2b | UI 重构 v2（先审后执行、气泡、状态栏、流式修复） | ✅ 通过 | `agent.py` + `permissions.py` + `renderer.py` |
-| 4.3 | 上下文管理（Token 压缩） | ⚠️ Config.max_tokens 已加，ContextManager 硬编码 + /env + 摘要中文待修 | `context.py` + `config.py` |
+| 4.2c | UI 重构 v3（审批内联、Thinking 计时、/context、语法主题、工具结果语义化） | ✅ 通过 | `agent.py` + `renderer.py` + `config.py` + `context.py` |
+| 4.3 | 上下文管理（Token 压缩） | ⚠️ Config.max_tokens 已加，ContextManager 硬编码 + /env max-tokens + 摘要中文待修 | `context.py` + `config.py` |
 | 4.4 | 流式思考展示与耗时统计 | ✅ 通过 | `llm.py` + `agent.py` |
 
 ---
@@ -103,7 +104,8 @@
 | `/help` | v0 | 显示可用命令 |
 | `/dashboard` | v0 | API 配置 TUI |
 | `/skill` | v0 | 技能管理 |
-| `/env` | v0 | API 环境配置 |
+| `/env` | v0 | API 环境配置（含 theme），`/env show` 展示详情 |
+| `/context` | v3 | Token 用量分类展示 |
 | `/exit` | v0 | 退出 |
 | `/plan` | 3 | 计划模式控制 |
 | `/memory` | 3 | 记忆状态 + auto 开关 |
@@ -113,5 +115,6 @@
 ## 下一步
 
 1. **修复 Task 4.3 剩余 3 项**：ContextManager 动态读取 Config.max_tokens + `/env max-tokens` 命令 + 摘要英文化
-2. **修复 test_phase3.py**：`save_auto_memory` 已删除，测试需更新
+2. **对话历史持久化**：`--resume` / `--continue` 入口，恢复最近会话
 3. **Phase 5**：按需选择 Git 集成 / WebFetch / Hooks 等功能实现
+4. **端到端测试**：在原生 cmd.exe/PowerShell 中实际对话验证
