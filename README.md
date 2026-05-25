@@ -8,11 +8,11 @@
 - **Streaming output**: real-time token streaming with thinking/reasoning display and timing stats
 - **Sub-agents**: EXPLORE / PLAN / GENERAL types with tool whitelist isolation, parallel execution via ThreadPoolExecutor
 - **Plan mode**: enter → explore → write plan → request user approval → execute
-- **Memory system**: two-tier (Project XCODE.md + User XCODE.md + Auto Memory with individual .md files + MEMORY.md index)
+- **Memory system**: project/user XCODE.md plus auto memory entries injected into prompts
 - **Permission system**: three-level (session > project > global), allow/deny/ask per tool
-- **Context management**: token estimation + automatic compression via LLM summarization
+- **Context management**: token estimation + automatic compression via LLM summarization with configurable `max_tokens`
 - **Skill system**: installable, pluggable skills with SKILL.md injection
-- **Rich UI**: Markdown rendering, syntax-highlighted code blocks, unified diff display
+- **Rich UI**: Markdown rendering, syntax-highlighted code blocks, unified diff display, inline approval UX, `/context` inspection
 
 ## Quick Start
 
@@ -47,7 +47,8 @@ Any OpenAI-compatible API:
 | `/help` | Show available commands |
 | `/dashboard` | API configuration TUI |
 | `/skill` | Manage skills |
-| `/env` | Configure API settings |
+| `/env` | Configure API settings, theme, and `max-tokens` |
+| `/context` | Show token usage and current context budget |
 | `/plan` | Plan mode controls |
 | `/memory` | Memory status + toggle |
 | `/exit` | Exit chat |
@@ -84,10 +85,12 @@ src/xcode_cli/
 
 | Order | Document | Content |
 |-------|----------|---------|
+| 0 | `AGENTS.md` | Codex architect/review role and collaboration boundary |
 | 1 | `PROGRESS.md` | Phase/task completion status |
 | 2 | `ROADMAP.md` | Full requirement spec, function signatures, data structures |
 | 3 | `ARCHITECTURE.md` | Component relationships, data flows, design decisions |
 | 4 | `DEVNOTES.md` | Known issues, design tradeoffs |
+| 5 | `PHASE*_ACCEPTANCE.md` | Phase acceptance evidence and validation notes |
 
 ## Requirements
 

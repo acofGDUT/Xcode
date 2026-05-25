@@ -14,7 +14,7 @@ main.py (Typer CLI 入口)
   ├── xcode tool run    → 直接调用 tools/
   └── xcode skill ...   → SkillManager
 
-AgentRuntime (agent.py, 578 行)
+AgentRuntime (agent.py)
   ├── LLMClient (llm.py)          ← OpenAI 兼容 API，流式 + tool calling
   ├── ToolRegistry (tool_registry.py) ← 工具注册、Schema 生成、执行分发
   │     ├── tools/files.py        ← read_file / write_file / edit_file
@@ -59,9 +59,9 @@ AgentRuntime (agent.py, 578 行)
          ├── 无 tool_calls → 返回文本
          └── 有 tool_calls:
                ├── PermissionManager.check() → 权限检查
-               ├── PermissionManager.prompt_user() → ask 级别交互确认
+               ├── AgentRuntime._prompt_tool_approval() → ask 级别内联确认
                ├── tools.execute() → 执行工具
-               ├── edit_file 后 → OutputRenderer.render_diff()
+               ├── edit_file/write_file 前 → OutputRenderer.render_diff()
                └── 追加 assistant + tool 消息到 history，继续循环
 ```
 
@@ -139,6 +139,12 @@ EXPLORE/PLAN 子 Agent 仅注册 `{read_file, grep, glob}`，通过 `SubAgentExe
 
 `ToolRegistry.execute()` 是最外层保护——所有工具异常被捕获并转为 `"Tool error: {exc}"`，不会让 Agent 循环崩溃。
 
+### 3.8 上下文预算采用 runtime 单一来源
+
+Phase 4.5 Batch 1 后，`ContextManager` 持有实例级 `max_tokens`，由 `AgentRuntime` 初始化时传入，并在 `/env max-tokens <value>` 时同步更新。
+
+`/context` 展示和 `should_compress()` 压缩阈值都统一读取 `self.context.max_tokens`，避免显示预算和执行预算分叉。
+
 ## 4. 文件组织
 
 ```
@@ -174,7 +180,7 @@ src/xcode_cli/
     renderer.py            # Rich Markdown/Diff 渲染
 
 ~/.xcode/                   # 用户数据目录
-  config.json              # API key + model + auto_memory
+  config.json              # API key + model + auto_memory + max_tokens + render config
   XCODE.md                 # 用户记忆
   settings.json            # 权限配置
   projects/<name>/memory/

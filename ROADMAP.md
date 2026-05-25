@@ -1063,6 +1063,8 @@ class OutputRenderer:
 
 **目的**：当对话历史超过 token 限制时，自动压缩/截断旧消息，避免 API 调用失败。
 
+**状态**：已在 Phase 4.5 Batch 1 完成并通过 review（2026-05-25）。
+
 **文件**：`src/xcode_cli/core/context.py`（新建）、`src/xcode_cli/core/config.py`（修改）、`src/xcode_cli/core/agent.py`（修改）
 
 #### 4.3.1 核心逻辑
@@ -1078,8 +1080,8 @@ class ContextManager:
     3. 压缩方式：保留 system prompt + 最近 N 轮完整对话，中间的对话用 LLM 做摘要
     """
     
-    def __init__(self, config: Config) -> None:
-        self.max_tokens = config.max_tokens
+    def __init__(self, max_tokens: int = 128000) -> None:
+        self.max_tokens = max_tokens
     
     def estimate_tokens(self, messages: list[dict]) -> int: ...
     def should_compress(self, messages: list[dict]) -> bool: ...
@@ -1113,19 +1115,24 @@ class Config:
 **Step 2 — ContextManager 从 Config 读取**（`context.py`）：
 
 - 移除类常量 `MAX_TOKENS = 200000`
-- `__init__(self, config: Config)` 接收 Config，`self.max_tokens = config.max_tokens`
+- `__init__(self, max_tokens: int = 128000)` 接收 runtime token budget
 - `should_compress()` 用 `self.max_tokens` 替代硬编码值
 
 **Step 3 — Agent 传入 Config**（`agent.py`）：
 
 ```python
 # 构造时传入
-self.context = ContextManager(config=self.config_store.load())
+self.context = ContextManager(max_tokens=self.config_store.load().max_tokens)
 ```
 
 **Step 4 — 用户可手动覆盖**（可选，`/env max-tokens <value>`）：
 
 在 `_handle_env_command()` 中增加 `max-tokens` 子命令，允许用户切换模型后手动调整上下文窗口大小。
+
+**实现补充**：
+
+- `/context` 展示当前 runtime `max_tokens` 和压缩阈值
+- `tests/test_context.py`、`tests/test_config.py`、`tests/test_agent_env.py` 提供本批次测试基线
 
 **后期可选增强**：根据 model 名称自动推断（如 `gpt-4o-mini` → 128k, `deepseek-chat` → 64k, `claude-3.5-sonnet` → 200k），但当前手动配置已覆盖需求。
 
@@ -1236,15 +1243,15 @@ assistant ▸ Thinking... (3.2s)
 
 ### Phase 4 完成标准
 
-- [ ] shell 命令需要用户确认才能执行（如果权限设为 ask）
-- [ ] Markdown 代码块有语法高亮
-- [ ] edit_file 执行后展示 diff 对比
-- [ ] 长对话自动压缩，压缩阈值根据 Config.max_tokens 动态计算（不再硬编码 200k）
-- [ ] `/env max-tokens <value>` 可手动调整上下文窗口大小
-- [ ] 压缩摘要提示词与 BASE_SYSTEM_PROMPT 语言一致（英文）
-- [ ] 等待首个 token 时显示 Thinking... 指示
-- [ ] 思考模型（DeepSeek R1 等）的推理过程以 dim 样式流式展示
-- [ ] 每轮 LLM 调用完成后显示耗时
+- [x] shell 命令需要用户确认才能执行（如果权限设为 ask）
+- [x] Markdown 代码块有语法高亮
+- [x] edit_file 执行后展示 diff 对比
+- [x] 长对话自动压缩，压缩阈值根据 Config.max_tokens 动态计算（不再硬编码 200k）
+- [x] `/env max-tokens <value>` 可手动调整上下文窗口大小
+- [x] 压缩摘要提示词与 BASE_SYSTEM_PROMPT 语言一致（英文）
+- [x] 等待首个 token 时显示 Thinking... 指示
+- [x] 思考模型（DeepSeek R1 等）的推理过程以 dim 样式流式展示
+- [x] 每轮 LLM 调用完成后显示耗时
 
 ---
 
