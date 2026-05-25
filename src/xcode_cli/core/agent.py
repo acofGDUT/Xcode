@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -83,6 +84,7 @@ class SlashCompleter(Completer):
                 ("/env base-url ", "Set provider base URL"),
                 ("/env model ", "Set model name"),
                 ("/env theme ", "Set syntax highlight theme"),
+                ("/env max-tokens ", "Set max token budget for context compression"),
                 ("/env edit", "Open ~/.xcode/config.json in default editor"),
             ]:
                 if cmd.startswith(text):
@@ -101,7 +103,8 @@ class AgentRuntime:
         self.skills = SkillManager()
         self.config_store = ConfigStore()
         self.llm = LLMClient()
-        self.context = ContextManager()
+        cfg = self.config_store.load()
+        self.context = ContextManager(max_tokens=cfg.max_tokens)
         self.cwd = str(resolve_project_root(os.getcwd()))
         self.task_tracker = TaskTracker()
         self.memory = MemoryManager(cwd=self.cwd)
@@ -223,7 +226,7 @@ class AgentRuntime:
         if head == "/help":
             self._show_command_suggestions()
             self.console.print("/skill list|install <path>|enable <name>|disable <name>")
-            self.console.print("/env show|set <api_key>|unset|base-url <url>|model <name>|theme <name>")
+            self.console.print("/env show|set <api_key>|unset|base-url <url>|model <name>|theme <name>|max-tokens <value>")
             self.console.print("/context")
             self.console.print("/memory | /memory auto on|off")
             self.console.print("/dashboard")
@@ -296,7 +299,7 @@ class AgentRuntime:
         if len(parts) == 1:
             self.console.print(
                 "/env show | /env set <api_key> | /env unset | /env base-url <url> | "
-                "/env model <name> | /env theme <name> | /env edit"
+                "/env model <name> | /env theme <name> | /env max-tokens <value> | /env edit"
             )
             return
         action = parts[1].lower()
@@ -310,6 +313,7 @@ class AgentRuntime:
                 self.console.print(f"API key: {masked}")
             self.console.print(f"model: {cfg.model or os.getenv('XCODE_MODEL', 'gpt-4o-mini')}")
             self.console.print(f"base_url: {cfg.base_url or '(default)'}")
+            self.console.print(f"max-tokens: {cfg.max_tokens}")
             self.console.print(f"syntax theme: {cfg.syntax_theme}")
             return
         if action == "set" and len(parts) >= 3:
@@ -353,6 +357,23 @@ class AgentRuntime:
             self.console.print(f"syntax theme saved to {self.config_store.path}")
             return
 
+        if action == "max-tokens" and len(parts) >= 3:
+            value_str = " ".join(parts[2:])
+            try:
+                value = int(value_str)
+            except ValueError:
+                self.console.print(f"[bold red]Invalid value: '{value_str}'. max-tokens must be a positive integer.[/bold red]")
+                return
+            if value <= 0:
+                self.console.print(f"[bold red]Invalid value: {value}. max-tokens must be a positive integer.[/bold red]")
+                return
+            cfg = self.config_store.load()
+            cfg.max_tokens = value
+            self.config_store.save(cfg)
+            self.context.max_tokens = value
+            self.console.print(f"max-tokens set to {value} and saved to {self.config_store.path}")
+            return
+
         if action == "edit":
             config_path = self.config_store.path
             self.console.print(f"Config file: {config_path}")
@@ -369,7 +390,7 @@ class AgentRuntime:
                 self.console.print(f"Failed to open config file automatically: {exc}")
             return
 
-        self.console.print("Usage: /env show|set <api_key>|unset|base-url <url>|model <name>|theme <name>|edit")
+        self.console.print("Usage: /env show|set <api_key>|unset|base-url <url>|model <name>|theme <name>|max-tokens <value>|edit")
 
     def _create_plan_memory_tools(self) -> list[ToolDef]:
         def write_plan(content: str) -> str:
@@ -499,14 +520,15 @@ class AgentRuntime:
         role_tokens = {role: self.context.estimate_tokens(messages) for role, messages in role_groups.items()}
         history_tokens = sum(role_tokens.values())
         total_tokens = system_tokens + history_tokens
-        max_tokens = cfg.max_tokens or self.context.MAX_TOKENS
+        max_tokens = self.context.max_tokens
         remaining_tokens = max(max_tokens - total_tokens, 0)
-        compression_threshold = int(self.context.MAX_TOKENS * 0.8)
+        compression_threshold = int(self.context.max_tokens * 0.8)
 
         table = Table(show_header=True, header_style="bold cyan", box=None, pad_edge=False)
         table.add_column("Item", style="green")
         table.add_column("Value", style="white")
         table.add_row("model", cfg.model or os.getenv("XCODE_MODEL", "gpt-4o-mini"))
+        table.add_row("max tokens", str(max_tokens))
         table.add_row("render mode", cfg.response_render_mode)
         table.add_row("syntax theme", cfg.syntax_theme)
         table.add_row("messages", str(len(self._history)))
@@ -538,23 +560,111 @@ class AgentRuntime:
             return "write"
         if tool_name == "run_shell":
             return "shell"
-        return None
+        return tool_name
+
+    def _read_approval_key(self) -> str:
+        if os.name == "nt":
+            import msvcrt
+
+            ch = msvcrt.getwch()
+            if ch in {"\x00", "\xe0"}:
+                second = msvcrt.getwch()
+                if second == "H":
+                    return "up"
+                if second == "P":
+                    return "down"
+                return ""
+            if ch == "\r":
+                return "enter"
+            if ch == "\x03":
+                raise KeyboardInterrupt
+            return ch.lower()
+
+        import termios
+        import tty
+
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+            if ch == "\x1b":
+                rest = sys.stdin.read(2)
+                if rest == "[A":
+                    return "up"
+                if rest == "[B":
+                    return "down"
+                return "escape"
+            if ch in {"\r", "\n"}:
+                return "enter"
+            if ch == "\x03":
+                raise KeyboardInterrupt
+            return ch.lower()
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+    def _render_approval_options(self, tool_name: str, scope: str, selected: int) -> None:
+        options = [
+            "Yes",
+            "No",
+            "Yes, for this conversation",
+        ]
+        self.console.print(f"  [bold]Apply {tool_name} for {scope}?[/bold] [dim](↑/↓, Enter)[/dim]")
+        for idx, label in enumerate(options):
+            prefix = ">" if idx == selected else " "
+            style = "bold cyan" if idx == selected else "dim"
+            self.console.print(f"  {prefix} {label}", style=style)
+
+    def _refresh_approval_options(self, tool_name: str, scope: str, selected: int) -> None:
+        sys.stdout.write("\x1b[4A")
+        for _ in range(4):
+            sys.stdout.write("\x1b[2K")
+            sys.stdout.write("\x1b[1B")
+        sys.stdout.write("\x1b[4A")
+        sys.stdout.flush()
+        self._render_approval_options(tool_name, scope, selected)
 
     def _prompt_tool_approval(self, tool_name: str, scope: str | None) -> str:
         if scope and self._session_auto_approve.get(scope):
             return "yes"
 
-        suffix = f" for {scope}" if scope else ""
-        try:
-            value = input(f"  Apply {tool_name}{suffix}? [Y]es / [n]o / [a]ll: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
+        approval_scope = scope or tool_name
+        if not sys.stdin.isatty():
+            try:
+                value = input(f"  Apply {tool_name} for {approval_scope}? [Y]es / [n]o / [a]ll: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                return "no"
+            if not value or value in {"y", "yes"}:
+                return "yes"
+            if value in {"a", "all", "yes_all"}:
+                return "yes_all"
             return "no"
 
-        if not value or value in {"y", "yes"}:
-            return "yes"
-        if scope and value in {"a", "all", "yes_all"}:
-            return "yes_all"
-        return "no"
+        selected = 0
+        try:
+            self._render_approval_options(tool_name, approval_scope, selected)
+            while True:
+                key = self._read_approval_key()
+                if key in {"up", "k"}:
+                    selected = (selected - 1) % 3
+                    self._refresh_approval_options(tool_name, approval_scope, selected)
+                elif key in {"down", "j"}:
+                    selected = (selected + 1) % 3
+                    self._refresh_approval_options(tool_name, approval_scope, selected)
+                elif key in {"enter", " "}:
+                    self.console.print()
+                    return ["yes", "no", "yes_all"][selected]
+                elif key in {"y"}:
+                    self.console.print()
+                    return "yes"
+                elif key in {"n", "escape"}:
+                    self.console.print()
+                    return "no"
+                elif key in {"a"}:
+                    self.console.print()
+                    return "yes_all"
+        except (EOFError, KeyboardInterrupt):
+            return "no"
 
     def _render_assistant_prefix(self) -> None:
         self.console.print("[magenta]assistant[/magenta] ▸ ", end="")

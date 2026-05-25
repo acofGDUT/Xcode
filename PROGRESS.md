@@ -11,7 +11,8 @@
 | Phase 1 | 协议与工具升级 | ✅ 完成 | PHASE1_ACCEPTANCE.md |
 | Phase 2 | Agent 架构升级 | ✅ 完成 | PHASE2_ACCEPTANCE.md |
 | Phase 3 | 计划与记忆 | ✅ 完成 | PHASE3_ACCEPTANCE.md |
-| Phase 4 | 安全与体验 | ⚠️ 3/4 通过 + UI 重构完成，4.3 部分修复 | PHASE4_ACCEPTANCE.md |
+| Phase 4 | 安全与体验 | ✅ 4/4 通过（4.3 收口完成） | PHASE4_ACCEPTANCE.md |
+| Phase 4.5 | 稳定化 Batch 1 | ✅ 完成并通过 review | PHASE4_ACCEPTANCE.md |
 | Phase 5 | 生态扩展 | 🔲 未开始 | — |
 
 ---
@@ -59,7 +60,7 @@
 | 4.2 | UI 升级（Markdown/Diff 渲染） | ✅ 通过 | `ui/renderer.py` |
 | 4.2b | UI 重构 v2（先审后执行、气泡、状态栏、流式修复） | ✅ 通过 | `agent.py` + `permissions.py` + `renderer.py` |
 | 4.2c | UI 重构 v3（审批内联、Thinking 计时、/context、语法主题、工具结果语义化） | ✅ 通过 | `agent.py` + `renderer.py` + `config.py` + `context.py` |
-| 4.3 | 上下文管理（Token 压缩） | ⚠️ Config.max_tokens 已加，ContextManager 硬编码 + /env max-tokens + 摘要中文待修 | `context.py` + `config.py` |
+| 4.3 | 上下文管理（Token 压缩） | ✅ 动态 max_tokens、`/env max-tokens`、英文摘要、测试基线已完成 | `context.py` + `config.py` + `agent.py` + `tests/` |
 | 4.4 | 流式思考展示与耗时统计 | ✅ 通过 | `llm.py` + `agent.py` |
 
 ---
@@ -104,7 +105,7 @@
 | `/help` | v0 | 显示可用命令 |
 | `/dashboard` | v0 | API 配置 TUI |
 | `/skill` | v0 | 技能管理 |
-| `/env` | v0 | API 环境配置（含 theme），`/env show` 展示详情 |
+| `/env` | v0 | API 环境配置（含 theme、`max-tokens`），`/env show` 展示详情 |
 | `/context` | v3 | Token 用量分类展示 |
 | `/exit` | v0 | 退出 |
 | `/plan` | 3 | 计划模式控制 |
@@ -114,7 +115,7 @@
 
 ## 下一步
 
-1. **修复 Task 4.3 剩余 3 项**：ContextManager 动态读取 Config.max_tokens + `/env max-tokens` 命令 + 摘要英文化
-2. **对话历史持久化**：`--resume` / `--continue` 入口，恢复最近会话
-3. **Phase 5**：按需选择 Git 集成 / WebFetch / Hooks 等功能实现
-4. **端到端测试**：在原生 cmd.exe/PowerShell 中实际对话验证
+1. **对话历史持久化**：`--resume` / `--continue` 入口，恢复最近会话
+2. **`/context` 费用估算**：在 token 统计之外加入近似 cost 展示
+3. **端到端测试**：在原生 cmd.exe/PowerShell 中实际对话验证
+4. **Phase 5**：继续保持冻结，后续按需评估

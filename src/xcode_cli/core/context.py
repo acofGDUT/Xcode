@@ -7,7 +7,8 @@ from typing import Any
 class ContextManager:
     """Manage chat history token usage with lightweight compression strategy."""
 
-    MAX_TOKENS = 200000
+    def __init__(self, max_tokens: int = 128000) -> None:
+        self.max_tokens = max_tokens
 
     def estimate_tokens(self, messages: list[dict[str, Any]]) -> int:
         total = 0
@@ -32,7 +33,7 @@ class ContextManager:
         return total
 
     def should_compress(self, messages: list[dict[str, Any]]) -> bool:
-        return self.estimate_tokens(messages) >= int(self.MAX_TOKENS * 0.8)
+        return self.estimate_tokens(messages) >= int(self.max_tokens * 0.8)
 
     def compress(self, messages: list[dict[str, Any]], llm_client) -> list[dict[str, Any]]:
         if len(messages) <= 20:
@@ -51,19 +52,20 @@ class ContextManager:
             return messages
 
         summary_prompt = (
-            "请将以下对话压缩为 200 字以内摘要，保留关键需求、已完成操作、未完成事项、约束条件。"
+            "Summarize the following conversation in under 200 words. "
+            "Preserve key requirements, completed actions, pending items, and constraints."
         )
         middle_text = "\n".join(f"[{m.get('role','unknown')}] {m.get('content','')}" for m in middle)
         summary_resp = llm_client.complete(
-            system_prompt="你是对话摘要助手。",
+            system_prompt="You are a conversation summarization assistant.",
             messages=[{"role": "user", "content": f"{summary_prompt}\n\n{middle_text}"}],
             tool_schemas=[],
         )
-        summary = summary_resp.content.strip() or "（中间对话已压缩）"
+        summary = summary_resp.content.strip() or "(middle conversation compressed)"
 
         compressed: list[dict[str, Any]] = []
         if first_user:
             compressed.append(first_user)
-        compressed.append({"role": "system", "content": f"历史摘要：{summary}"})
+        compressed.append({"role": "system", "content": f"Conversation summary: {summary}"})
         compressed.extend(tail)
         return compressed

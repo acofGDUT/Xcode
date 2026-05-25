@@ -105,6 +105,20 @@ buffer_then_render：不流式，完整后一次渲染（最美观）
 
 ---
 
+### 9. Phase 4.5 Batch 1 review closure：`max_tokens` 与测试基线已收口（2026-05-25，Codex review）
+
+**结果**：`ContextManager` 已改为实例级 `max_tokens`，`/env max-tokens` 已落地，`/context` 展示与压缩阈值现在统一使用 runtime 的 `self.context.max_tokens`。
+
+**测试补强**：`tests/test_agent_env.py` 已直接覆盖 `AgentRuntime._handle_env_command()` 的真实命令路径，包括：
+
+- 合法值更新 runtime 与持久化 config
+- 非法值报错且不污染状态
+- `/env show` 包含 `max-tokens`
+
+**结论**：Phase 4.5 Batch 1 的两个 review follow-up 已关闭。后续工作不再是这批的一致性收口，而是继续推进会话恢复、费用估算和原生 Windows 端到端验收。
+
+---
+
 
 ## 设计取舍
 
