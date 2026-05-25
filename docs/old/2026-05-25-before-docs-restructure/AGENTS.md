@@ -70,14 +70,12 @@ Review 输出应以问题为主，按严重程度排序，并提供文件和行�
 
 接手项目或进行架构判断前，优先按以下顺序阅读：
 
-1. `docs/current/PROGRESS.md`
-2. `docs/current/ARCHITECTURE.md`
-3. `docs/current/ROADMAP.md`
-4. `docs/current/DEVNOTES.md`
+1. `PROGRESS.md`
+2. `ROADMAP.md`
+3. `ARCHITECTURE.md`
+4. `DEVNOTES.md`
 5. `PHASE*_ACCEPTANCE.md`
 6. `UI_REDESIGN.md`
-
-根目录的 `ARCHITECTURE.md`、`ROADMAP.md`、`PROGRESS.md`、`DEVNOTES.md` 现在只作为兼容入口。旧版内容保存在 `docs/old/2026-05-25-before-docs-restructure/`。
 
 ## 当前重点方向
 
@@ -94,7 +92,7 @@ Review 输出应以问题为主，按严重程度排序，并提供文件和行�
 Codex 负责在关键节点检查：
 
 - `git status` 中哪些是本轮变更，哪些可能是用户或其他 Agent 的已有改动。
-- 是否需要更新 `docs/current/README.md`、`docs/current/ARCHITECTURE.md`、`docs/current/DEVNOTES.md`、`docs/current/PROGRESS.md`、`docs/current/ROADMAP.md`。
+- 是否需要更新 README、ARCHITECTURE、DEVNOTES、PROGRESS、ROADMAP。
 - 验收证据是否先于结论，包括 `py_compile`、`pytest`、import smoke test 和必要的手工交互记录。
 
 除非用户明确要求，Codex 不应自动创建提交；但可以准备提交说明、变更摘要和 review 结论。

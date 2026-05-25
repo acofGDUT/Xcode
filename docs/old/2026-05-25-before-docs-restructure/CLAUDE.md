@@ -9,15 +9,13 @@
 
 | 顺序 | 文档 | 内容 |
 |------|------|------|
-| 1 | `docs/current/PROGRESS.md` | 阶段历史、当前状态、阻塞和下一步 |
-| 2 | `docs/current/ARCHITECTURE.md` | 当前实现、组件关系、数据流和关键边界 |
-| 3 | `docs/current/ROADMAP.md` | 未来计划、目标态和未完成能力的实现草案 |
-| 4 | `docs/current/DEVNOTES.md` | 已知问题、踩坑记录、设计取舍和验收风险 |
+| 1 | `PROGRESS.md` | 项目进度表，各 Phase/Task 完成状态 |
+| 2 | `ROADMAP.md` | 完整需求文档，每个 Task 的函数签名和数据结构 |
+| 3 | `ARCHITECTURE.md` | 组件关系、数据流、设计决策 |
+| 4 | `DEVNOTES.md` | 已知问题、踩坑记录、设计取舍 |
 | 5 | `PHASE1_ACCEPTANCE.md` | Phase 1 验收报告 |
 | 6 | `PHASE2_ACCEPTANCE.md` | Phase 2 验收报告 |
 | 7 | `PHASE3_ACCEPTANCE.md` | Phase 3 验收报告 |
-
-根目录同名文档现在是兼容入口，旧版内容已归档到 `docs/old/2026-05-25-before-docs-restructure/`。
 
 ## 开发约定
 
