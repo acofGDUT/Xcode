@@ -42,10 +42,10 @@ The root `README.md` is the single documentation index. Detailed current project
 
 | Document | Answers | Boundary |
 |----------|---------|----------|
-| `docs/current/PROGRESS.md` | How the project reached its current state | Phase/Batch history, review conclusions, acceptance state, current next steps |
-| `docs/current/ARCHITECTURE.md` | How the system works now | Current component relationships, data flows, memory/context/session/approval models |
-| `docs/current/ROADMAP.md` | What remains to build | Future goals, unfinished capabilities, implementation sketches, acceptance ideas |
-| `docs/current/DEVNOTES.md` | Why decisions were made and where risks are | Known issues, design decisions, compatibility limits, validation risks |
+| [docs/current/PROGRESS.md](docs/current/PROGRESS.md) | How the project reached its current state | Phase/Batch history, review conclusions, acceptance state, current next steps |
+| [docs/current/ARCHITECTURE.md](docs/current/ARCHITECTURE.md) | How the system works now | Current component relationships, data flows, memory/context/session/approval models |
+| [docs/current/ROADMAP.md](docs/current/ROADMAP.md) | What remains to build | Future goals, unfinished capabilities, implementation sketches, acceptance ideas |
+| [docs/current/DEVNOTES.md](docs/current/DEVNOTES.md) | Why decisions were made and where risks are | Known issues, design decisions, compatibility limits, validation risks |
 
 Recommended reading order:
 
@@ -57,6 +57,28 @@ Recommended reading order:
 Root-level `ARCHITECTURE.md`, `ROADMAP.md`, `PROGRESS.md`, `DEVNOTES.md`, and `日期计划.md` are compatibility entrypoints. Old root documents were archived to `docs/old/2026-05-25-before-docs-restructure/`.
 
 `日期计划.md` is now a journal rather than a primary project document. The current journal copy is `docs/journal/2026-05-25-日期计划.md`.
+
+## 中文文档导航
+
+根目录 `README.md` 是当前唯一的文档索引，核心项目文档都在 `docs/current/`：
+
+| 文档 | 说明 |
+|------|------|
+| [docs/current/PROGRESS.md](docs/current/PROGRESS.md) | 项目是怎么一步步推进到现在的，包含阶段历史、当前状态、阻塞和下一步 |
+| [docs/current/ARCHITECTURE.md](docs/current/ARCHITECTURE.md) | 当前系统怎么工作，包含组件关系、数据流、memory/context/session/approval 模型 |
+| [docs/current/ROADMAP.md](docs/current/ROADMAP.md) | 后续还要做什么，包含未完成能力、目标态和实现草案 |
+| [docs/current/DEVNOTES.md](docs/current/DEVNOTES.md) | 踩坑、边界、设计决策、兼容性风险和问题状态 |
+
+推荐阅读顺序：
+
+1. [docs/current/PROGRESS.md](docs/current/PROGRESS.md)
+2. [docs/current/ARCHITECTURE.md](docs/current/ARCHITECTURE.md)
+3. [docs/current/ROADMAP.md](docs/current/ROADMAP.md)
+4. [docs/current/DEVNOTES.md](docs/current/DEVNOTES.md)
+
+根目录的 `ARCHITECTURE.md`、`ROADMAP.md`、`PROGRESS.md`、`DEVNOTES.md`、`日期计划.md` 现在主要作为兼容入口。旧版主文档归档在 [docs/old/2026-05-25-before-docs-restructure](docs/old/2026-05-25-before-docs-restructure)。
+
+`日期计划.md` 现在是工作日志，当前副本位于 [docs/journal/2026-05-25-日期计划.md](docs/journal/2026-05-25-%E6%97%A5%E6%9C%9F%E8%AE%A1%E5%88%92.md)。
 
 ## Requirements
 

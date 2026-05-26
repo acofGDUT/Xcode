@@ -25,6 +25,8 @@ flowchart TD
     Runtime --> Context["ContextManager<br/>core/context.py"]
     Runtime --> Memory["MemoryManager<br/>core/memory.py"]
     Runtime --> Sessions["SessionStore<br/>core/session.py"]
+    Runtime --> Resume["SessionResumeBuilder<br/>core/session_resume.py"]
+    Runtime --> Status["RuntimeStatusStore<br/>core/runtime_status.py"]
     Runtime --> Plan["PlanMode<br/>core/planning.py"]
     Runtime --> Tasks["TaskTracker<br/>core/task_tracker.py"]
     Runtime --> Skills["SkillManager<br/>skills/manager.py"]
@@ -51,7 +53,7 @@ flowchart TD
 | `xcode tool grep` / `xcode tool glob` | PowerShell 友好的搜索子命令 |
 | `xcode skill install/list/enable/disable` | 管理本地 skill |
 
-`AgentRuntime.run_chat()` 是 REPL 主循环。它负责创建 session id、读取用户输入、处理 slash command、构造 system prompt、调用 `_run_llm_loop()`，并把用户和 assistant 最终文本追加到 JSONL session 日志。
+`AgentRuntime.run_chat()` 是 REPL 主循环。它负责创建 UUID session id、写入 runtime status、读取用户输入、处理 slash command、构造 system prompt、调用 `_run_llm_loop()`，并把结构化 message event 追加到当前项目的 JSONL transcript。
 
 ## 4. 普通对话数据流
 
@@ -71,6 +73,7 @@ sequenceDiagram
     R->>C: should_compress(history)
     alt 需要压缩
         R->>C: compress(history, llm)
+        R->>S: append(message system summary + compaction_checkpoint)
     end
     R->>L: complete(stream=True, tools=schema)
     alt 无 tool_calls
@@ -80,10 +83,10 @@ sequenceDiagram
         T-->>R: tool result
         R->>L: 带 assistant tool_calls + tool result 继续循环
     end
-    R->>S: append(assistant)
+    R->>S: append(assistant / tool messages)
 ```
 
-当前真正参与 LLM 推理的对话状态是运行时内存里的 `self._history`。`SessionStore` 会写 JSONL 日志，但现在没有从日志恢复为 `history` 的入口。
+当前真正参与 LLM 推理的对话状态是运行时内存里的 `self._history`。`SessionStore` 负责 append-only transcript，`SessionResumeBuilder` 负责从 transcript 构造可恢复 history。
 
 ## 5. Slash Command 流程
 
@@ -98,6 +101,8 @@ sequenceDiagram
 | `/env` | `_handle_env_command()` | API key、base-url、model、theme、max-tokens、config edit |
 | `/plan` | `_handle_plan_command()` | enter/show/approve/reject |
 | `/memory` | `_handle_memory_command()` | 查看 memory 状态，开关 auto memory |
+| `/compact` | `_handle_compact_command()` | 手动触发累积摘要压缩，写入 checkpoint |
+| `/resume` | `_handle_resume_command()` | 列出当前项目 session，并恢复选中的 transcript |
 | `/exit` | `run_chat()` | 退出 |
 
 ## 6. Tool 系统
@@ -184,9 +189,9 @@ flowchart LR
 
 Auto memory 当前只自动注入 `MEMORY.md` 索引，详细内容需要 Agent 再用 `read_file` 读取具体 memory 文件。
 
-## 9. Context 模型
+## 9. Context 和压缩模型
 
-`ContextManager` 持有实例级 `max_tokens`，由 `Config.max_tokens` 初始化，并在 `/env max-tokens <value>` 时同步更新。
+`ContextManager` 持有实例级 `max_tokens`，由 `Config.max_tokens` 初始化，并在 `/env max-tokens <value>` 时同步更新。它也持有 `max_summary_chars`，用于控制 checkpoint summary 的可选长度策略；设置为 `None` 或 `0` 时不做代码层截断。
 
 当前能力：
 
@@ -194,35 +199,68 @@ Auto memory 当前只自动注入 `MEMORY.md` 索引，详细内容需要 Agent 
 |------|------|
 | token 估算 | 按 ASCII / 非 ASCII 字符粗略估算，并计入 reasoning、tool_calls、tool_call_id |
 | 压缩触发 | `estimate_tokens(history) >= max_tokens * 0.8` |
-| 压缩方式 | 保留第一条 user message、压缩中间消息、保留最近 8 条 |
-| 摘要语言 | 英文压缩提示词 |
+| 压缩结果 | `CompressionResult(messages, summary, checkpoint_message)` |
+| 压缩方式 | 保留第一条 user message、写入 system checkpoint summary、保留最近 8 条 |
+| 累积摘要 | 有 previous summary 时，生成“旧 summary + 新内容”的累积 summary |
+| 摘要语言 | 英文压缩提示词，摘要内容可保留用户原语言 |
 | `/context` | 展示当前估算、预算、阈值、消息数量 |
 
 当前 `/context` 还没有 cost 估算。
 
-## 10. Session 当前边界
+## 10. Session 和恢复模型
 
-`SessionStore` 会把 user 和 assistant 的最终文本追加到：
+`SessionStore` 会把当前项目的完整 transcript 追加到：
 
 ```text
-~/.xcode/sessions/<session_id>.jsonl
+~/.xcode/projects/<project-key>/sessions/<session-uuid>.jsonl
 ```
 
-每条记录包含：
+`project-key` 由项目绝对路径稳定生成，例如 `D:\Xcode -> D--Xcode`。session id 使用 UUID。
+
+transcript 是 JSONL，每行是一个 event。当前主要 event：
 
 ```json
-{"role": "user|assistant", "content": "...", "ts": "..."}
+{"type":"message","role":"user","content":"...","ts":"..."}
+{"type":"message","role":"assistant","content":"...","tool_calls":[...],"ts":"..."}
+{"type":"message","role":"tool","tool_call_id":"call_123","content":"...","ts":"..."}
+{"type":"message","role":"system","content":"Conversation summary checkpoint:\n...","ts":"..."}
+{"type":"compaction_checkpoint","summary":"...","summary_format":"xcode.v1","source_message_count":120,"ts":"..."}
 ```
 
-当前限制：
+轻量用户输入历史写入：
 
-- `run_chat()` 每次启动都会创建新的 session id。
-- session JSONL 是日志，不是可恢复状态。
-- 没有 `--resume` / `--continue` 入口。
-- 没有从 JSONL 重建 `history` 的逻辑。
-- tool messages、assistant tool_calls、压缩 summary 等运行时细节没有完整持久化。
+```text
+~/.xcode/history.jsonl
+```
 
-因此现在不能真正“回退对话”或“恢复对话”，只能重开会话或在语义上要求模型忽略上一轮。
+runtime status 写入：
+
+```text
+~/.xcode/sessions/<pid>.json
+```
+
+该文件只表示当前活跃进程，退出时删除。
+
+### `/compact`
+
+`/compact` 手动触发 `ContextManager.compress()`。成功压缩后：
+
+- 替换运行时 `_history` 为 compressed messages。
+- 写入一条 `message(system)`，内容为 checkpoint summary。
+- 写入一条 `compaction_checkpoint` event，包含 summary 和压缩元数据。
+
+如果当前消息太少或没有可压缩中间内容，则显示 `Nothing to compact.`，不写 checkpoint。
+
+### `/resume`
+
+`/resume` 是当前恢复入口。它列出当前项目 session，用户输入编号选择 session 后，`SessionResumeBuilder` 读取 transcript 并构造 budgeted history。
+
+恢复规则：
+
+- 有 `compaction_checkpoint` 时，恢复最新 checkpoint summary + checkpoint 之后的 message events。
+- 无 checkpoint 时，只恢复 token budget 内的 recent tail。
+- 裁剪时保护 assistant `tool_calls` 和 tool result pair，避免恢复出非法 OpenAI-compatible message 顺序。
+- 当前不实现 CLI `--resume` / `--continue`，也不实现 rollback/fork。
 
 ## 11. 当前文件职责
 
@@ -236,9 +274,11 @@ Auto memory 当前只自动注入 `MEMORY.md` 索引，详细内容需要 Agent 
 | `src/xcode_cli/core/tools/shell.py` | shell 执行工具 |
 | `src/xcode_cli/core/permissions.py` | session/project/global 三级权限 |
 | `src/xcode_cli/core/context.py` | token 估算和历史压缩 |
+| `src/xcode_cli/core/session.py` | transcript、history.jsonl 和 session listing |
+| `src/xcode_cli/core/session_resume.py` | transcript 到可恢复 history 的构造 |
+| `src/xcode_cli/core/runtime_status.py` | 当前活跃进程状态文件 |
 | `src/xcode_cli/core/memory.py` | memory 路径、读取和 prompt context 注入 |
 | `src/xcode_cli/core/prompting.py` | base system prompt、memory 规则、skill 注入 |
-| `src/xcode_cli/core/session.py` | JSONL session 日志写入 |
 | `src/xcode_cli/core/planning.py` | plan mode 状态机和 plan 文件写入 |
 | `src/xcode_cli/core/task_tracker.py` | task CRUD 和 task 工具工厂 |
 | `src/xcode_cli/core/sub_agent.py` | 子 Agent 执行 |

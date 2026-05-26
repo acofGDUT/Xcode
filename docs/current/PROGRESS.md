@@ -2,7 +2,7 @@
 
 > 本文档记录项目如何一步步走到现在。当前实现细节见 `ARCHITECTURE.md`，未来计划见 `ROADMAP.md`，已知问题和设计取舍见 `DEVNOTES.md`。
 
-最后更新：2026-05-25
+最后更新：2026-05-26
 
 ## 1. 当前状态总览
 
@@ -14,9 +14,11 @@
 | Phase 4 | 安全与体验 | 完成，4.3 已收口 | `PHASE4_ACCEPTANCE.md` |
 | Phase 4.5 Batch 1 | 上下文系统修复 + 测试基线 | 完成并通过 review | specs task brief |
 | Phase 4.5 Batch 2 | memory 模型验证 + Windows 路径回归 | 完成并通过 review | specs task brief |
+| Session Resume Step 1 | session 持久化基础 | 完成并通过 review | `2026-05-25-session-resume-task-brief.md` |
+| Session Resume Step 2 | checkpoint 压缩与 `/resume` | 完成并通过基础验收 | `2026-05-25-session-resume-task-brief.md` |
 | Phase 5 | 生态扩展 | 冻结 | 未开始 |
 
-当前重点不是进入 Phase 5，而是补齐恢复、费用估算和原生 Windows 验收。
+当前重点不是进入 Phase 5，而是补齐费用估算、原生 Windows 验收和下一批交互体验优化。
 
 ## 2. Phase 1：协议与工具升级
 
@@ -121,19 +123,48 @@ Review 结论：通过。memory 当前不是 CRUD 工具方向，而是由 promp
 
 结果：文档分层调整为 README 入口、ARCHITECTURE 当前实现、ROADMAP 未来计划、PROGRESS 历史进度、DEVNOTES 坑和决策、journal 原始工作日志。
 
-## 9. 当前阻塞和遗留
+## 9. Session Resume：2026-05-26
+
+背景：原 `SessionStore` 只是简化 JSONL 日志，无法恢复 tool_calls、tool result、context summary 等 runtime history。用户希望借鉴 Claude Code 的 transcript + history 模型，但当前先聚焦交互内 `/resume`，不做 CLI `--resume` 和 `--continue`。
+
+Step 1 完成内容：
+
+- session id 改为 UUID。
+- transcript 写入 `~/.xcode/projects/<project-key>/sessions/<uuid>.jsonl`。
+- `project-key` 从项目绝对路径稳定生成。
+- `~/.xcode/history.jsonl` 记录轻量用户输入历史。
+- `~/.xcode/sessions/<pid>.json` 记录运行中 runtime status，退出时删除。
+- transcript 支持 user、assistant、tool、system message event。
+- `/resume` 可以列出当前项目 session，并恢复小 transcript。
+
+Step 2 完成内容：
+
+- `ContextManager.compress()` 返回 `CompressionResult`，包含 compressed messages、summary 和 checkpoint message。
+- 压缩摘要改为累积摘要，避免多次压缩丢早期上下文。
+- 自动 compression 和 `/compact` 都会写入 `message(system)` + `compaction_checkpoint`。
+- `SessionResumeBuilder` 支持最新 checkpoint + recent tail 恢复。
+- 无 checkpoint 时使用 recent tail fallback。
+- 恢复时按 token budget 裁剪，并保护 tool_calls / tool result pair。
+- `max_summary_chars` 已做成可配置、可关闭。
+- `/compact` 没有真实压缩时提示 `Nothing to compact`，不写 checkpoint。
+
+Review 状态：Step 1 已通过 review；Step 2 已修复复审问题，并完成基础验收。原生 Windows 端到端交互仍需单独验收。
+
+## 10. 当前阻塞和遗留
 
 | 项目 | 状态 | 说明 |
 |------|------|------|
-| `--resume` / `--continue` | 未实现 | `SessionStore` 只是 JSONL 日志，不能恢复 runtime history |
+| CLI `--resume` / `--continue` | 延后 | 当前只做交互内 `/resume`，CLI 恢复入口后续如有明确需求再设计 |
 | `/context` cost | 未实现 | 当前只有 token 估算，没有价格估算 |
 | 工具调用 UI 折叠 | 未实现 | 当前工具调用详情持续向下打印，缺少 Claude Code 式摘要和 `Ctrl+O` 展开 |
 | 工具调用轮次不中断 | 待调查 | 实际使用中可能因为多轮 tool_calls 停住，需要检查 `_run_llm_loop()` |
+| `/compact` 进度反馈 | 待设计 | 压缩调用 LLM 时应显示进度或动态状态，避免用户干等 |
+| `/resume` 选择体验 | 待设计 | 期望用方向键上下选择 session，Enter 确认，而不是输入数字 |
 | 原生 Windows E2E | 未完成 | 需要在 cmd.exe/PowerShell 验证完整交互 |
 | Phase 5 | 冻结 | 不作为近期默认开发目标 |
 
-## 10. 下一步 3 项
+## 11. 下一步 3 项
 
-1. 调查并修复工具调用轮次中断问题，补 fake LLM 多轮 tool call 测试。
-2. 设计工具调用 UI 折叠/展开机制，默认摘要，`Ctrl+O` 展开完整参数。
-3. 设计并实现文本级 `--continue` / `--resume <session_id>`。
+1. 设计 `/compact` 压缩进度反馈和 `/resume` 方向键选择体验。
+2. 调查并修复工具调用轮次中断问题，补 fake LLM 多轮 tool call 测试。
+3. 补 `/context` cost 估算，并在原生 cmd.exe/PowerShell 做完整交互验收。

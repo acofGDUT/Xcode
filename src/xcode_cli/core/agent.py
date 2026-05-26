@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from typing import Any
 
 from prompt_toolkit import PromptSession
@@ -31,7 +32,9 @@ from xcode_cli.core.memory import MemoryManager
 from xcode_cli.core.planning import PlanMode, write_plan_file
 from xcode_cli.core.prompting import build_system_prompt
 from xcode_cli.core.project_root import resolve_project_root
+from xcode_cli.core.runtime_status import RuntimeStatusStore
 from xcode_cli.core.session import SessionStore
+from xcode_cli.core.session_resume import SessionResumeBuilder
 from xcode_cli.core.task_tracker import TaskTracker, create_task_tools
 from xcode_cli.core.tool_registry import ToolDef, ToolRegistry
 from xcode_cli.core.tools import ALL_TOOLS
@@ -47,6 +50,8 @@ COMMANDS = {
     "/env": "Manage API env for current process",
     "/plan": "Plan mode controls (enter/show/approve/reject)",
     "/memory": "Memory status and auto-memory toggle",
+    "/resume": "List and resume previous sessions",
+    "/compact": "Compress current conversation context",
     "/exit": "Exit chat",
 }
 
@@ -91,6 +96,14 @@ class SlashCompleter(Completer):
                     yield Completion(cmd, start_position=-len(text), display=f"{cmd} — {desc}")
             return
 
+        if text.startswith("/resume"):
+            yield Completion("/resume", start_position=-len(text), display="/resume — List and resume previous sessions")
+            return
+
+        if text.startswith("/compact"):
+            yield Completion("/compact", start_position=-len(text), display="/compact — Compress current conversation context")
+            return
+
         for cmd, desc in COMMANDS.items():
             if cmd.startswith(text):
                 yield Completion(cmd, start_position=-len(text), display=f"{cmd} — {desc}")
@@ -99,13 +112,14 @@ class SlashCompleter(Completer):
 class AgentRuntime:
     def __init__(self) -> None:
         self.console = Console()
-        self.sessions = SessionStore()
+        self.cwd = str(resolve_project_root(os.getcwd()))
+        self.sessions = SessionStore(cwd=self.cwd)
+        self._runtime_status = RuntimeStatusStore()
         self.skills = SkillManager()
         self.config_store = ConfigStore()
         self.llm = LLMClient()
         cfg = self.config_store.load()
         self.context = ContextManager(max_tokens=cfg.max_tokens)
-        self.cwd = str(resolve_project_root(os.getcwd()))
         self.task_tracker = TaskTracker()
         self.memory = MemoryManager(cwd=self.cwd)
         self.permissions = PermissionManager(cwd=self.cwd)
@@ -114,6 +128,7 @@ class AgentRuntime:
         self._tool_call_count = 0
         self._estimated_tokens = 0
         self._history: list[dict[str, Any]] = []
+        self._session_id: str = ""
         self._session_auto_approve: dict[str, bool] = {"write": False, "shell": False}
         self.tools = ToolRegistry()
         for t in ALL_TOOLS:
@@ -126,54 +141,63 @@ class AgentRuntime:
         self.prompt = PromptSession(completer=SlashCompleter(), auto_suggest=AutoSuggestFromHistory())
 
     def run_chat(self) -> None:
-        session_id = self.sessions.new_session_id()
+        self._session_id = self.sessions.new_session_id()
+        self._runtime_status.create(self._session_id, self.cwd)
         self._render_welcome()
 
-        self._history = []
-        history = self._history
+        self._history: list[dict[str, Any]] = []
 
-        while True:
-            user_input = self.prompt.prompt(ANSI("\x1b[96myou\x1b[0m ▸ "), bottom_toolbar=self._bottom_toolbar).strip()
-            if not user_input:
-                continue
-            if user_input in {"/exit", "exit", "quit"}:
-                self.console.print("Goodbye.")
-                break
+        try:
+            while True:
+                user_input = self.prompt.prompt(ANSI("\x1b[96myou\x1b[0m ▸ "), bottom_toolbar=self._bottom_toolbar).strip()
+                if not user_input:
+                    continue
+                if user_input in {"/exit", "exit", "quit"}:
+                    self.console.print("Goodbye.")
+                    break
 
-            if user_input == "/":
-                self._show_command_suggestions()
-                continue
+                if user_input == "/":
+                    self._show_command_suggestions()
+                    continue
 
-            if user_input.startswith("/"):
-                self._handle_slash_command(user_input)
-                continue
+                if user_input.startswith("/"):
+                    self._handle_slash_command(user_input)
+                    continue
 
-            if self.plan_mode.pending_approval and self._handle_plan_approval_input(user_input):
-                continue
+                if self.plan_mode.pending_approval and self._handle_plan_approval_input(user_input):
+                    continue
 
-            self.sessions.append(session_id, "user", user_input)
-            self._print_user_bubble(user_input)
-            history.append({"role": "user", "content": user_input})
+                self.sessions.append_message(self._session_id, {"role": "user", "content": user_input})
+                self.sessions.append_user_history(self._session_id, user_input)
+                self._print_user_bubble(user_input)
+                self._history.append({"role": "user", "content": user_input})
 
-            if self.plan_mode.is_active:
-                system_prompt = self.plan_mode.get_system_prompt()
-            else:
-                system_prompt = build_system_prompt(self.config_store.load(), self.skills, self.cwd)
-            final_text = self._run_llm_loop(history=history, system_prompt=system_prompt)
+                if self.plan_mode.is_active:
+                    system_prompt = self.plan_mode.get_system_prompt()
+                else:
+                    system_prompt = build_system_prompt(self.config_store.load(), self.skills, self.cwd)
 
-            is_llm_error = final_text.startswith("[v0] LLM request failed:")
-            is_missing_key = final_text.startswith("[v0] Missing API key")
-            is_missing_pkg = final_text.startswith("[v0] openai package not installed")
+                self._runtime_status.update("busy")
+                try:
+                    final_text = self._run_llm_loop(history=self._history, system_prompt=system_prompt)
+                finally:
+                    self._runtime_status.update("idle")
 
-            if is_llm_error or is_missing_key or is_missing_pkg:
-                self.console.print(f"[bold red]{final_text}[/bold red]")
-                continue
+                is_llm_error = final_text.startswith("[v0] LLM request failed:")
+                is_missing_key = final_text.startswith("[v0] Missing API key")
+                is_missing_pkg = final_text.startswith("[v0] openai package not installed")
 
-            self.sessions.append(session_id, "assistant", final_text)
-            history.append({"role": "assistant", "content": final_text})
+                if is_llm_error or is_missing_key or is_missing_pkg:
+                    self.console.print(f"[bold red]{final_text}[/bold red]")
+                    continue
 
-            if self.plan_mode.pending_approval:
-                self._show_plan_and_ask_approval()
+                self.sessions.append_message(self._session_id, {"role": "assistant", "content": final_text})
+                self._history.append({"role": "assistant", "content": final_text})
+
+                if self.plan_mode.pending_approval:
+                    self._show_plan_and_ask_approval()
+        finally:
+            self._runtime_status.delete()
 
     def _render_welcome(self) -> None:
         ensure_ripgrep_installed()
@@ -254,6 +278,14 @@ class AgentRuntime:
 
         if head == "/memory":
             self._handle_memory_command(parts)
+            return
+
+        if head == "/resume":
+            self._handle_resume_command()
+            return
+
+        if head == "/compact":
+            self._handle_compact_command()
             return
 
         self.console.print(f"Unknown command: {command}. Try /help")
@@ -449,6 +481,97 @@ class AgentRuntime:
             return
 
         self.console.print("Usage: /memory | /memory auto on|off")
+
+    def _handle_resume_command(self) -> None:
+        sessions = self.sessions.list_sessions()
+        if not sessions:
+            self.console.print("No recent sessions found for this project.")
+            return
+
+        self.console.print("Recent sessions:")
+        for i, s in enumerate(sessions, 1):
+            ts = datetime.utcfromtimestamp(s.updated_at).strftime("%Y-%m-%d %H:%M")
+            preview = s.last_user_input[:60] if s.last_user_input else "(empty)"
+            cp_mark = " \\[checkpoint]" if s.has_checkpoint else ""
+            self.console.print(f"  {i}. {s.session_id[:8]}...  {ts}  {preview}{cp_mark}")
+
+        choice = self.prompt.prompt(
+            ANSI("\x1b[96mSelect session number (empty to cancel)\x1b[0m ▸ ")
+        ).strip()
+
+        if not choice:
+            self.console.print("Cancelled.")
+            return
+
+        try:
+            idx = int(choice) - 1
+            if idx < 0 or idx >= len(sessions):
+                self.console.print("Invalid selection.")
+                return
+        except ValueError:
+            self.console.print("Invalid selection.")
+            return
+
+        selected = sessions[idx]
+        resume_budget = int(self.context.max_tokens * 0.6)
+        builder = SessionResumeBuilder(self.context, resume_budget)
+        result = builder.build(selected.path)
+        if not result.history:
+            self.console.print("Failed to load session history.")
+            return
+
+        self._history[:] = result.history
+        self._session_id = selected.session_id
+        self._runtime_status.update_session_id(selected.session_id)
+        self.console.print(f"Resumed session {selected.session_id}")
+        self.console.print(f"Restored from checkpoint: {'yes' if result.restored_from_checkpoint else 'no'}")
+        self.console.print(f"Restored messages: {result.message_count}")
+        self.console.print(f"Estimated context: ~{result.estimated_tokens} tokens")
+        if selected.last_user_input:
+            self.console.print(f"Latest user input: {selected.last_user_input[:100]}")
+
+    @staticmethod
+    def _find_previous_summary(history: list[dict[str, Any]]) -> str:
+        for msg in reversed(history):
+            if msg.get("role") == "system":
+                content = str(msg.get("content", ""))
+                if "Conversation summary checkpoint:" in content:
+                    return content.split("Conversation summary checkpoint:\n", 1)[-1].strip()
+        return ""
+
+    def _handle_compact_command(self) -> None:
+        if len(self._history) < 4:
+            self.console.print("Nothing to compact.")
+            return
+
+        before_messages = len(self._history)
+        before_tokens = self.context.estimate_tokens(self._history)
+        previous_summary = self._find_previous_summary(self._history)
+        result = self.context.compress(self._history, self.llm, previous_summary)
+
+        if not result.checkpoint_message:
+            self.console.print("Nothing to compact.")
+            return
+
+        after_messages = len(result.messages)
+        after_tokens = self.context.estimate_tokens(result.messages)
+        self._history[:] = result.messages
+        saved_tokens = max(before_tokens - after_tokens, 0)
+
+        self.sessions.append_message(self._session_id, result.checkpoint_message)
+        self.sessions.append_event(self._session_id, {
+            "type": "compaction_checkpoint",
+            "summary": result.summary,
+            "summary_format": "xcode.v1",
+            "source_message_count": before_messages,
+            "source_token_estimate": before_tokens,
+            "remaining_message_count": after_messages,
+        })
+
+        self.console.print(
+            f"[dim]Context compacted: {before_messages} -> {after_messages} messages, "
+            f"saved ~{saved_tokens} tokens.[/dim]"
+        )
 
     def _handle_plan_command(self, parts: list[str]) -> None:
         if len(parts) == 1:
@@ -707,15 +830,26 @@ class AgentRuntime:
             if self.context.should_compress(history):
                 before_messages = len(history)
                 before_tokens = self.context.estimate_tokens(history)
-                compressed = self.context.compress(history, self.llm)
-                after_messages = len(compressed)
-                after_tokens = self.context.estimate_tokens(compressed)
-                history[:] = compressed
+                previous_summary = self._find_previous_summary(history)
+                result = self.context.compress(history, self.llm, previous_summary)
+                after_messages = len(result.messages)
+                after_tokens = self.context.estimate_tokens(result.messages)
+                history[:] = result.messages
                 saved_tokens = max(before_tokens - after_tokens, 0)
                 self.console.print(
                     f"[dim]Context compressed: {before_messages} -> {after_messages} messages, "
                     f"saved ~{saved_tokens} tokens.[/dim]"
                 )
+                if self._session_id and result.checkpoint_message:
+                    self.sessions.append_message(self._session_id, result.checkpoint_message)
+                    self.sessions.append_event(self._session_id, {
+                        "type": "compaction_checkpoint",
+                        "summary": result.summary,
+                        "summary_format": "xcode.v1",
+                        "source_message_count": before_messages,
+                        "source_token_estimate": before_tokens,
+                        "remaining_message_count": after_messages,
+                    })
 
             content_buffer: list[str] = []
             reasoning_buffer: list[str] = []
@@ -916,5 +1050,10 @@ class AgentRuntime:
 
             for tc, result in executed_calls:
                 history.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+
+            if self._session_id:
+                self.sessions.append_message(self._session_id, assistant_msg)
+                for tc, result in executed_calls:
+                    self.sessions.append_message(self._session_id, {"role": "tool", "tool_call_id": tc.id, "content": result})
 
         return "Reached maximum tool call rounds."

@@ -13,6 +13,8 @@ def run_shell(command: str, cwd: str | None = None, timeout: int = 120000) -> st
             cwd=cwd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout / 1000,
         )
     except subprocess.TimeoutExpired:

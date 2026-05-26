@@ -17,6 +17,7 @@ Xcode v0.1.0 已完成 Phase 1-4 和 Phase 4.5 Batch 1-2 的稳定化工作。
 - Context token 估算和自动压缩，`max_tokens` 可配置。
 - `/context`、`/env max-tokens`、syntax theme、工具结果语义化显示。
 - Phase 4.5 memory/path/context 测试基线。
+- 对话历史恢复基础能力：`/compact`、`/resume`、UUID transcript、checkpoint + recent tail 恢复。
 
 Phase 5 生态扩展当前冻结，不作为近期默认开发目标。
 
@@ -24,7 +25,7 @@ Phase 5 生态扩展当前冻结，不作为近期默认开发目标。
 
 | 优先级 | 能力 | 状态 | 目标 |
 |--------|------|------|------|
-| P0 | 对话历史恢复 | 未实现 | 支持 `--continue` / `--resume <id>`，恢复可继续推理的 history |
+| P0 | 对话历史恢复 | 基础完成 | 已支持 `/compact` + `/resume`，基于 checkpoint + recent tail 恢复可继续推理的 history；后续只保留体验增强和 CLI 入口延后 |
 | P0 | 原生 Windows E2E 验收 | 未完成 | 在 cmd.exe/PowerShell 验证真实交互链路 |
 | P1 | `/context` cost 估算 | 未实现 | 在 token 统计外展示近似费用 |
 | P1 | 工具调用 UI 折叠 | 未实现 | 连续工具调用默认合并为摘要，`Ctrl+O` 展开完整参数 |
@@ -35,65 +36,90 @@ Phase 5 生态扩展当前冻结，不作为近期默认开发目标。
 
 ## 3. P0：对话历史恢复
 
+### 当前状态
+
+基础能力已完成：
+
+- session id 使用 UUID。
+- 完整 transcript 写入 `~/.xcode/projects/<project-key>/sessions/<uuid>.jsonl`。
+- 轻量用户输入历史写入 `~/.xcode/history.jsonl`。
+- runtime status 写入 `~/.xcode/sessions/<pid>.json`，进程退出时删除。
+- `/compact` 和自动 context compression 会写入 `message(system)` + `compaction_checkpoint`。
+- `/resume` 使用最新 checkpoint summary + checkpoint 之后的 recent tail 恢复 `_history`；无 checkpoint 时使用 tail-only fallback。
+- 恢复时按 token budget 裁剪，并保护 assistant `tool_calls` / tool result pair。
+
+当前不做 CLI `--resume <session_id>`、`xcode chat --resume <session_id>` 和 `--continue`。这些入口保留为后续如有明确需求再设计。
+
 ### 目标
 
-让用户退出 CLI 后可以继续最近一次对话，或按 session id 恢复指定对话。
+让用户退出 CLI 后可以恢复指定历史会话，并继续一个在 token 预算内可推理的上下文。
 
 推荐入口：
 
-```bash
-xcode --continue
-xcode --resume <session_id>
-xcode chat --continue
-xcode chat --resume <session_id>
-```
-
-也可补充 slash command：
-
 ```text
-/session list
-/session show <session_id>
-/session continue
+/compact
+/resume
 ```
 
-### 当前差距
+CLI `--resume <session_id>` 和 `xcode chat --resume <session_id>` 暂不作为当前收口目标，可留到后续如果确有命令行启动恢复需求时再设计；`--continue` 也暂不做。
 
-`SessionStore` 现在只写：
+### 已解决的问题
+
+旧版 `SessionStore` 只写简化 user / assistant 文本：
 
 ```json
 {"role": "user|assistant", "content": "...", "ts": "..."}
 ```
 
-但 `_run_llm_loop()` 内部真正需要继续推理的是完整 `history`，其中可能包含 assistant `tool_calls`、tool result、system compression summary 等结构。当前 session 日志不足以完整恢复所有工具调用上下文。
+但 `_run_llm_loop()` 内部真正需要继续推理的是完整 `history`，其中可能包含 assistant `tool_calls`、tool result、system compression summary 等结构。当前实现已改为结构化 transcript event，并在 context compression 发生时持久化可恢复 checkpoint。
 
-### 推荐实现模型
+另一个关键问题是大 transcript：恢复时不能把整个 JSONL 全量塞回 `_history`，否则会直接超过 token 预算。当前实现通过 `SessionResumeBuilder` 使用 checkpoint + recent tail 或 tail-only fallback 构造预算内 history。
 
-分两层做：
+### 已采用的实现模型
 
-1. **Batch A：文本级恢复**
-   - 先从 JSONL 恢复 user/assistant 文本消息。
-   - 目标是恢复普通聊天上下文。
-   - 明确不恢复历史 tool call 的中间状态。
+分两步做：
 
-2. **Batch B：结构化 session schema**
-   - 持久化 raw history event。
-   - 支持 assistant tool_calls、tool messages、compression summary。
-   - 为 rollback/fork 打基础。
+1. **Step 1：Session persistence foundation**
+   - 使用 UUID session id 和 project-key。
+   - 完整 transcript 写入 `~/.xcode/projects/<project-key>/sessions/<uuid>.jsonl`。
+   - `~/.xcode/history.jsonl` 只存轻量用户输入历史。
+   - `~/.xcode/sessions/<pid>.json` 只表示当前活跃进程，退出时删除。
+   - `/resume` 先跑通当前项目 session 列表和小 transcript 恢复。
 
-### 建议修改文件
+2. **Step 2：Compaction checkpoint + budgeted resume**
+   - context compression 或用户手动 `/compact` 发生时写入 `compaction_checkpoint` event。
+   - checkpoint summary 必须是累积摘要，避免多次压缩后早期上下文丢失。
+   - `/compact` 压缩“上次 checkpoint 之后到当前”的增量消息，但新 checkpoint summary 必须合并旧 summary。
+   - `/resume` 优先恢复最新 checkpoint summary + checkpoint 之后的 recent tail。
+   - 无 checkpoint 时按 token budget 只恢复 recent tail，并给出清晰提示。
+   - 恢复后 `_history` 必须保持 OpenAI-compatible message 顺序，特别是 tool_calls / tool result pair。
+
+### 已修改文件
 
 | 文件 | 修改方向 |
 |------|----------|
-| `src/xcode_cli/core/session.py` | 增加 `list_sessions()`、`latest_session_id()`、`load_messages(session_id)` |
-| `src/xcode_cli/core/agent.py` | `AgentRuntime` 支持传入初始 history 和 session id |
-| `src/xcode_cli/main.py` | Typer 增加 `--continue` / `--resume` option |
-| `tests/` | 增加 session load、latest、resume 初始化测试 |
+| `src/xcode_cli/core/session.py` | UUID session、project-key、transcript event、history.jsonl、session listing |
+| `src/xcode_cli/core/runtime_status.py` | 管理 `<pid>.json` 的 create/update/delete |
+| `src/xcode_cli/core/session_resume.py` | 负责 checkpoint + token budget 的恢复构造 |
+| `src/xcode_cli/core/context.py` | compression 结果暴露 summary/checkpoint 信息 |
+| `src/xcode_cli/core/agent.py` | 接入 transcript 写入、runtime status、`/resume`、`self._session_id` |
+| `src/xcode_cli/main.py` | 当前不改 CLI resume；后续如有明确需求再设计 |
+| `tests/` | 增加 session、runtime status、resume builder、tool_calls、大 transcript 测试 |
 
-### 验收标准
+### 基础验收标准
 
-- `pytest` 覆盖 session 读取和最近 session 选择。
-- 手工创建 session JSONL 后，`xcode --resume <id>` 能把历史注入 `_history`。
+- `pytest` 覆盖 session 读取、runtime status、checkpoint 和 budgeted resume。
+- 手工创建 session JSONL 后，`/resume` 能把可继续工作的历史注入 `_history`。
+- 大 transcript 不会被全量加载到 `_history`。
+- 有 checkpoint 时优先恢复 checkpoint summary + recent tail。
+- 无 checkpoint 时恢复 recent tail，并提示没有压缩 checkpoint。
 - 恢复失败时给出可读错误，不崩溃。
+
+### 后续增强
+
+- `/compact` 调用 LLM 压缩时显示进度或动态状态，避免用户干等。
+- `/resume` 从数字输入改为方向键上下选择 + Enter 确认，并保留非 TTY fallback。
+- 如后续确有命令行恢复需求，再设计 CLI `--resume <session_id>` / `xcode chat --resume <session_id>`。
 
 ## 4. P1：对话回退和分叉
 

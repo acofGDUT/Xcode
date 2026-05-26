@@ -105,21 +105,28 @@ C:\Users\%USERNAME%\.xcode\projects\D:\Xcode\memory\project_tech_stack.md
 - 模型可能写错路径，所以 resolved memory paths 很重要。
 - memory 文档必须和 `BASE_SYSTEM_PROMPT` 保持一致。
 
-## 7. session 日志不是 resume 能力
+## 7. session resume 当前模型
 
-**状态**：Open
+**状态**：Resolved
 **关联**：ROADMAP P0 对话历史恢复
 
-当前 `SessionStore` 只把 user/assistant 最终文本写入 JSONL。
+旧问题：`SessionStore` 曾只把 user/assistant 最终文本写入 JSONL，因此不能恢复 runtime history。
 
-它不保存完整 runtime history，因此不能直接支持：
+当前收口：
 
-- 恢复 assistant tool_calls。
-- 恢复 tool result message。
-- 恢复 context compression summary。
-- 真正回退到某一轮继续执行。
+- transcript 写入 `~/.xcode/projects/<project-key>/sessions/<uuid>.jsonl`。
+- transcript 使用 append-only event，包括 user、assistant、tool、system summary 和 `compaction_checkpoint`。
+- `~/.xcode/history.jsonl` 只作为轻量用户输入历史，不用于重建 LLM history。
+- `~/.xcode/sessions/<pid>.json` 只表示当前活跃进程，退出时删除。
+- `/compact` 和自动 compression 会写入 checkpoint。
+- `/resume` 使用最新 checkpoint + recent tail 恢复可继续工作的 `_history`；无 checkpoint 时使用 tail-only fallback。
 
-后续做 `--resume` 时需要先明确是文本级恢复，还是结构化恢复。
+当前边界：
+
+- 本轮不做 CLI `--resume` / `--continue`。
+- 不做 rollback/fork。
+- checkpoint summary 长度策略集中在 `ContextManager`，`max_summary_chars=None` 或 `0` 时关闭代码层截断。
+- 后续如重构 `agent.py`，应把 compaction/session resume glue 从主循环中继续拆出去。
 
 ## 8. 不引入 asyncio
 
@@ -182,7 +189,36 @@ Review 注意：
 
 建议增加 fake LLM 的多轮 tool call 测试，至少覆盖“第一轮工具 -> 第二轮工具 -> 最终文本”的完整链路。
 
-## 13. 验收证据优先
+## 13. `/compact` 需要进度反馈
+
+**状态**：Open
+**关联**：session resume 体验优化
+
+现象：`/compact` 会调用 LLM 生成摘要。如果模型响应较慢，用户会看到终端停住，难以判断是在压缩、卡住，还是没有输入被接收。
+
+后续方向：压缩期间显示进度或动态状态。第一版可以复用 Thinking/Live 风格，显示类似 `Compacting context...` 和 elapsed time；不要等摘要完成后才一次性输出结果。
+
+Review 注意：
+
+- 自动 compression 和手动 `/compact` 最好复用同一套状态展示。
+- 进度 UI 不能吞掉异常或导致 checkpoint 半写入。
+- 原生 PowerShell/cmd.exe 需要手工验收。
+
+## 14. `/resume` 选择体验需要方向键菜单
+
+**状态**：Open
+**关联**：session resume 体验优化
+
+当前 `/resume` 使用数字输入选择 session。实际体验上，用户更希望像审批菜单一样，用方向键上下浏览已有记录，按 Enter 恢复选中的 session。
+
+后续方向：
+
+- `/resume` 列表改为方向键上下选择 + Enter 确认。
+- 列表项展示 session 时间、最近用户输入、是否有 checkpoint。
+- 保留非 TTY fallback，例如数字输入或取消。
+- 选择菜单不应破坏当前 runtime status，也不应在取消时污染 `_history`。
+
+## 15. 验收证据优先
 
 **状态**：Open
 **关联**：所有开发和 review 流程
@@ -198,3 +234,20 @@ python -c "from xcode_cli.core.agent import AgentRuntime; print('ok')"
 ```
 
 涉及 prompt_toolkit、审批菜单、方向键交互时，必须补原生 cmd.exe/PowerShell 手工验收记录。
+
+## 16. Windows subprocess 解码问题
+
+**状态**：Resolved
+**关联**：`run_shell` 工具 / 中文 Windows 控制台
+
+现象：在中文 Windows 环境下，`run_shell` 读取外部命令输出时，可能因为 `subprocess.run(..., text=True)` 走系统默认 GBK 解码而触发 `UnicodeDecodeError`。
+
+根因：外部命令输出并不一定是 GBK；当 UTF-8 或混合编码字节流被系统默认编码解码时，reader thread 可能直接抛异常。
+
+当前收口：
+
+- `src/xcode_cli/core/tools/shell.py` 显式使用 `encoding="utf-8"`。
+- 同时使用 `errors="replace"`，把不可解码字符降级为可显示占位，而不是打崩工具调用。
+- 已增加回归测试，锁定 `run_shell()` 必须传入 `encoding` 和 `errors`。
+
+Review 注意：这次修复只覆盖 `run_shell`。其他使用 `subprocess.run(..., text=True)` 的工具如果后续也在 Windows 下读取非默认编码输出，需要单独审查，不要默认已经一起解决。

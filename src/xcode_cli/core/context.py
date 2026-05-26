@@ -1,14 +1,27 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any
+
+
+@dataclass
+class CompressionResult:
+    messages: list[dict[str, Any]]
+    summary: str
+    checkpoint_message: dict[str, Any]
 
 
 class ContextManager:
     """Manage chat history token usage with lightweight compression strategy."""
 
-    def __init__(self, max_tokens: int = 128000) -> None:
+    def __init__(
+        self,
+        max_tokens: int = 128000,
+        max_summary_chars: int | None = 6000,
+    ) -> None:
         self.max_tokens = max_tokens
+        self.max_summary_chars = max_summary_chars
 
     def estimate_tokens(self, messages: list[dict[str, Any]]) -> int:
         total = 0
@@ -35,9 +48,18 @@ class ContextManager:
     def should_compress(self, messages: list[dict[str, Any]]) -> bool:
         return self.estimate_tokens(messages) >= int(self.max_tokens * 0.8)
 
-    def compress(self, messages: list[dict[str, Any]], llm_client) -> list[dict[str, Any]]:
+    def compress(
+        self,
+        messages: list[dict[str, Any]],
+        llm_client,
+        previous_summary: str = "",
+    ) -> CompressionResult:
         if len(messages) <= 20:
-            return messages
+            return CompressionResult(
+                messages=messages,
+                summary="",
+                checkpoint_message={},
+            )
 
         first_user_idx = next((i for i, m in enumerate(messages) if m.get("role") == "user"), None)
         first_user = messages[first_user_idx] if first_user_idx is not None else None
@@ -48,14 +70,43 @@ class ContextManager:
         middle_end = max(len(messages) - tail_count, middle_start)
         middle = messages[middle_start:middle_end]
 
-        if not middle:
-            return messages
+        if previous_summary:
+            middle = [
+                m for m in middle
+                if not (
+                    m.get("role") == "system"
+                    and "Conversation summary checkpoint:" in str(m.get("content", ""))
+                )
+            ]
 
-        summary_prompt = (
-            "Summarize the following conversation in under 200 words. "
-            "Preserve key requirements, completed actions, pending items, and constraints."
-        )
-        middle_text = "\n".join(f"[{m.get('role','unknown')}] {m.get('content','')}" for m in middle)
+        if not middle:
+            return CompressionResult(
+                messages=messages,
+                summary="",
+                checkpoint_message={},
+            )
+
+        if previous_summary:
+            summary_prompt = (
+                "Below is a previous conversation summary and new conversation content since that summary. "
+                "Produce an updated cumulative summary that merges old and new information. "
+                "The new summary must preserve key decisions, constraints, file changes, errors, "
+                "user preferences, pending items, current work, and next steps from BOTH the old summary "
+                "and the new content. Output only the cumulative summary text, under 400 words."
+            )
+            middle_text = (
+                f"Previous summary:\n{previous_summary}\n\n"
+                f"New content:\n"
+                + "\n".join(f"[{m.get('role','unknown')}] {m.get('content','')}" for m in middle)
+            )
+        else:
+            summary_prompt = (
+                "Summarize the following conversation. Preserve key requirements, "
+                "completed actions, pending items, constraints, file changes, errors, "
+                "user preferences, current work, and next steps. Output only the summary text, under 300 words."
+            )
+            middle_text = "\n".join(f"[{m.get('role','unknown')}] {m.get('content','')}" for m in middle)
+
         summary_resp = llm_client.complete(
             system_prompt="You are a conversation summarization assistant.",
             messages=[{"role": "user", "content": f"{summary_prompt}\n\n{middle_text}"}],
@@ -63,9 +114,21 @@ class ContextManager:
         )
         summary = summary_resp.content.strip() or "(middle conversation compressed)"
 
+        if self.max_summary_chars and self.max_summary_chars > 0 and len(summary) > self.max_summary_chars:
+            summary = summary[:self.max_summary_chars] + "...[summary truncated]"
+
         compressed: list[dict[str, Any]] = []
         if first_user:
             compressed.append(first_user)
-        compressed.append({"role": "system", "content": f"Conversation summary: {summary}"})
+        checkpoint_message: dict[str, Any] = {
+            "role": "system",
+            "content": f"Conversation summary checkpoint:\n{summary}",
+        }
+        compressed.append(checkpoint_message)
         compressed.extend(tail)
-        return compressed
+
+        return CompressionResult(
+            messages=compressed,
+            summary=summary,
+            checkpoint_message=checkpoint_message,
+        )
