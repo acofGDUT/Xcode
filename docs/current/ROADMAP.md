@@ -32,7 +32,7 @@ Phase 5 生态扩展当前冻结，不作为近期默认开发目标。
 | P1 | 工具调用轮次不中断 | 待调查 | 避免 Xcode 因多轮 tool_calls 停在中间状态 |
 | P1 | memory 自管理权限 | 完成 | Xcode 管理 resolved memory 文件时不再频繁要求用户审核，普通文件仍保留审批 |
 | P1 | 流式输出去重 | 未实现 | 避免 streaming token 和 final render 在终端里重复显示同一段内容 |
-| P1 | AgentRuntime 重构 | 待设计 | 把 agent.py 拆成更清晰的 command / loop / resume / compaction 模块 |
+| P1 | AgentRuntime 重构 | 第一轮完成 | 已抽出 commands/slash、conversation、tooling、ui 基础模块；后续继续拆 command handlers 和 streaming 状态 |
 | P1 | 对话回退/分叉设计 | 未实现 | 提供非破坏性的 fork-based rollback |
 | P2 | 项目级配置合并 | 部分实现 | 让 `.xcode/settings.json` 覆盖更多 Config 字段 |
 | P2 | 渲染模式完善 | 部分实现 | 明确 streaming/buffer 模式的用户配置和验收 |
@@ -365,6 +365,26 @@ output_cost_per_1m: float | None = None
 
 把现在过于集中的 `src/xcode_cli/core/agent.py` 拆成更容易 review 和维护的模块。
 
+### 当前状态
+
+第一轮已完成并推送：`fb18243 refactor: modularize agent runtime`。
+
+已完成：
+
+- `core/commands/slash.py`：slash command 列表和补全。
+- `core/ui/shell.py`：welcome、命令建议、bottom toolbar、用户/助手基础输出。
+- `core/conversation/resume.py`：`/resume` 命令编排。
+- `core/conversation/compaction.py`：`/compact` 和自动 compression checkpoint 编排。
+- `core/tooling/approval.py`：审批 scope、方向键菜单、TTY / non-TTY fallback。
+- `core/tooling/execution.py`：tool call 执行、diff preview、memory auto-allow、工具结果摘要。
+- 测试补齐：多轮 tool call、审批 controller、explicit `deny` + memory path。
+
+未完成：
+
+- `/env`、`/memory`、`/context`、`/plan` 等具体 command handlers 仍在 `agent.py`，后续可以继续拆到 `core/commands/`。
+- `_run_llm_loop()` 的 streaming/render 状态仍在 `agent.py`，建议和“流式输出去重”一起设计后再抽到 `core/ui/streaming.py`。
+- 工具调用 UI 折叠和 `Ctrl+O` 展开未纳入本轮。
+
 ### 推荐拆分方向
 
 - slash command 解析和分发。
@@ -383,14 +403,17 @@ output_cost_per_1m: float | None = None
 
 | 文件 | 修改方向 |
 |------|----------|
-| `src/xcode_cli/core/agent.py` | 逐步抽离 orchestration 以外的职责 |
-| `src/xcode_cli/core/*` | 按职责新增 service/helper 模块 |
+| `src/xcode_cli/core/agent.py` | 继续收缩 command handler glue 和 streaming/render 状态 |
+| `src/xcode_cli/core/commands/*` | 继续迁移 `/env`、`/memory`、`/context`、`/plan` 等 handler |
+| `src/xcode_cli/core/ui/streaming.py` | 在 streaming 去重方案确定后承载 Thinking/token/final render 状态 |
 | `tests/` | 补重构回归测试 |
 
 ### 验收标准
 
 - `agent.py` 体积明显下降，职责更清晰。
 - `/resume`、`/compact`、审批、tool call、streaming 的回归测试继续通过。
+- command handlers 迁移后不改变 slash command 用户可见行为。
+- streaming 抽离必须和重复渲染问题一起验收，不能只搬代码。
 
 ## 12. P2：项目级配置合并
 

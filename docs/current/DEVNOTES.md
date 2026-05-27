@@ -171,22 +171,29 @@ Review 结果：已跑 `pytest tests/test_agent_memory_permissions.py tests/test
 
 Review 注意：修复时要重点覆盖代码块、Markdown table、长列表和中断场景，避免“重复消失了，但流式又静默了”的回归。
 
-## 10. AgentRuntime 需要模块化重构
+## 10. AgentRuntime 模块化重构第一轮
 
-**状态**：Open
+**状态**：Partially Resolved
 **关联**：ROADMAP P1 AgentRuntime 重构
 
-现象：`src/xcode_cli/core/agent.py` 已经承载 REPL、slash command、审批 UI、LLM loop、工具执行、session resume、context compaction、render state 等多类职责。session resume 接入后，主循环更难 review。
+原现象：`src/xcode_cli/core/agent.py` 承载 REPL、slash command、审批 UI、LLM loop、工具执行、session resume、context compaction、render state 等多类职责。session resume 接入后，主循环更难 review。
 
-后续方向：在功能稳定后做结构性重构，不改变行为，优先拆出：
+第一轮已完成：
 
-- slash command handlers。
-- tool call execution / approval flow。
-- conversation compaction service。
-- session resume orchestration。
-- streaming/render mode state。
+- `core/commands/slash.py`：slash command 列表和补全。
+- `core/ui/shell.py`：welcome、命令建议、bottom toolbar、基础输出。
+- `core/conversation/resume.py`：`/resume` 编排。
+- `core/conversation/compaction.py`：`/compact` 和自动 compression checkpoint 编排。
+- `core/tooling/approval.py`：审批 scope、方向键菜单、TTY fallback。
+- `core/tooling/execution.py`：tool call 执行、diff preview、memory auto-allow、工具结果摘要。
 
-Review 注意：重构必须先有测试保护，尤其是多轮 tool_calls、审批拒绝、`/compact`、`/resume`、streaming render 这些容易被拆坏的路径。
+Review 结论：第一轮通过，`pytest -q` 为 `184 passed`。已补多轮 tool_calls、审批拒绝、explicit `deny` + memory path、`/compact`、`/resume` 等回归覆盖。
+
+剩余边界：
+
+- `/env`、`/memory`、`/context`、`/plan` 等 command handlers 仍在 `agent.py`，后续如果继续收缩可以迁移到 `core/commands/`。
+- streaming/render 状态仍在 `_run_llm_loop()`，不要为了“完成拆分”简单搬代码；应和流式输出重复显示问题一起设计和验收。
+- 工具调用 UI 折叠、`Ctrl+O` 展开还没有实现，后续如果改 tool display state，需要保护 diff preview 和审批菜单可见性。
 
 ## 11. 不引入 asyncio
 

@@ -17,9 +17,10 @@
 | Session Resume Step 1 | session 持久化基础 | 完成并通过 review | `2026-05-25-session-resume-task-brief.md` |
 | Session Resume Step 2 | checkpoint 压缩与 `/resume` | 完成并通过基础验收 | `2026-05-25-session-resume-task-brief.md` |
 | Memory 自管理权限 | memory-scoped 写入免审 | 完成并通过 review | `2026-05-26-memory-self-management-permissions.md` |
+| AgentRuntime 模块化重构第一轮 | commands/conversation/tooling/ui 服务抽离 | 完成并通过 review | `2026-05-27-agent-runtime-refactor.md` |
 | Phase 5 | 生态扩展 | 冻结 | 未开始 |
 
-当前重点不是进入 Phase 5，而是补齐费用估算、原生 Windows 验收和下一批交互体验优化。
+当前重点不是进入 Phase 5，而是补齐费用估算、原生 Windows 验收、streaming 去重和下一批交互体验优化。
 
 ## 2. Phase 1：协议与工具升级
 
@@ -164,25 +165,50 @@ Review 状态：Step 1 已通过 review；Step 2 已修复复审问题，并完�
 
 Review 结论：通过。建议后续补一个 explicit `deny` + memory path 的回归测试，防止未来重排审批分支时误放行。
 
-## 11. 当前阻塞和遗留
+## 11. AgentRuntime 模块化重构第一轮：2026-05-27
+
+背景：`src/xcode_cli/core/agent.py` 同时承载 REPL、slash command、审批 UI、tool call 执行、session resume、context compaction 和 streaming/render 状态，session resume 接入后 review 成本继续升高。
+
+完成内容：
+
+- 新增中文任务手册：`docs/superpowers/plans/2026-05-27-agent-runtime-refactor.md`。
+- `COMMANDS` 和 `SlashCompleter` 抽到 `src/xcode_cli/core/commands/slash.py`。
+- welcome、命令建议、bottom toolbar、用户/助手基础输出抽到 `src/xcode_cli/core/ui/shell.py`。
+- `/resume` 命令编排抽到 `src/xcode_cli/core/conversation/resume.py`。
+- `/compact` 和自动 compression checkpoint 编排抽到 `src/xcode_cli/core/conversation/compaction.py`。
+- 工具审批菜单和 TTY / non-TTY fallback 抽到 `src/xcode_cli/core/tooling/approval.py`。
+- tool call 执行、diff preview、memory auto-allow、工具结果摘要抽到 `src/xcode_cli/core/tooling/execution.py`。
+- 补充 `tests/test_agent_tool_loop.py`，覆盖多轮 tool call 不应中途停住。
+- 补充 `tests/test_tool_approval.py`，覆盖审批 scope、auto approve 和 non-TTY fallback。
+- 补齐 explicit `deny` + memory path 回归测试，锁定 deny 优先于 memory auto-allow。
+
+Review 结论：第一轮通过。`pytest -q` 为 `184 passed`，`py_compile` 和 `git diff --check` 通过；已提交并推送 `fb18243 refactor: modularize agent runtime`。
+
+保留后续项：
+
+- `/env`、`/memory`、`/context`、`/plan` 等具体 command handlers 仍在 `agent.py`，后续可继续拆到 `core/commands/`。
+- `_run_llm_loop()` 内的 streaming/render 状态仍未抽到 `ui/streaming.py`，后续应和“流式输出重复显示”一起设计。
+- 工具调用 UI 折叠和 `Ctrl+O` 展开尚未实现。
+
+## 12. 当前阻塞和遗留
 
 | 项目 | 状态 | 说明 |
 |------|------|------|
 | CLI `--resume` / `--continue` | 延后 | 当前只做交互内 `/resume`，CLI 恢复入口后续如有明确需求再设计 |
 | `/context` cost | 未实现 | 当前只有 token 估算，没有价格估算 |
 | 工具调用 UI 折叠 | 未实现 | 当前工具调用详情持续向下打印，缺少 Claude Code 式摘要和 `Ctrl+O` 展开 |
-| 工具调用轮次不中断 | 待调查 | 实际使用中可能因为多轮 tool_calls 停住，需要检查 `_run_llm_loop()` |
+| 工具调用轮次不中断 | 部分收口 | 已补 fake LLM 多轮 tool call 回归测试；真实终端仍需结合 streaming 和工具 UI 继续验收 |
 | memory 自管理权限 | 完成 | memory-scoped 写入已免用户审核，普通文件仍保持审批 |
 | 流式输出重复显示 | 未实现 | streaming token 输出后 final render 又渲染一遍，终端会看到重复内容 |
-| `agent.py` 重构 | 待设计 | 主循环承载 command、tool、resume、compaction、render 多类职责，需要拆分 |
-| memory deny 回归测试 | 待补充 | 建议补 explicit `deny` + memory path 场景，防止未来误放行 |
+| `agent.py` 重构 | 第一轮完成 | 已抽出 slash completer、shell UI、resume/compaction、approval、tool execution；command handlers 和 streaming 状态仍待继续拆 |
+| memory deny 回归测试 | 完成 | 已补 explicit `deny` + memory path 场景，防止未来误放行 |
 | `/compact` 进度反馈 | 待设计 | 压缩调用 LLM 时应显示进度或动态状态，避免用户干等 |
 | `/resume` 选择体验 | 待设计 | 期望用方向键上下选择 session，Enter 确认，而不是输入数字 |
 | 原生 Windows E2E | 未完成 | 需要在 cmd.exe/PowerShell 验证完整交互 |
 | Phase 5 | 冻结 | 不作为近期默认开发目标 |
 
-## 12. 下一步 3 项
+## 13. 下一步 3 项
 
 1. 设计并修复体验阻塞：流式输出去重、工具调用 UI 折叠、`/compact` 进度反馈。
-2. 调查并修复工具调用轮次中断问题，补 fake LLM 多轮 tool call 测试。
-3. 在 session resume 稳定后启动 `agent.py` 模块化重构，并补 memory deny 回归测试和原生 cmd.exe/PowerShell 交互验收。
+2. 做原生 cmd.exe/PowerShell 交互验收，重点覆盖审批菜单、diff preview、`/resume`、`/compact` 和多轮 tool call。
+3. 继续第二轮结构收口：拆 command handlers，并在 streaming 去重方案明确后抽 `ui/streaming.py`。

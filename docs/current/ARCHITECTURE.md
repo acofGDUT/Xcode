@@ -26,11 +26,24 @@ flowchart TD
     Runtime --> Memory["MemoryManager<br/>core/memory.py"]
     Runtime --> Sessions["SessionStore<br/>core/session.py"]
     Runtime --> Resume["SessionResumeBuilder<br/>core/session_resume.py"]
+    Runtime --> ResumeSvc["ResumeCommandService<br/>core/conversation/resume.py"]
+    Runtime --> Compactor["ConversationCompactor<br/>core/conversation/compaction.py"]
+    Runtime --> Approval["ToolApprovalController<br/>core/tooling/approval.py"]
+    Runtime --> ToolExec["ToolCallExecutor<br/>core/tooling/execution.py"]
+    Runtime --> ShellUI["ShellUI<br/>core/ui/shell.py"]
+    Runtime --> Slash["SlashCompleter<br/>core/commands/slash.py"]
     Runtime --> Status["RuntimeStatusStore<br/>core/runtime_status.py"]
     Runtime --> Plan["PlanMode<br/>core/planning.py"]
     Runtime --> Tasks["TaskTracker<br/>core/task_tracker.py"]
     Runtime --> Skills["SkillManager<br/>skills/manager.py"]
     Runtime --> Renderer["OutputRenderer<br/>ui/renderer.py"]
+
+    ResumeSvc --> Resume
+    Compactor --> Context
+    ToolExec --> Registry
+    ToolExec --> Permissions
+    ToolExec --> Approval
+    ToolExec --> Memory
 
     Registry --> FileTools["read_file / write_file / edit_file"]
     Registry --> SearchTools["grep / glob"]
@@ -55,6 +68,17 @@ flowchart TD
 
 `AgentRuntime.run_chat()` 是 REPL 主循环。它负责创建 UUID session id、写入 runtime status、读取用户输入、处理 slash command、构造 system prompt、调用 `_run_llm_loop()`，并把结构化 message event 追加到当前项目的 JSONL transcript。
 
+经过第一轮模块化重构后，`AgentRuntime` 仍是 orchestration 入口，但不再直接承载所有细节：
+
+- slash completion 已移到 `core/commands/slash.py`。
+- 欢迎信息、状态栏、用户/助手基础输出已移到 `core/ui/shell.py`。
+- `/resume` 命令编排已移到 `core/conversation/resume.py`。
+- `/compact` 和自动 compression checkpoint 编排已移到 `core/conversation/compaction.py`。
+- 工具审批菜单已移到 `core/tooling/approval.py`。
+- tool call 执行、diff preview、memory auto-allow、工具结果摘要已移到 `core/tooling/execution.py`。
+
+当前仍留在 `agent.py` 内的主要职责是 REPL 主循环、slash command handler 具体实现、工具注册、plan/memory/env/context 命令 glue、以及 `_run_llm_loop()` 的 streaming/render 状态。也就是说，第一轮重构已经完成核心服务抽离，但 command handlers 和 streaming 状态还没有完全模块化。
+
 ## 4. 普通对话数据流
 
 ```mermaid
@@ -72,15 +96,15 @@ sequenceDiagram
     R->>P: 构造 system prompt
     R->>C: should_compress(history)
     alt 需要压缩
-        R->>C: compress(history, llm)
+        R->>C: ConversationCompactor.compact_history(history)
         R->>S: append(message system summary + compaction_checkpoint)
     end
     R->>L: complete(stream=True, tools=schema)
     alt 无 tool_calls
         L-->>R: final text
     else 有 tool_calls
-        R->>T: execute(tool, args)
-        T-->>R: tool result
+        R->>T: ToolCallExecutor.execute(response)
+        T-->>R: assistant tool_calls + tool results
         R->>L: 带 assistant tool_calls + tool result 继续循环
     end
     R->>S: append(assistant / tool messages)
@@ -90,7 +114,7 @@ sequenceDiagram
 
 ## 5. Slash Command 流程
 
-用户输入以 `/` 开头时不会进入 LLM，而是由 `_handle_slash_command()` 分发：
+用户输入以 `/` 开头时不会进入 LLM，而是由 `_handle_slash_command()` 分发。命令补全由 `core/commands/slash.py` 提供，具体 handler 目前仍在 `agent.py` 内：
 
 | 命令 | 实现位置 | 当前能力 |
 |------|----------|----------|
@@ -101,8 +125,8 @@ sequenceDiagram
 | `/env` | `_handle_env_command()` | API key、base-url、model、theme、max-tokens、config edit |
 | `/plan` | `_handle_plan_command()` | enter/show/approve/reject |
 | `/memory` | `_handle_memory_command()` | 查看 memory 状态，开关 auto memory |
-| `/compact` | `_handle_compact_command()` | 手动触发累积摘要压缩，写入 checkpoint |
-| `/resume` | `_handle_resume_command()` | 列出当前项目 session，并恢复选中的 transcript |
+| `/compact` | `_handle_compact_command()` + `ConversationCompactor` | 手动触发累积摘要压缩，写入 checkpoint |
+| `/resume` | `_handle_resume_command()` + `ResumeCommandService` | 列出当前项目 session，并恢复选中的 transcript |
 | `/exit` | `run_chat()` | 退出 |
 
 ## 6. Tool 系统
@@ -146,7 +170,7 @@ session rule > project .xcode/settings.json > global ~/.xcode/settings.json > de
 | `write_file`, `edit_file`, `run_shell` | `ask` |
 | 其他工具 | `ask` |
 
-当权限为 `ask` 时，`AgentRuntime` 会在执行前展示工具调用信息。对 `write_file` / `edit_file`，还会先读取旧内容并渲染 diff preview，再出现审批 UI。
+当权限为 `ask` 时，`ToolCallExecutor` 会在执行前展示工具调用信息。对 `write_file` / `edit_file`，还会先读取旧内容并渲染 diff preview，再通过 `ToolApprovalController` 出现审批 UI。
 
 TTY 环境下审批 UI 是内联三选项菜单：
 
@@ -157,6 +181,8 @@ Yes, for this conversation
 ```
 
 支持方向键上下选择 + Enter，也保留 `y/n/a` 快捷键。非 TTY fallback 才退回单行 `input()`。
+
+Memory 自管理权限也在 tool execution 层处理：`write_file` / `edit_file` 命中 `MemoryManager.is_memory_write_target()` 的 resolved memory 路径时跳过用户审批，但显式 `deny` 仍优先生效，普通项目文件仍走原有审批流程。
 
 ## 8. Memory 模型
 
@@ -266,7 +292,13 @@ runtime status 写入：
 
 | 文件 | 职责 |
 |------|------|
-| `src/xcode_cli/core/agent.py` | REPL 主循环、slash commands、工具注册、审批 UI、LLM/tool loop |
+| `src/xcode_cli/core/agent.py` | REPL 主循环、slash command handler glue、工具注册、LLM/tool loop orchestration、streaming 状态 |
+| `src/xcode_cli/core/commands/slash.py` | slash command 列表和 prompt_toolkit 补全 |
+| `src/xcode_cli/core/conversation/compaction.py` | `/compact` 和自动 compression checkpoint 编排 |
+| `src/xcode_cli/core/conversation/resume.py` | `/resume` 交互命令编排，调用 `SessionResumeBuilder` |
+| `src/xcode_cli/core/tooling/approval.py` | 工具审批 scope、方向键菜单、TTY / non-TTY fallback |
+| `src/xcode_cli/core/tooling/execution.py` | tool call 执行、权限检查、diff preview、memory auto-allow、结果摘要 |
+| `src/xcode_cli/core/ui/shell.py` | welcome、命令建议、状态栏、用户/助手基础输出 |
 | `src/xcode_cli/core/llm.py` | OpenAI-compatible API 调用、streaming、tool call 解析 |
 | `src/xcode_cli/core/tool_registry.py` | 工具定义、schema 转换、异常捕获执行 |
 | `src/xcode_cli/core/tools/files.py` | read/write/edit 文件工具 |
