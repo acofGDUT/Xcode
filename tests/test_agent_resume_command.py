@@ -210,7 +210,7 @@ class TestResumeSuccessful:
         sid = agent.sessions.new_session_id()
         _write_transcript(agent.sessions, sid, [{"role": "user", "content": "hello"}])
 
-        import xcode_cli.core.agent as agent_mod
+        import xcode_cli.core.conversation.resume as resume_mod
         from xcode_cli.core.session_resume import ResumeResult
 
         class _EmptyBuilder:
@@ -228,7 +228,7 @@ class TestResumeSuccessful:
                     estimated_tokens=0,
                 )
 
-        monkeypatch.setattr(agent_mod, "SessionResumeBuilder", _EmptyBuilder)
+        monkeypatch.setattr(resume_mod, "SessionResumeBuilder", _EmptyBuilder)
 
         mock_prompt = agent.prompt.prompt
         mock_prompt.return_value = "1"

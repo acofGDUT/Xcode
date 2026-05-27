@@ -72,7 +72,7 @@ def test_write_file_to_auto_memory_bypasses_user_approval(tmp_path: Path, monkey
         approvals.append(f"{tool_name}:{scope}")
         return "no"
 
-    monkeypatch.setattr(agent, "_prompt_tool_approval", fake_approval)
+    monkeypatch.setattr(agent.approval, "prompt", fake_approval)
     agent.tools._tools["write_file"].execute = lambda **kwargs: executed.append(kwargs) or "ok"
     agent.llm.complete = _single_tool_call_llm([
         ToolCall(
@@ -97,8 +97,8 @@ def test_edit_file_to_project_memory_bypasses_user_approval(tmp_path: Path, monk
     executed: list[dict] = []
 
     monkeypatch.setattr(
-        agent,
-        "_prompt_tool_approval",
+        agent.approval,
+        "prompt",
         lambda tool_name, scope: approvals.append(f"{tool_name}:{scope}") or "no",
     )
     agent.tools._tools["edit_file"].execute = lambda **kwargs: executed.append(kwargs) or "edited"
@@ -133,8 +133,8 @@ def test_write_file_to_normal_project_file_still_asks(tmp_path: Path, monkeypatc
     executed: list[dict] = []
 
     monkeypatch.setattr(
-        agent,
-        "_prompt_tool_approval",
+        agent.approval,
+        "prompt",
         lambda tool_name, scope: approvals.append(f"{tool_name}:{scope}") or "no",
     )
     agent.tools._tools["write_file"].execute = lambda **kwargs: executed.append(kwargs) or "ok"
@@ -159,8 +159,8 @@ def test_invalid_memory_like_path_still_asks(tmp_path: Path, monkeypatch) -> Non
     executed: list[dict] = []
 
     monkeypatch.setattr(
-        agent,
-        "_prompt_tool_approval",
+        agent.approval,
+        "prompt",
         lambda tool_name, scope: approvals.append(f"{tool_name}:{scope}") or "no",
     )
     agent.tools._tools["write_file"].execute = lambda **kwargs: executed.append(kwargs) or "ok"
@@ -175,4 +175,36 @@ def test_invalid_memory_like_path_still_asks(tmp_path: Path, monkeypatch) -> Non
     agent._run_llm_loop([], "system")
 
     assert approvals == ["write_file:write"]
+    assert executed == []
+
+
+# ---------------------------------------------------------------------------
+# explicit deny regression (Batch 0 safety net)
+# ---------------------------------------------------------------------------
+
+def test_explicit_deny_memory_write_does_not_execute(tmp_path: Path, monkeypatch) -> None:
+    agent = _make_agent(tmp_path, monkeypatch)
+    memory_path = agent.memory.memory_dir_path() / "project_tech_stack.md"
+    executed: list[dict] = []
+    approvals: list[str] = []
+
+    agent.permissions.set_session_rule("write_file", "deny")
+    monkeypatch.setattr(
+        agent.approval,
+        "prompt",
+        lambda tool_name, scope: approvals.append(f"{tool_name}:{scope}") or "yes",
+    )
+    agent.tools._tools["write_file"].execute = lambda **kwargs: executed.append(kwargs) or "ok"
+    agent.llm.complete = _single_tool_call_llm([
+        ToolCall(
+            id="call_denied_memory",
+            name="write_file",
+            args={"path": str(memory_path), "content": "memory body"},
+        )
+    ])
+
+    result = agent._run_llm_loop([], "system")
+
+    assert result == "done"
+    assert approvals == []
     assert executed == []

@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-import json
 import os
 import subprocess
-import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
 from typing import Any
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import ANSI
 from rich.console import Console
 from rich.live import Live
@@ -21,10 +17,13 @@ from rich.table import Table
 from rich.text import Text
 
 from xcode_cli.core.permissions import PermissionManager
-from xcode_cli.ui.renderer import OutputRenderer
-
-from xcode_cli.core.bootstrap import ensure_ripgrep_installed
+from xcode_cli.core.commands.slash import SlashCompleter
 from xcode_cli.core.config import ConfigStore
+from xcode_cli.core.conversation.compaction import ConversationCompactor
+from xcode_cli.core.conversation.resume import ResumeCommandService
+from xcode_cli.core.tooling.approval import ToolApprovalController
+from xcode_cli.core.tooling.execution import ToolCallExecutor
+from xcode_cli.core.ui.shell import ShellUI
 from xcode_cli.core.context import ContextManager
 from xcode_cli.core.dashboard import Dashboard
 from xcode_cli.core.llm import LLMClient
@@ -34,79 +33,11 @@ from xcode_cli.core.prompting import build_system_prompt
 from xcode_cli.core.project_root import resolve_project_root
 from xcode_cli.core.runtime_status import RuntimeStatusStore
 from xcode_cli.core.session import SessionStore
-from xcode_cli.core.session_resume import SessionResumeBuilder
 from xcode_cli.core.task_tracker import TaskTracker, create_task_tools
 from xcode_cli.core.tool_registry import ToolDef, ToolRegistry
 from xcode_cli.core.tools import ALL_TOOLS
 from xcode_cli.core.tools.agent_tool import create_dispatch_agent_tool
 from xcode_cli.skills.manager import SkillManager
-
-
-COMMANDS = {
-    "/help": "Show available commands",
-    "/context": "Show token usage and context budget",
-    "/dashboard": "Open API configuration dashboard",
-    "/skill": "Manage skills (list/install/enable/disable)",
-    "/env": "Manage API env for current process",
-    "/plan": "Plan mode controls (enter/show/approve/reject)",
-    "/memory": "Memory status and auto-memory toggle",
-    "/resume": "List and resume previous sessions",
-    "/compact": "Compress current conversation context",
-    "/exit": "Exit chat",
-}
-
-
-class SlashCompleter(Completer):
-    def get_completions(self, document, complete_event):
-        text = document.text_before_cursor
-        if not text.startswith("/"):
-            return
-
-        if text.startswith("/dashboard"):
-            yield Completion(
-                "/dashboard",
-                start_position=-len(text),
-                display="/dashboard — Open API configuration dashboard",
-            )
-            return
-
-        if text.startswith("/skill"):
-            for cmd, desc in [
-                ("/skill list", "List installed skills"),
-                ("/skill install ", "Install skill from local path"),
-                ("/skill enable ", "Enable an installed skill"),
-                ("/skill disable ", "Disable an installed skill"),
-            ]:
-                if cmd.startswith(text):
-                    yield Completion(cmd, start_position=-len(text), display=f"{cmd} — {desc}")
-            return
-
-        if text.startswith("/env"):
-            for cmd, desc in [
-                ("/env show", "Show current API key status"),
-                ("/env set ", "Set and persist API key"),
-                ("/env unset", "Unset API key from process and config"),
-                ("/env base-url ", "Set provider base URL"),
-                ("/env model ", "Set model name"),
-                ("/env theme ", "Set syntax highlight theme"),
-                ("/env max-tokens ", "Set max token budget for context compression"),
-                ("/env edit", "Open ~/.xcode/config.json in default editor"),
-            ]:
-                if cmd.startswith(text):
-                    yield Completion(cmd, start_position=-len(text), display=f"{cmd} — {desc}")
-            return
-
-        if text.startswith("/resume"):
-            yield Completion("/resume", start_position=-len(text), display="/resume — List and resume previous sessions")
-            return
-
-        if text.startswith("/compact"):
-            yield Completion("/compact", start_position=-len(text), display="/compact — Compress current conversation context")
-            return
-
-        for cmd, desc in COMMANDS.items():
-            if cmd.startswith(text):
-                yield Completion(cmd, start_position=-len(text), display=f"{cmd} — {desc}")
 
 
 class AgentRuntime:
@@ -130,6 +61,19 @@ class AgentRuntime:
         self._history: list[dict[str, Any]] = []
         self._session_id: str = ""
         self._session_auto_approve: dict[str, bool] = {"write": False, "shell": False}
+        self.prompt = PromptSession(completer=SlashCompleter(), auto_suggest=AutoSuggestFromHistory())
+        self.approval = ToolApprovalController(self.console, self._session_auto_approve)
+        self.compactor = ConversationCompactor(self.context, self.llm, self.sessions, self.console)
+        self.resume_service = ResumeCommandService(self.sessions, self.context, self.console, self.prompt)
+        self.shell_ui = ShellUI(
+            self.console,
+            self.config_store,
+            self.context,
+            session_start_getter=lambda: self._session_start,
+            tool_count_getter=lambda: self._tool_call_count,
+            token_getter=lambda: self._estimated_tokens,
+            cwd=self.cwd,
+        )
         self.tools = ToolRegistry()
         for t in ALL_TOOLS:
             self.tools.register(t)
@@ -138,7 +82,15 @@ class AgentRuntime:
             self.tools.register(task_tool)
         for extra_tool in self._create_plan_memory_tools():
             self.tools.register(extra_tool)
-        self.prompt = PromptSession(completer=SlashCompleter(), auto_suggest=AutoSuggestFromHistory())
+        self.tool_executor = ToolCallExecutor(
+            self.console,
+            self.tools,
+            self.permissions,
+            self.approval,
+            self.memory,
+            self.config_store,
+            self._session_auto_approve,
+        )
 
     def run_chat(self) -> None:
         self._session_id = self.sessions.new_session_id()
@@ -200,48 +152,19 @@ class AgentRuntime:
             self._runtime_status.delete()
 
     def _render_welcome(self) -> None:
-        ensure_ripgrep_installed()
-
-        cfg = self.config_store.load()
-        enabled = ", ".join(cfg.enabled_skills) if cfg.enabled_skills else "none"
-        has_key = bool(cfg.api_key or os.getenv("XCODE_API_KEY") or os.getenv("OPENAI_API_KEY"))
-        key_state = "ready" if has_key else "missing-key"
-
-        self.console.print("[bold]Xcode[/bold] v0.1.0  /\\_/\\")
-        self.console.print("terminal-native AI agent  (•.•)")
-        self.console.print(f"[dim]Skills:[/dim] {enabled} | [dim]API:[/dim] {key_state} | [dim]Project:[/dim] {self.cwd}")
-        self.console.print("[dim]Type normally to chat · / for commands · Tab to complete[/dim]")
+        self.shell_ui.render_welcome()
 
     def _show_command_suggestions(self) -> None:
-        table = Table(show_header=True, header_style="bold cyan", box=None, pad_edge=False)
-        table.add_column("Command", style="green")
-        table.add_column("Description", style="white")
-        table.add_row("/help", "Show available commands")
-        table.add_row("/context", "Show token usage and context budget")
-        table.add_row("/dashboard", "Open API configuration dashboard")
-        table.add_row("/skill", "Manage skills")
-        table.add_row("/env", "Configure API and model settings")
-        table.add_row("/memory", "Show memory status and toggle auto-memory")
-        table.add_row("/exit", "Exit chat")
-        self.console.print(Panel(table, title="Slash Commands", border_style="cyan"))
+        self.shell_ui.show_command_suggestions()
 
     def _bottom_toolbar(self) -> str:
-        cfg = self.config_store.load()
-        model = cfg.model or os.getenv("XCODE_MODEL", "gpt-4o-mini")
-        has_key = bool(cfg.api_key or os.getenv("XCODE_API_KEY") or os.getenv("OPENAI_API_KEY"))
-        api = "ready" if has_key else "missing-key"
-        elapsed = int(time.monotonic() - self._session_start)
-        minutes, seconds = divmod(elapsed, 60)
-        session_str = f"{minutes}m{seconds}s" if minutes else f"{seconds}s"
-        tok_k = self._estimated_tokens // 1000 if self._estimated_tokens else 0
-        max_tok_k = max((cfg.max_tokens or 0) // 1000, 1)
-        return f" {model} | tokens≈{tok_k}k/{max_tok_k}k | tools:{self._tool_call_count} | session {session_str} | {api} "
+        return self.shell_ui.bottom_toolbar()
 
     def _print_user_bubble(self, text: str) -> None:
-        self.console.print(f"[dim]▸ {text}[/dim]")
+        self.shell_ui.print_user_bubble(text)
 
     def _print_assistant_bubble(self, text: str) -> None:
-        OutputRenderer.render(self.console, text, syntax_theme=self.config_store.load().syntax_theme)
+        self.shell_ui.print_assistant_bubble(text)
 
     def _handle_slash_command(self, command: str) -> None:
         parts = command.split()
@@ -483,93 +406,32 @@ class AgentRuntime:
         self.console.print("Usage: /memory | /memory auto on|off")
 
     def _handle_resume_command(self) -> None:
-        sessions = self.sessions.list_sessions()
-        if not sessions:
-            self.console.print("No recent sessions found for this project.")
-            return
+        result = self.resume_service.run()
+        if result is not None:
+            self._history[:] = result.history
+            self._session_id = result.session_id
+            self._runtime_status.update_session_id(result.session_id)
 
-        self.console.print("Recent sessions:")
-        for i, s in enumerate(sessions, 1):
-            ts = datetime.utcfromtimestamp(s.updated_at).strftime("%Y-%m-%d %H:%M")
-            preview = s.last_user_input[:60] if s.last_user_input else "(empty)"
-            cp_mark = " \\[checkpoint]" if s.has_checkpoint else ""
-            self.console.print(f"  {i}. {s.session_id[:8]}...  {ts}  {preview}{cp_mark}")
-
-        choice = self.prompt.prompt(
-            ANSI("\x1b[96mSelect session number (empty to cancel)\x1b[0m ▸ ")
-        ).strip()
-
-        if not choice:
-            self.console.print("Cancelled.")
-            return
-
-        try:
-            idx = int(choice) - 1
-            if idx < 0 or idx >= len(sessions):
-                self.console.print("Invalid selection.")
-                return
-        except ValueError:
-            self.console.print("Invalid selection.")
-            return
-
-        selected = sessions[idx]
-        resume_budget = int(self.context.max_tokens * 0.6)
-        builder = SessionResumeBuilder(self.context, resume_budget)
-        result = builder.build(selected.path)
-        if not result.history:
-            self.console.print("Failed to load session history.")
-            return
-
-        self._history[:] = result.history
-        self._session_id = selected.session_id
-        self._runtime_status.update_session_id(selected.session_id)
-        self.console.print(f"Resumed session {selected.session_id}")
-        self.console.print(f"Restored from checkpoint: {'yes' if result.restored_from_checkpoint else 'no'}")
-        self.console.print(f"Restored messages: {result.message_count}")
-        self.console.print(f"Estimated context: ~{result.estimated_tokens} tokens")
-        if selected.last_user_input:
-            self.console.print(f"Latest user input: {selected.last_user_input[:100]}")
-
-    @staticmethod
-    def _find_previous_summary(history: list[dict[str, Any]]) -> str:
-        for msg in reversed(history):
-            if msg.get("role") == "system":
-                content = str(msg.get("content", ""))
-                if "Conversation summary checkpoint:" in content:
-                    return content.split("Conversation summary checkpoint:\n", 1)[-1].strip()
-        return ""
+    def _find_previous_summary(self, history: list[dict[str, Any]]) -> str:
+        return self.compactor.find_previous_summary(history)
 
     def _handle_compact_command(self) -> None:
         if len(self._history) < 4:
             self.console.print("Nothing to compact.")
             return
 
-        before_messages = len(self._history)
-        before_tokens = self.context.estimate_tokens(self._history)
-        previous_summary = self._find_previous_summary(self._history)
-        result = self.context.compress(self._history, self.llm, previous_summary)
-
-        if not result.checkpoint_message:
+        outcome = self.compactor.compact_history(self._history)
+        if outcome is None:
             self.console.print("Nothing to compact.")
             return
 
-        after_messages = len(result.messages)
-        after_tokens = self.context.estimate_tokens(result.messages)
-        self._history[:] = result.messages
-        saved_tokens = max(before_tokens - after_tokens, 0)
+        self._history[:] = outcome.messages
+        saved_tokens = max(outcome.before_tokens - outcome.after_tokens, 0)
 
-        self.sessions.append_message(self._session_id, result.checkpoint_message)
-        self.sessions.append_event(self._session_id, {
-            "type": "compaction_checkpoint",
-            "summary": result.summary,
-            "summary_format": "xcode.v1",
-            "source_message_count": before_messages,
-            "source_token_estimate": before_tokens,
-            "remaining_message_count": after_messages,
-        })
+        self.compactor.write_checkpoint(self._session_id, outcome)
 
         self.console.print(
-            f"[dim]Context compacted: {before_messages} -> {after_messages} messages, "
+            f"[dim]Context compacted: {outcome.before_messages} -> {outcome.after_messages} messages, "
             f"saved ~{saved_tokens} tokens.[/dim]"
         )
 
@@ -670,161 +532,8 @@ class AgentRuntime:
         table.add_row("auto-memory", "on" if cfg.auto_memory else "off")
         self.console.print(Panel(table, title="Context", border_style="cyan"))
 
-    def _render_tool_call(self, tool_name: str, args: dict[str, Any]) -> None:
-        self.console.print(f"  [bold cyan]## tool.{tool_name}[/bold cyan]")
-        for key, value in args.items():
-            val_str = str(value)
-            if len(val_str) > 120:
-                val_str = val_str[:120] + "..."
-            self.console.print(f"    [dim]{key}:[/dim] {val_str}")
-
-    def _approval_scope_for_tool(self, tool_name: str) -> str | None:
-        if tool_name in {"edit_file", "write_file"}:
-            return "write"
-        if tool_name == "run_shell":
-            return "shell"
-        return tool_name
-
-    def _is_memory_write_tool_call(self, tool_name: str, args: dict[str, Any]) -> bool:
-        if tool_name not in {"write_file", "edit_file"}:
-            return False
-        path = args.get("path")
-        if not isinstance(path, str) or not path.strip():
-            return False
-        return self.memory.is_memory_write_target(path)
-
-    def _read_approval_key(self) -> str:
-        if os.name == "nt":
-            import msvcrt
-
-            ch = msvcrt.getwch()
-            if ch in {"\x00", "\xe0"}:
-                second = msvcrt.getwch()
-                if second == "H":
-                    return "up"
-                if second == "P":
-                    return "down"
-                return ""
-            if ch == "\r":
-                return "enter"
-            if ch == "\x03":
-                raise KeyboardInterrupt
-            return ch.lower()
-
-        import termios
-        import tty
-
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        try:
-            tty.setraw(fd)
-            ch = sys.stdin.read(1)
-            if ch == "\x1b":
-                rest = sys.stdin.read(2)
-                if rest == "[A":
-                    return "up"
-                if rest == "[B":
-                    return "down"
-                return "escape"
-            if ch in {"\r", "\n"}:
-                return "enter"
-            if ch == "\x03":
-                raise KeyboardInterrupt
-            return ch.lower()
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
-    def _render_approval_options(self, tool_name: str, scope: str, selected: int) -> None:
-        options = [
-            "Yes",
-            "No",
-            "Yes, for this conversation",
-        ]
-        self.console.print(f"  [bold]Apply {tool_name} for {scope}?[/bold] [dim](↑/↓, Enter)[/dim]")
-        for idx, label in enumerate(options):
-            prefix = ">" if idx == selected else " "
-            style = "bold cyan" if idx == selected else "dim"
-            self.console.print(f"  {prefix} {label}", style=style)
-
-    def _refresh_approval_options(self, tool_name: str, scope: str, selected: int) -> None:
-        sys.stdout.write("\x1b[4A")
-        for _ in range(4):
-            sys.stdout.write("\x1b[2K")
-            sys.stdout.write("\x1b[1B")
-        sys.stdout.write("\x1b[4A")
-        sys.stdout.flush()
-        self._render_approval_options(tool_name, scope, selected)
-
-    def _prompt_tool_approval(self, tool_name: str, scope: str | None) -> str:
-        if scope and self._session_auto_approve.get(scope):
-            return "yes"
-
-        approval_scope = scope or tool_name
-        if not sys.stdin.isatty():
-            try:
-                value = input(f"  Apply {tool_name} for {approval_scope}? [Y]es / [n]o / [a]ll: ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                return "no"
-            if not value or value in {"y", "yes"}:
-                return "yes"
-            if value in {"a", "all", "yes_all"}:
-                return "yes_all"
-            return "no"
-
-        selected = 0
-        try:
-            self._render_approval_options(tool_name, approval_scope, selected)
-            while True:
-                key = self._read_approval_key()
-                if key in {"up", "k"}:
-                    selected = (selected - 1) % 3
-                    self._refresh_approval_options(tool_name, approval_scope, selected)
-                elif key in {"down", "j"}:
-                    selected = (selected + 1) % 3
-                    self._refresh_approval_options(tool_name, approval_scope, selected)
-                elif key in {"enter", " "}:
-                    self.console.print()
-                    return ["yes", "no", "yes_all"][selected]
-                elif key in {"y"}:
-                    self.console.print()
-                    return "yes"
-                elif key in {"n", "escape"}:
-                    self.console.print()
-                    return "no"
-                elif key in {"a"}:
-                    self.console.print()
-                    return "yes_all"
-        except (EOFError, KeyboardInterrupt):
-            return "no"
-
     def _render_assistant_prefix(self) -> None:
-        self.console.print("[magenta]assistant[/magenta] ▸ ", end="")
-
-    def _summarize_tool_result(self, tool_name: str, args: dict[str, Any], result: str) -> str:
-        if result.startswith("Error:"):
-            return result
-
-        if tool_name == "read_file":
-            line_count = len([line for line in result.splitlines() if line.strip()])
-            return f"read {line_count} line(s)"
-        if tool_name == "grep":
-            if result.startswith("No matches found"):
-                return "no matches"
-            return f"found {len(result.splitlines())} match line(s)"
-        if tool_name == "glob":
-            if result.startswith("No files matched"):
-                return "no files matched"
-            return f"matched {len(result.splitlines())} file(s)"
-        if tool_name == "run_shell":
-            exit_line = next((line for line in reversed(result.splitlines()) if line.startswith("exit_code=")), "")
-            return exit_line or "command finished"
-        if tool_name == "edit_file":
-            return result
-        if tool_name == "write_file":
-            path = args.get("path", "")
-            action = "appended" if args.get("append") else "wrote"
-            return f"{action} {path}"
-        return f"done ({len(result)} chars)"
+        self.shell_ui.render_assistant_prefix()
 
     def _run_llm_loop(self, history: list[dict[str, Any]], system_prompt: str) -> str:
         max_tool_rounds = 10
@@ -836,28 +545,18 @@ class AgentRuntime:
 
         for _ in range(max_tool_rounds):
             if self.context.should_compress(history):
-                before_messages = len(history)
-                before_tokens = self.context.estimate_tokens(history)
-                previous_summary = self._find_previous_summary(history)
-                result = self.context.compress(history, self.llm, previous_summary)
-                after_messages = len(result.messages)
-                after_tokens = self.context.estimate_tokens(result.messages)
-                history[:] = result.messages
-                saved_tokens = max(before_tokens - after_tokens, 0)
-                self.console.print(
-                    f"[dim]Context compressed: {before_messages} -> {after_messages} messages, "
-                    f"saved ~{saved_tokens} tokens.[/dim]"
-                )
-                if self._session_id and result.checkpoint_message:
-                    self.sessions.append_message(self._session_id, result.checkpoint_message)
-                    self.sessions.append_event(self._session_id, {
-                        "type": "compaction_checkpoint",
-                        "summary": result.summary,
-                        "summary_format": "xcode.v1",
-                        "source_message_count": before_messages,
-                        "source_token_estimate": before_tokens,
-                        "remaining_message_count": after_messages,
-                    })
+                outcome = self.compactor.compact_history(history)
+                if outcome is not None:
+                    before_messages = outcome.before_messages
+                    after_messages = outcome.after_messages
+                    history[:] = outcome.messages
+                    saved_tokens = max(outcome.before_tokens - outcome.after_tokens, 0)
+                    self.console.print(
+                        f"[dim]Context compressed: {before_messages} -> {after_messages} messages, "
+                        f"saved ~{saved_tokens} tokens.[/dim]"
+                    )
+                    if self._session_id:
+                        self.compactor.write_checkpoint(self._session_id, outcome)
 
             content_buffer: list[str] = []
             reasoning_buffer: list[str] = []
@@ -965,106 +664,14 @@ class AgentRuntime:
                         self._print_assistant_bubble(final_text)
                 return final_text
 
-            executed_calls: list[tuple[Any, str]] = []
-            for tc in response.tool_calls:
-                self._render_tool_call(tc.name, tc.args)
-
-                level = self.permissions.check(tc.name)
-                if level == "deny":
-                    result = f"Permission denied for tool: {tc.name}"
-                    self.console.print(f"  [bold red]{result}[/bold red]")
-                    executed_calls.append((tc, result))
-                    continue
-
-                scope = self._approval_scope_for_tool(tc.name)
-                is_memory_write = self._is_memory_write_tool_call(tc.name, tc.args)
-
-                if tc.name in {"edit_file", "write_file"}:
-                    file_path = str(tc.args.get("path", ""))
-                    old_text = ""
-                    if file_path:
-                        try:
-                            with open(file_path, "r", encoding="utf-8") as f:
-                                old_text = f.read()
-                        except (FileNotFoundError, OSError):
-                            old_text = ""
-
-                    if tc.name == "write_file":
-                        new_text = str(tc.args.get("content", ""))
-                    else:
-                        old_string = str(tc.args.get("old_string", ""))
-                        new_string = str(tc.args.get("new_string", ""))
-                        replace_all = bool(tc.args.get("replace_all", False))
-                        count = -1 if replace_all else 1
-                        new_text = old_text.replace(old_string, new_string, count)
-
-                    if file_path:
-                        self.console.print("  [dim]Review: diff preview before approval[/dim]")
-                        OutputRenderer.render_diff(
-                            self.console,
-                            old_text,
-                            new_text,
-                            file_path,
-                            syntax_theme=self.config_store.load().syntax_theme,
-                            line_numbers=True,
-                        )
-
-                if is_memory_write and level != "deny":
-                    self.console.print("  [dim]approval: memory auto-allow[/dim]")
-                elif scope and self._session_auto_approve.get(scope):
-                    self.console.print("  [dim]approval: auto-yes (this conversation)[/dim]")
-                elif level == "ask":
-                    if tc.name == "run_shell":
-                        cmd = str(tc.args.get("command", ""))
-                        self.console.print("  [dim]Review: command preview before approval[/dim]")
-                        self.console.print(f"  [bold yellow]$ {cmd}[/bold yellow]")
-                    approval = self._prompt_tool_approval(tc.name, scope)
-                    if approval == "no":
-                        result = f"User denied tool: {tc.name}"
-                        self.console.print(f"  [dim]{result}[/dim]")
-                        executed_calls.append((tc, result))
-                        continue
-                    if approval == "yes_all" and scope:
-                        self._session_auto_approve[scope] = True
-
-                try:
-                    result = self.tools.execute(tc.name, tc.args)
-                except KeyboardInterrupt:
-                    self.console.print("  [dim]Interrupted.[/dim]")
-                    result = "Error: user interrupted the operation"
-
-                result_str = str(result)
-                self._tool_call_count += 1
-                if result_str.startswith("Error:"):
-                    self.console.print(f"  [bold red]{result_str}[/bold red]")
-                else:
-                    summary = self._summarize_tool_result(tc.name, tc.args, result_str)
-                    self.console.print(f"  [dim]→ {summary}[/dim]")
-
-                executed_calls.append((tc, result_str))
-
-            assistant_msg: dict[str, Any] = {
-                "role": "assistant",
-                "content": response.content or None,
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.name, "arguments": json.dumps(tc.args)},
-                    }
-                    for tc, _ in executed_calls
-                ],
-            }
-            if response.reasoning_content:
-                assistant_msg["reasoning_content"] = response.reasoning_content
-            history.append(assistant_msg)
-
-            for tc, result in executed_calls:
-                history.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+            tool_result = self.tool_executor.execute(response)
+            self._tool_call_count += tool_result.executed_count
+            history.append(tool_result.assistant_message)
+            history.extend(tool_result.tool_messages)
 
             if self._session_id:
-                self.sessions.append_message(self._session_id, assistant_msg)
-                for tc, result in executed_calls:
-                    self.sessions.append_message(self._session_id, {"role": "tool", "tool_call_id": tc.id, "content": result})
+                self.sessions.append_message(self._session_id, tool_result.assistant_message)
+                for tm in tool_result.tool_messages:
+                    self.sessions.append_message(self._session_id, tm)
 
         return "Reached maximum tool call rounds."
