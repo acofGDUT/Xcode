@@ -30,6 +30,9 @@ Phase 5 生态扩展当前冻结，不作为近期默认开发目标。
 | P1 | `/context` cost 估算 | 未实现 | 在 token 统计外展示近似费用 |
 | P1 | 工具调用 UI 折叠 | 未实现 | 连续工具调用默认合并为摘要，`Ctrl+O` 展开完整参数 |
 | P1 | 工具调用轮次不中断 | 待调查 | 避免 Xcode 因多轮 tool_calls 停在中间状态 |
+| P1 | memory 自管理权限 | 完成 | Xcode 管理 resolved memory 文件时不再频繁要求用户审核，普通文件仍保留审批 |
+| P1 | 流式输出去重 | 未实现 | 避免 streaming token 和 final render 在终端里重复显示同一段内容 |
+| P1 | AgentRuntime 重构 | 待设计 | 把 agent.py 拆成更清晰的 command / loop / resume / compaction 模块 |
 | P1 | 对话回退/分叉设计 | 未实现 | 提供非破坏性的 fork-based rollback |
 | P2 | 项目级配置合并 | 部分实现 | 让 `.xcode/settings.json` 覆盖更多 Config 字段 |
 | P2 | 渲染模式完善 | 部分实现 | 明确 streaming/buffer 模式的用户配置和验收 |
@@ -186,7 +189,39 @@ output_cost_per_1m: float | None = None
 - 已知模型显示 input/output/total 近似费用。
 - 文案明确是 estimate，避免被用户理解为账单。
 
-## 6. P0：原生 Windows E2E 验收
+## 6. P1：memory 自管理权限
+
+### 目标
+
+让 Xcode 在维护自己的 memory 文件时，不必每次都走和普通代码文件完全一样的用户审核流程。
+
+### 设计边界
+
+- 只针对 resolved memory 路径和明确标记的 memory 文件生效。
+- 不影响普通项目文件、代码文件、配置文件的审批。
+- 仍保留审计记录，避免“无声写入”。
+- 不能依赖模型自己判断路径是否属于 memory，必须由代码侧校验。
+
+### 当前实现
+
+| 文件 | 修改方向 |
+|------|----------|
+| `src/xcode_cli/core/memory.py` | `is_memory_write_target()` 判断 resolved memory 写入目标 |
+| `src/xcode_cli/core/agent.py` | 对 memory-scoped `write_file` / `edit_file` 跳过用户审批 |
+| `tests/test_memory.py` | 覆盖 memory path membership |
+| `tests/test_agent_memory_permissions.py` | 覆盖 memory 写入免审、普通文件仍审批、非法 memory-like path 不放行 |
+
+### 验收标准
+
+- 写 memory 文件时不再像普通代码文件那样频繁询问用户。
+- 非 memory 文件仍保持现有审批行为。
+- 路径拼错时不会误放行。
+
+### 后续补充
+
+- 建议补 explicit `deny` + memory path 回归测试，防止未来重排审批分支时误放行。
+
+## 7. P0：原生 Windows E2E 验收
 
 ### 目标
 
@@ -210,7 +245,37 @@ output_cost_per_1m: float | None = None
 - `docs/current/DEVNOTES.md`
 - 如涉及 Phase 4，可同步 `PHASE4_ACCEPTANCE.md`
 
-## 7. P1：工具调用 UI 折叠与展开
+## 8. P1：流式输出去重
+
+### 背景
+
+当前流式输出会先逐 token 打印，随后又做一次完整 final render。结果是同一段 assistant 内容在终端里出现两遍，尤其在 Markdown、代码块和表格场景更明显。
+
+### 目标
+
+让流式反馈和最终渲染不重复占屏，或者明确只保留其中一种表现。
+
+### 推荐方案
+
+- 对 `streaming_plus_final_render` 明确设计可替换区域，而不是普通逐行追加。
+- 如果短期无法稳定替换，默认切到 `buffer_then_render`。
+- 对代码块和表格场景做专项回归，避免“去重后又静默”。
+
+### 建议修改文件
+
+| 文件 | 修改方向 |
+|------|----------|
+| `src/xcode_cli/core/agent.py` | 重整 streaming / final render 的输出流程 |
+| `src/xcode_cli/ui/renderer.py` | 如有必要增加可替换渲染 helper |
+| `docs/current/DEVNOTES.md` | 记录重复渲染风险和模式取舍 |
+
+### 验收标准
+
+- 同一轮 assistant 输出不再以两种完整形式重复显示。
+- 流式输出仍保持即时反馈。
+- Markdown / code block / table 不出现半成品和重复成品同时占屏。
+
+## 9. P1：工具调用 UI 折叠与展开
 
 ### 背景
 
@@ -261,7 +326,7 @@ output_cost_per_1m: float | None = None
 - 非 TTY 环境下有稳定 fallback，不因快捷键能力缺失崩溃。
 - 原生 PowerShell/cmd.exe 下验证 `Ctrl+O` 不影响 prompt 输入和审批菜单。
 
-## 8. P1：工具调用轮次不中断
+## 10. P1：工具调用轮次不中断
 
 ### 背景
 
@@ -294,7 +359,40 @@ output_cost_per_1m: float | None = None
 - 工具异常时，主循环不崩溃，并能继续下一轮或给出最终说明。
 - 真实运行中连续 read/grep/read 后不会无提示停住。
 
-## 9. P2：项目级配置合并
+## 11. P1：AgentRuntime 重构
+
+### 目标
+
+把现在过于集中的 `src/xcode_cli/core/agent.py` 拆成更容易 review 和维护的模块。
+
+### 推荐拆分方向
+
+- slash command 解析和分发。
+- session / resume / compaction 编排。
+- tool call 执行与审批流程。
+- streaming / render 状态。
+- 主循环 orchestration。
+
+### 约束
+
+- 重构优先保持行为不变。
+- 先保留测试，再做结构搬迁。
+- 不要因为重构顺手改产品语义。
+
+### 建议修改文件
+
+| 文件 | 修改方向 |
+|------|----------|
+| `src/xcode_cli/core/agent.py` | 逐步抽离 orchestration 以外的职责 |
+| `src/xcode_cli/core/*` | 按职责新增 service/helper 模块 |
+| `tests/` | 补重构回归测试 |
+
+### 验收标准
+
+- `agent.py` 体积明显下降，职责更清晰。
+- `/resume`、`/compact`、审批、tool call、streaming 的回归测试继续通过。
+
+## 12. P2：项目级配置合并
 
 ### 目标
 
@@ -319,7 +417,7 @@ output_cost_per_1m: float | None = None
 - `api_key`
 - 用户级隐私偏好
 
-## 10. P2：渲染模式完善
+## 13. P2：渲染模式完善
 
 ### 当前状态
 
@@ -342,7 +440,7 @@ output_cost_per_1m: float | None = None
 
 当前代码只覆盖后两者，是否补第一种应根据实际体验决定。
 
-## 11. Phase 5：生态扩展候选
+## 14. Phase 5：生态扩展候选
 
 Phase 5 当前冻结。后续如果解冻，建议逐项设计和验收，不一次性铺开。
 
@@ -356,3 +454,25 @@ Phase 5 当前冻结。后续如果解冻，建议逐项设计和验收，不一
 | 5.4 | Git tools | 需强权限边界，避免误操作 |
 | 5.5 | Hooks | 需定义触发点、失败策略和用户可见性 |
 | 5.6 | Project config | 可先完成 P2 配置合并 |
+
+## 15. Phase 6：外部聊天入口候选
+
+Phase 6 只是远期方向记录，当前不进入设计和实现。
+
+可能方向：Xcode 后续可以向类似 OpenClaw 的外部聊天 Agent 形态发展，让 Xcode 不只运行在 CLI 内，也能接入外部 IM 用户进行对话，例如 QQ 用户入口。
+
+初步设想：
+
+- 外部消息适配层：把 QQ 等 IM 消息转换为 Xcode 内部 user message。
+- 会话映射：每个外部用户或群聊映射到独立 session，避免上下文串线。
+- 权限边界：外部入口默认不能直接执行高风险工具，尤其是 `write_file`、`edit_file`、`run_shell`。
+- 人类确认：危险操作仍需要本机 owner 确认，不能只由远程聊天用户批准。
+- 审计日志：记录外部用户、消息、工具调用、审批结果和 session id。
+- 部署边界：先明确是本地 bot、网关服务，还是插件化 connector。
+
+开放问题：
+
+- QQ 接入采用哪个协议或适配器，是否需要独立进程。
+- 外部用户身份如何认证和授权。
+- 群聊场景下如何避免 prompt 注入和多人上下文污染。
+- 是否允许外部用户触发 coding 任务，还是只允许咨询和只读探索。

@@ -246,3 +246,44 @@ class TestTruncation:
         mm = _make_memory_manager(tmp_path, monkeypatch)
         assert mm.is_auto_memory_enabled(Config(auto_memory=True)) is True
         assert mm.is_auto_memory_enabled(Config(auto_memory=False)) is False
+
+
+# ---------------------------------------------------------------------------
+# memory write target detection
+# ---------------------------------------------------------------------------
+
+
+class TestMemoryWriteTargets:
+    def test_project_xcode_is_memory_write_target(self, tmp_path: Path, monkeypatch) -> None:
+        mm = _make_memory_manager(tmp_path, monkeypatch, project_name="demo")
+        assert mm.is_memory_write_target(str(mm.project_memory_path())) is True
+
+    def test_user_xcode_is_memory_write_target(self, tmp_path: Path, monkeypatch) -> None:
+        mm = _make_memory_manager(tmp_path, monkeypatch, project_name="demo")
+        assert mm.is_memory_write_target(str(mm.user_memory_path())) is True
+
+    def test_auto_memory_file_is_memory_write_target(self, tmp_path: Path, monkeypatch) -> None:
+        mm = _make_memory_manager(tmp_path, monkeypatch, project_name="demo")
+        target = mm.memory_dir_path() / "project_tech_stack.md"
+        assert mm.is_memory_write_target(str(target)) is True
+
+    def test_memory_index_is_memory_write_target(self, tmp_path: Path, monkeypatch) -> None:
+        mm = _make_memory_manager(tmp_path, monkeypatch, project_name="demo")
+        assert mm.is_memory_write_target(str(mm.memory_index_path())) is True
+
+    def test_non_memory_project_file_is_not_memory_write_target(self, tmp_path: Path, monkeypatch) -> None:
+        mm = _make_memory_manager(tmp_path, monkeypatch, project_name="demo")
+        target = mm.cwd / "src" / "app.py"
+        assert mm.is_memory_write_target(str(target)) is False
+
+    def test_sibling_of_memory_dir_is_not_memory_write_target(self, tmp_path: Path, monkeypatch) -> None:
+        mm = _make_memory_manager(tmp_path, monkeypatch, project_name="demo")
+        target = mm.memory_dir_path().parent / "memory_notes.md"
+        assert mm.is_memory_write_target(str(target)) is False
+
+    def test_invalid_windows_memory_like_path_is_not_memory_write_target(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        mm = _make_memory_manager(tmp_path, monkeypatch, project_name="demo")
+        bad_path = r"C:\Users\%USERNAME%\.xcode\projects\D:\Xcode\memory\project_tech_stack.md"
+        assert mm.is_memory_write_target(bad_path) is False

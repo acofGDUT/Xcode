@@ -128,7 +128,67 @@ C:\Users\%USERNAME%\.xcode\projects\D:\Xcode\memory\project_tech_stack.md
 - checkpoint summary 长度策略集中在 `ContextManager`，`max_summary_chars=None` 或 `0` 时关闭代码层截断。
 - 后续如重构 `agent.py`，应把 compaction/session resume glue 从主循环中继续拆出去。
 
-## 8. 不引入 asyncio
+## 8. memory 自管理权限缺口
+
+**状态**：Resolved
+**关联**：memory 模型 / 权限系统
+
+现象：Xcode 通过文件工具维护自己的 memory 文件时，仍会走普通 `write_file` / `edit_file` 审批流程。实际体验上，Agent 管理自身记忆属于预期行为，不应该每次都要求用户审核。
+
+当前收口：
+
+- `MemoryManager.is_memory_write_target()` 负责判断 resolved memory 写入目标。
+- `AgentRuntime` 仅对 memory-scoped `write_file` / `edit_file` 跳过用户审批。
+- 显式 `deny` 仍优先生效。
+- 普通项目文件仍走原有审批流程。
+
+边界必须清楚：
+
+- 免审范围只能覆盖明确解析后的 memory 文件或 memory 目录，不能扩展到任意项目文件。
+- 路径必须使用 `MemoryManager` / prompt 注入的 resolved paths 做校验，避免模型拼错 Windows 路径后绕过审批。
+- 普通代码、配置、测试文件仍应保持现有审批规则。
+- 最好仍保留可审计日志，例如工具结果里显示写入了哪个 memory 文件。
+
+Review 注意：不要简单地对所有 `write_file` 放行；这里要做的是”memory path scoped approval bypass”，不是降低整体写权限。
+
+Review 结果：已跑 `pytest tests/test_agent_memory_permissions.py tests/test_memory.py tests/test_agent_memory_bug.py -q`、全量 `pytest -q`、`py_compile` 和 `git diff --check`。建议后续补 explicit `deny` + memory path 的回归测试，让“显式 deny 仍优先生效”不只依赖当前代码顺序。
+
+## 9. 流式输出会和最终渲染重复显示
+
+**状态**：Open
+**关联**：流式输出 / Rich final render / ROADMAP P1 渲染模式完善
+
+现象：在流式输出模式下，Xcode 会先把 token 逐段打印到终端；随后如果 final answer 触发 Rich Markdown 渲染，终端上方仍保留已经流式打印过的原始结构，导致用户看到两遍 assistant 输出。
+
+根因方向：普通终端不能可靠“回收”已经打印的多行流式内容；当前 `streaming_plus_final_render` 同时追求即时 token 和最终美观渲染，容易在 Markdown、表格、代码块场景出现重复。
+
+后续方向：
+
+- 明确三种模式的行为边界：纯流式、buffer 后渲染、可替换区域流式 + final render。
+- 短期可考虑默认使用 `buffer_then_render`，或在 streaming 模式下不再对同一段内容做完整 final render。
+- 如果继续保留 `streaming_plus_final_render`，需要用 Rich Live/可替换区域承载流式内容，而不是普通向下打印。
+- 文档和配置说明必须明确：即时反馈与最终排版之间存在取舍。
+
+Review 注意：修复时要重点覆盖代码块、Markdown table、长列表和中断场景，避免“重复消失了，但流式又静默了”的回归。
+
+## 10. AgentRuntime 需要模块化重构
+
+**状态**：Open
+**关联**：ROADMAP P1 AgentRuntime 重构
+
+现象：`src/xcode_cli/core/agent.py` 已经承载 REPL、slash command、审批 UI、LLM loop、工具执行、session resume、context compaction、render state 等多类职责。session resume 接入后，主循环更难 review。
+
+后续方向：在功能稳定后做结构性重构，不改变行为，优先拆出：
+
+- slash command handlers。
+- tool call execution / approval flow。
+- conversation compaction service。
+- session resume orchestration。
+- streaming/render mode state。
+
+Review 注意：重构必须先有测试保护，尤其是多轮 tool_calls、审批拒绝、`/compact`、`/resume`、streaming render 这些容易被拆坏的路径。
+
+## 11. 不引入 asyncio
 
 **状态**：Resolved
 **关联**：当前同步架构约束
@@ -141,7 +201,7 @@ C:\Users\%USERNAME%\.xcode\projects\D:\Xcode\memory\project_tech_stack.md
 - 引入 asyncio 会传染 `complete()`、`_run_llm_loop()`、`run_chat()` 整条调用链。
 - 当前规模下，同步模型更容易 review 和调试。
 
-## 9. 子 Agent 不递归派发
+## 12. 子 Agent 不递归派发
 
 **状态**：Resolved
 **关联**：SubAgentExecutor 工具白名单
@@ -150,7 +210,7 @@ C:\Users\%USERNAME%\.xcode\projects\D:\Xcode\memory\project_tech_stack.md
 
 原因：递归派发会让成本、延迟和状态变得不可控。当前子 Agent 更适合做探索、规划和局部分析。
 
-## 10. 项目级配置仍不完整
+## 13. 项目级配置仍不完整
 
 **状态**：Open
 **关联**：ROADMAP P2 项目级配置合并
@@ -159,7 +219,7 @@ C:\Users\%USERNAME%\.xcode\projects\D:\Xcode\memory\project_tech_stack.md
 
 影响：不要假设 `.xcode/settings.json` 已经能覆盖 model、base_url、max_tokens、syntax_theme 等配置。
 
-## 11. 工具调用 UI 仍会刷屏
+## 14. 工具调用 UI 仍会刷屏
 
 **状态**：Open
 **关联**：ROADMAP P1 工具调用 UI 折叠与展开
@@ -173,7 +233,7 @@ Review 注意：
 - 折叠只应用于工具调用详情，不应隐藏 diff preview、审批菜单和危险操作提示。
 - `Ctrl+O` 需要在原生 Windows 控制台验收，确认不干扰 prompt_toolkit 输入和审批菜单。
 
-## 12. 工具调用轮次可能中断
+## 15. 工具调用轮次可能中断
 
 **状态**：Open
 **关联**：ROADMAP P1 工具调用轮次不中断
@@ -189,7 +249,7 @@ Review 注意：
 
 建议增加 fake LLM 的多轮 tool call 测试，至少覆盖“第一轮工具 -> 第二轮工具 -> 最终文本”的完整链路。
 
-## 13. `/compact` 需要进度反馈
+## 16. `/compact` 需要进度反馈
 
 **状态**：Open
 **关联**：session resume 体验优化
@@ -204,7 +264,7 @@ Review 注意：
 - 进度 UI 不能吞掉异常或导致 checkpoint 半写入。
 - 原生 PowerShell/cmd.exe 需要手工验收。
 
-## 14. `/resume` 选择体验需要方向键菜单
+## 17. `/resume` 选择体验需要方向键菜单
 
 **状态**：Open
 **关联**：session resume 体验优化
@@ -218,7 +278,7 @@ Review 注意：
 - 保留非 TTY fallback，例如数字输入或取消。
 - 选择菜单不应破坏当前 runtime status，也不应在取消时污染 `_history`。
 
-## 15. 验收证据优先
+## 18. 验收证据优先
 
 **状态**：Open
 **关联**：所有开发和 review 流程
@@ -235,7 +295,7 @@ python -c "from xcode_cli.core.agent import AgentRuntime; print('ok')"
 
 涉及 prompt_toolkit、审批菜单、方向键交互时，必须补原生 cmd.exe/PowerShell 手工验收记录。
 
-## 16. Windows subprocess 解码问题
+## 19. Windows subprocess 解码问题
 
 **状态**：Resolved
 **关联**：`run_shell` 工具 / 中文 Windows 控制台

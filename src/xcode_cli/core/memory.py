@@ -95,6 +95,26 @@ class MemoryManager:
 
         path.write_text(cleaned + "\n", encoding="utf-8")
 
+    def is_memory_write_target(self, path: str | Path) -> bool:
+        try:
+            target = Path(path).expanduser().resolve(strict=False)
+        except (OSError, RuntimeError, ValueError):
+            return False
+
+        exact_targets = {
+            self.user_memory.resolve(strict=False),
+            self.project_memory.resolve(strict=False),
+            self.memory_index.resolve(strict=False),
+        }
+        if target in exact_targets:
+            return True
+
+        memory_root = self.memory_dir.resolve(strict=False)
+        try:
+            return target.is_relative_to(memory_root) and target.suffix.lower() == ".md"
+        except ValueError:
+            return False
+
     def _truncate(self, text: str, max_chars: int) -> str:
         if len(text) <= max_chars:
             return text

@@ -16,6 +16,7 @@
 | Phase 4.5 Batch 2 | memory 模型验证 + Windows 路径回归 | 完成并通过 review | specs task brief |
 | Session Resume Step 1 | session 持久化基础 | 完成并通过 review | `2026-05-25-session-resume-task-brief.md` |
 | Session Resume Step 2 | checkpoint 压缩与 `/resume` | 完成并通过基础验收 | `2026-05-25-session-resume-task-brief.md` |
+| Memory 自管理权限 | memory-scoped 写入免审 | 完成并通过 review | `2026-05-26-memory-self-management-permissions.md` |
 | Phase 5 | 生态扩展 | 冻结 | 未开始 |
 
 当前重点不是进入 Phase 5，而是补齐费用估算、原生 Windows 验收和下一批交互体验优化。
@@ -150,7 +151,20 @@ Step 2 完成内容：
 
 Review 状态：Step 1 已通过 review；Step 2 已修复复审问题，并完成基础验收。原生 Windows 端到端交互仍需单独验收。
 
-## 10. 当前阻塞和遗留
+## 10. Memory 自管理权限：2026-05-27
+
+背景：Xcode 通过文件工具维护自己的 memory 文件时，仍会走普通 `write_file` / `edit_file` 审批流程。用户期望 Agent 管理自身记忆时不必反复手动审核，但不能放宽普通文件写权限。
+
+完成内容：
+
+- `MemoryManager.is_memory_write_target()` 负责判断 resolved memory 写入目标。
+- `AgentRuntime` 在 `write_file` / `edit_file` 命中 memory-scoped 路径时跳过用户审批。
+- 显式 `deny` 仍优先生效，普通项目文件仍走原有审批流程。
+- 增加 memory path detection 测试和 AgentRuntime 审批路径测试。
+
+Review 结论：通过。建议后续补一个 explicit `deny` + memory path 的回归测试，防止未来重排审批分支时误放行。
+
+## 11. 当前阻塞和遗留
 
 | 项目 | 状态 | 说明 |
 |------|------|------|
@@ -158,13 +172,17 @@ Review 状态：Step 1 已通过 review；Step 2 已修复复审问题，并完�
 | `/context` cost | 未实现 | 当前只有 token 估算，没有价格估算 |
 | 工具调用 UI 折叠 | 未实现 | 当前工具调用详情持续向下打印，缺少 Claude Code 式摘要和 `Ctrl+O` 展开 |
 | 工具调用轮次不中断 | 待调查 | 实际使用中可能因为多轮 tool_calls 停住，需要检查 `_run_llm_loop()` |
+| memory 自管理权限 | 完成 | memory-scoped 写入已免用户审核，普通文件仍保持审批 |
+| 流式输出重复显示 | 未实现 | streaming token 输出后 final render 又渲染一遍，终端会看到重复内容 |
+| `agent.py` 重构 | 待设计 | 主循环承载 command、tool、resume、compaction、render 多类职责，需要拆分 |
+| memory deny 回归测试 | 待补充 | 建议补 explicit `deny` + memory path 场景，防止未来误放行 |
 | `/compact` 进度反馈 | 待设计 | 压缩调用 LLM 时应显示进度或动态状态，避免用户干等 |
 | `/resume` 选择体验 | 待设计 | 期望用方向键上下选择 session，Enter 确认，而不是输入数字 |
 | 原生 Windows E2E | 未完成 | 需要在 cmd.exe/PowerShell 验证完整交互 |
 | Phase 5 | 冻结 | 不作为近期默认开发目标 |
 
-## 11. 下一步 3 项
+## 12. 下一步 3 项
 
-1. 设计 `/compact` 压缩进度反馈和 `/resume` 方向键选择体验。
+1. 设计并修复体验阻塞：流式输出去重、工具调用 UI 折叠、`/compact` 进度反馈。
 2. 调查并修复工具调用轮次中断问题，补 fake LLM 多轮 tool call 测试。
-3. 补 `/context` cost 估算，并在原生 cmd.exe/PowerShell 做完整交互验收。
+3. 在 session resume 稳定后启动 `agent.py` 模块化重构，并补 memory deny 回归测试和原生 cmd.exe/PowerShell 交互验收。

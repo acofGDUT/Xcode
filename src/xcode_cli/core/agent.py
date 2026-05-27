@@ -685,6 +685,14 @@ class AgentRuntime:
             return "shell"
         return tool_name
 
+    def _is_memory_write_tool_call(self, tool_name: str, args: dict[str, Any]) -> bool:
+        if tool_name not in {"write_file", "edit_file"}:
+            return False
+        path = args.get("path")
+        if not isinstance(path, str) or not path.strip():
+            return False
+        return self.memory.is_memory_write_target(path)
+
     def _read_approval_key(self) -> str:
         if os.name == "nt":
             import msvcrt
@@ -969,6 +977,7 @@ class AgentRuntime:
                     continue
 
                 scope = self._approval_scope_for_tool(tc.name)
+                is_memory_write = self._is_memory_write_tool_call(tc.name, tc.args)
 
                 if tc.name in {"edit_file", "write_file"}:
                     file_path = str(tc.args.get("path", ""))
@@ -1000,7 +1009,9 @@ class AgentRuntime:
                             line_numbers=True,
                         )
 
-                if scope and self._session_auto_approve.get(scope):
+                if is_memory_write and level != "deny":
+                    self.console.print("  [dim]approval: memory auto-allow[/dim]")
+                elif scope and self._session_auto_approve.get(scope):
                     self.console.print("  [dim]approval: auto-yes (this conversation)[/dim]")
                 elif level == "ask":
                     if tc.name == "run_shell":
