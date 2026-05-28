@@ -2,7 +2,7 @@
 
 > 本文档记录项目如何一步步走到现在。当前实现细节见 `ARCHITECTURE.md`，未来计划见 `ROADMAP.md`，已知问题和设计取舍见 `DEVNOTES.md`。
 
-最后更新：2026-05-26
+最后更新：2026-05-27
 
 ## 1. 当前状态总览
 
@@ -18,9 +18,10 @@
 | Session Resume Step 2 | checkpoint 压缩与 `/resume` | 完成并通过基础验收 | `2026-05-25-session-resume-task-brief.md` |
 | Memory 自管理权限 | memory-scoped 写入免审 | 完成并通过 review | `2026-05-26-memory-self-management-permissions.md` |
 | AgentRuntime 模块化重构第一轮 | commands/conversation/tooling/ui 服务抽离 | 完成并通过 review | `2026-05-27-agent-runtime-refactor.md` |
+| 输出与工具轮次稳定化 | streaming 去重、tool loop 收口、工具摘要折叠 | 完成并通过重点回归验收 | `2026-05-27-output-tool-loop-stability.md` |
 | Phase 5 | 生态扩展 | 冻结 | 未开始 |
 
-当前重点不是进入 Phase 5，而是补齐费用估算、原生 Windows 验收、streaming 去重和下一批交互体验优化。
+当前重点不是进入 Phase 5，而是补齐费用估算、原生 Windows 验收，以及 `/compact` / `/resume` 的下一批交互体验优化。
 
 ## 2. Phase 1：协议与工具升级
 
@@ -187,8 +188,8 @@ Review 结论：第一轮通过。`pytest -q` 为 `184 passed`，`py_compile` �
 保留后续项：
 
 - `/env`、`/memory`、`/context`、`/plan` 等具体 command handlers 仍在 `agent.py`，后续可继续拆到 `core/commands/`。
-- `_run_llm_loop()` 内的 streaming/render 状态仍未抽到 `ui/streaming.py`，后续应和“流式输出重复显示”一起设计。
-- 工具调用 UI 折叠和 `Ctrl+O` 展开尚未实现。
+- `_run_llm_loop()` 的 streaming/render orchestration 仍在 `agent.py`，但状态判断已经收口到 `core/ui/streaming.py`；后续可以继续细化边界。
+- 工具调用 UI 折叠已实现默认摘要；`Ctrl+O` 展开尚未实现。
 
 ## 12. 当前阻塞和遗留
 
@@ -196,11 +197,11 @@ Review 结论：第一轮通过。`pytest -q` 为 `184 passed`，`py_compile` �
 |------|------|------|
 | CLI `--resume` / `--continue` | 延后 | 当前只做交互内 `/resume`，CLI 恢复入口后续如有明确需求再设计 |
 | `/context` cost | 未实现 | 当前只有 token 估算，没有价格估算 |
-| 工具调用 UI 折叠 | 未实现 | 当前工具调用详情持续向下打印，缺少 Claude Code 式摘要和 `Ctrl+O` 展开 |
-| 工具调用轮次不中断 | 部分收口 | 已补 fake LLM 多轮 tool call 回归测试；真实终端仍需结合 streaming 和工具 UI 继续验收 |
+| 工具调用 UI 折叠 | 基础完成 | 默认已折叠为工具摘要；`Ctrl+O` 展开和原生 Windows 热键验收仍未做 |
+| 工具调用轮次不中断 | 完成并待真实终端补充验收 | 已改为 `while True` 多轮 tool loop，并补超过 10 轮、拒绝后继续、空响应 fallback 回归测试 |
 | memory 自管理权限 | 完成 | memory-scoped 写入已免用户审核，普通文件仍保持审批 |
-| 流式输出重复显示 | 未实现 | streaming token 输出后 final render 又渲染一遍，终端会看到重复内容 |
-| `agent.py` 重构 | 第一轮完成 | 已抽出 slash completer、shell UI、resume/compaction、approval、tool execution；command handlers 和 streaming 状态仍待继续拆 |
+| 流式输出重复显示 | 基础收口完成 | 结构化内容已避免 raw + Rich 双重完整输出；可替换区域式 streaming 仍未实现 |
+| `agent.py` 重构 | 第一轮完成，第二轮待继续 | 已抽出 slash completer、shell UI、resume/compaction、approval、tool execution、tool display、streaming 状态；command handlers 仍待继续拆 |
 | memory deny 回归测试 | 完成 | 已补 explicit `deny` + memory path 场景，防止未来误放行 |
 | `/compact` 进度反馈 | 待设计 | 压缩调用 LLM 时应显示进度或动态状态，避免用户干等 |
 | `/resume` 选择体验 | 待设计 | 期望用方向键上下选择 session，Enter 确认，而不是输入数字 |
@@ -209,6 +210,6 @@ Review 结论：第一轮通过。`pytest -q` 为 `184 passed`，`py_compile` �
 
 ## 13. 下一步 3 项
 
-1. 设计并修复体验阻塞：流式输出去重、工具调用 UI 折叠、`/compact` 进度反馈。
-2. 做原生 cmd.exe/PowerShell 交互验收，重点覆盖审批菜单、diff preview、`/resume`、`/compact` 和多轮 tool call。
-3. 继续第二轮结构收口：拆 command handlers，并在 streaming 去重方案明确后抽 `ui/streaming.py`。
+1. 做原生 cmd.exe/PowerShell 交互验收，重点覆盖审批菜单、diff preview、工具摘要折叠、多轮 tool call、`/resume`、`/compact`。
+2. 设计并实现 `/compact` 进度反馈，以及 `/resume` 的方向键选择体验。
+3. 继续第二轮结构收口：拆 `/env`、`/memory`、`/context`、`/plan` 等 command handlers。

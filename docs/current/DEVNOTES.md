@@ -13,7 +13,7 @@
 
 ## 1. prompt_toolkit 控制台限制
 
-**状态**：Open
+**状态**：Mitigated
 **关联**：原生 Windows E2E 验收
 
 现象：在 Git Bash、mingw、cygwin 等非原生 Windows 控制台中，`PromptSession()` 可能抛出 `NoConsoleScreenBufferError`。
@@ -162,11 +162,16 @@ Review 结果：已跑 `pytest tests/test_agent_memory_permissions.py tests/test
 
 根因方向：普通终端不能可靠“回收”已经打印的多行流式内容；当前 `streaming_plus_final_render` 同时追求即时 token 和最终美观渲染，容易在 Markdown、表格、代码块场景出现重复。
 
-后续方向：
+当前收口：
+
+- `StreamingTurnRenderer` 已独立承载 token buffer、结构化内容检测和 final render 触发。
+- `streaming_plus_final_render` 在检测到代码块、表格、标题后会停止继续 raw streaming，只保留 buffer，并最终渲染一次。
+- `buffer_then_render` 模式下已补回归，确保最终回答一定会真正渲染到终端。
+
+剩余方向：
 
 - 明确三种模式的行为边界：纯流式、buffer 后渲染、可替换区域流式 + final render。
-- 短期可考虑默认使用 `buffer_then_render`，或在 streaming 模式下不再对同一段内容做完整 final render。
-- 如果继续保留 `streaming_plus_final_render`，需要用 Rich Live/可替换区域承载流式内容，而不是普通向下打印。
+- 如果继续保留 `streaming_plus_final_render`，长期更稳的方案仍是用 Rich Live/可替换区域承载流式内容，而不是普通向下打印。
 - 文档和配置说明必须明确：即时反馈与最终排版之间存在取舍。
 
 Review 注意：修复时要重点覆盖代码块、Markdown table、长列表和中断场景，避免“重复消失了，但流式又静默了”的回归。
@@ -192,8 +197,8 @@ Review 结论：第一轮通过，`pytest -q` 为 `184 passed`。已补多轮 to
 剩余边界：
 
 - `/env`、`/memory`、`/context`、`/plan` 等 command handlers 仍在 `agent.py`，后续如果继续收缩可以迁移到 `core/commands/`。
-- streaming/render 状态仍在 `_run_llm_loop()`，不要为了“完成拆分”简单搬代码；应和流式输出重复显示问题一起设计和验收。
-- 工具调用 UI 折叠、`Ctrl+O` 展开还没有实现，后续如果改 tool display state，需要保护 diff preview 和审批菜单可见性。
+- streaming/render 的状态判断已经有 `core/ui/streaming.py` 承载，但 Thinking Live 和最终 orchestration 仍在 `_run_llm_loop()`；后续第二轮重构不要为了“继续拆文件”而打散现有稳定边界。
+- 工具调用 UI 折叠已实现默认摘要；`Ctrl+O` 展开还没有实现，后续如果继续改 tool display state，需要保护 diff preview 和审批菜单可见性。
 
 ## 11. 不引入 asyncio
 
@@ -219,7 +224,7 @@ Review 结论：第一轮通过，`pytest -q` 为 `184 passed`。已补多轮 to
 
 ## 13. 项目级配置仍不完整
 
-**状态**：Open
+**状态**：Mitigated
 **关联**：ROADMAP P2 项目级配置合并
 
 当前权限系统能读取项目 `.xcode/settings.json` 的 permissions，但 `ConfigStore.load()` 还没有通用项目级 merge。
@@ -231,9 +236,15 @@ Review 结论：第一轮通过，`pytest -q` 为 `184 passed`。已补多轮 to
 **状态**：Open
 **关联**：ROADMAP P1 工具调用 UI 折叠与展开
 
-当前 `_render_tool_call()` 会把每个工具调用的完整参数逐条打印。连续 tool call 场景下，终端会持续向下滚动，容易把 assistant 正文、diff preview 和审批上下文推离视野。
+旧问题是工具调用完整参数会持续刷屏。当前已经默认折叠成一行摘要，但展开热键和原生 TTY 体验仍未补齐。
 
-后续方向：默认把连续工具调用合并成一行摘要，例如 `3 tools: read_file, grep, glob`；按 `Ctrl+O` 切换展开，查看每个工具的完整参数。
+当前收口：
+
+- 默认把连续工具调用合并成一行摘要，例如 `tools: 3 calls: read_file, grep, glob`。
+- `write_file`、`edit_file`、`run_shell` 会在摘要中保留危险标记。
+- diff preview、审批菜单、命令预览和工具结果摘要不受折叠影响。
+
+后续方向：按 `Ctrl+O` 切换展开，查看每个工具的完整参数。
 
 Review 注意：
 
@@ -242,19 +253,21 @@ Review 注意：
 
 ## 15. 工具调用轮次可能中断
 
-**状态**：Open
+**状态**：Mitigated
 **关联**：ROADMAP P1 工具调用轮次不中断
 
-实际使用中发现 Xcode 可能因为工具调用轮次停下来。后续排查应聚焦 `_run_llm_loop()` 的多轮 tool_calls 状态推进，而不是只看单个工具是否执行成功。
+这类问题的核心是 `_run_llm_loop()` 的多轮 tool_calls 状态推进，而不是单个工具是否执行成功。当前核心逻辑已经做过一轮收口。
 
-重点风险：
+当前收口：
 
-- assistant `tool_calls` 和 tool result 的 `tool_call_id` 对不上。
-- 工具拒绝、权限 denied、工具异常没有作为 tool result 继续喂回模型。
-- streaming、context compression、KeyboardInterrupt 或空响应边界提前结束循环。
-- UI 没有给出 round 状态，用户难以区分“正在继续下一轮”和“已经停住”。
+- `_run_llm_loop()` 已改为 `while True`，不再有固定 10 轮上限。
+- 已补多轮 tool call、用户拒绝后继续、空响应 fallback、`buffer_then_render` 最终渲染等回归测试。
+- 当前重点回归已覆盖 `40 passed`。
 
-建议增加 fake LLM 的多轮 tool call 测试，至少覆盖“第一轮工具 -> 第二轮工具 -> 最终文本”的完整链路。
+剩余风险：
+
+- 真实终端体验仍需结合 streaming、工具摘要显示、`/resume`、`/compact` 做原生 Windows E2E 验收。
+- UI 仍没有显式 round 状态提示，用户在超长链路里不一定容易判断“还在继续推理”还是“真的停住”。
 
 ## 16. `/compact` 需要进度反馈
 

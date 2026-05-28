@@ -22,8 +22,10 @@ from xcode_cli.core.config import ConfigStore
 from xcode_cli.core.conversation.compaction import ConversationCompactor
 from xcode_cli.core.conversation.resume import ResumeCommandService
 from xcode_cli.core.tooling.approval import ToolApprovalController
+from xcode_cli.core.tooling.display import ToolCallDisplay, ToolDisplayState
 from xcode_cli.core.tooling.execution import ToolCallExecutor
 from xcode_cli.core.ui.shell import ShellUI
+from xcode_cli.core.ui.streaming import StreamingTurnRenderer
 from xcode_cli.core.context import ContextManager
 from xcode_cli.core.dashboard import Dashboard
 from xcode_cli.core.llm import LLMClient
@@ -82,6 +84,8 @@ class AgentRuntime:
             self.tools.register(task_tool)
         for extra_tool in self._create_plan_memory_tools():
             self.tools.register(extra_tool)
+        self.tool_display_state = ToolDisplayState(expanded=False)
+        self.tool_display = ToolCallDisplay(self.tool_display_state)
         self.tool_executor = ToolCallExecutor(
             self.console,
             self.tools,
@@ -90,6 +94,7 @@ class AgentRuntime:
             self.memory,
             self.config_store,
             self._session_auto_approve,
+            tool_display=self.tool_display,
         )
 
     def run_chat(self) -> None:
@@ -536,14 +541,17 @@ class AgentRuntime:
         self.shell_ui.render_assistant_prefix()
 
     def _run_llm_loop(self, history: list[dict[str, Any]], system_prompt: str) -> str:
-        max_tool_rounds = 10
         cfg = self.config_store.load()
         render_mode = cfg.response_render_mode
-        stream_text = render_mode == "streaming_plus_final_render"
         assistant_turn_started = False
 
+        renderer = StreamingTurnRenderer(
+            self.console,
+            render_mode=render_mode,
+            render_markdown=lambda text: self._print_assistant_bubble(text),
+        )
 
-        for _ in range(max_tool_rounds):
+        while True:
             if self.context.should_compress(history):
                 outcome = self.compactor.compact_history(history)
                 if outcome is not None:
@@ -564,7 +572,6 @@ class AgentRuntime:
             first_text_token_elapsed_ms: float | None = None
             assistant_prefix_printed = False
 
-            stream_state = {"fence_ticks": 0}
             thinking_stop = threading.Event()
             thinking_thread: threading.Thread | None = None
             thinking_live = Live(
@@ -598,24 +605,16 @@ class AgentRuntime:
                     first_text_token_elapsed_ms = elapsed * 1000
                     stop_thinking()
                 content_buffer.append(token)
-                if not stream_text:
-                    return
                 if not assistant_prefix_printed:
                     if not assistant_turn_started:
                         self._render_assistant_prefix()
                         assistant_turn_started = True
                     assistant_prefix_printed = True
-                for ch in token:
-                    if ch == "`":
-                        stream_state["fence_ticks"] += 1
-                    else:
-                        stream_state["fence_ticks"] = 0
-                    if stream_state["fence_ticks"] >= 3:
-                        stream_state["fence_ticks"] = 0
-                    self.console.print(ch, end="", markup=False)
+                renderer.on_text_token(token)
 
             def on_reasoning_token(token: str) -> None:
                 reasoning_buffer.append(token)
+                renderer.on_reasoning_token(token)
 
             thinking_live.start()
             thinking_thread = threading.Thread(target=thinking_loop, daemon=True)
@@ -640,28 +639,21 @@ class AgentRuntime:
             total_ms = (time.monotonic() - start_time) * 1000
 
             if content_buffer or reasoning_buffer:
-                if stream_text:
-                    self.console.print()
                 first_text_ms = int(first_text_token_elapsed_ms or total_ms)
                 response_ms = max(int(total_ms - first_text_ms), 0)
                 self.console.print(f"[dim](思考 {first_text_ms}ms / 回复 {response_ms}ms)[/dim]")
 
             if not response.tool_calls:
                 final_text = response.content or ""
-                if render_mode == "buffer_then_render":
-                    if final_text:
-                        self.console.print()
-                        if not assistant_turn_started:
-                            self._render_assistant_prefix()
-                            assistant_turn_started = True
+                turn_result = renderer.finish(final_text)
+                if final_text and turn_result.needs_final_render:
+                    if not assistant_turn_started:
+                        self._render_assistant_prefix()
+                        assistant_turn_started = True
+                    if render_mode == "buffer_then_render":
                         self._print_assistant_bubble(final_text)
-                else:
-                    if final_text and ("```" in final_text or "|" in final_text or "\n#" in final_text):
-                        self.console.print()
-                        if not assistant_turn_started:
-                            self._render_assistant_prefix()
-                            assistant_turn_started = True
-                        self._print_assistant_bubble(final_text)
+                if not final_text:
+                    return "No response."
                 return final_text
 
             tool_result = self.tool_executor.execute(response)
@@ -673,5 +665,3 @@ class AgentRuntime:
                 self.sessions.append_message(self._session_id, tool_result.assistant_message)
                 for tm in tool_result.tool_messages:
                     self.sessions.append_message(self._session_id, tm)
-
-        return "Reached maximum tool call rounds."

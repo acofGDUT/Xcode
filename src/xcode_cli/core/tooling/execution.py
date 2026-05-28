@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from xcode_cli.core.llm import LLMResponse
+from xcode_cli.core.tooling.display import ToolCallDisplay, ToolDisplayState
 from xcode_cli.ui.renderer import OutputRenderer
 
 
@@ -25,6 +26,7 @@ class ToolCallExecutor:
         memory,
         config_store,
         auto_approve: dict[str, bool],
+        tool_display: ToolCallDisplay | None = None,
     ) -> None:
         self.console = console
         self.tools = tools
@@ -33,13 +35,15 @@ class ToolCallExecutor:
         self.memory = memory
         self.config_store = config_store
         self.auto_approve = auto_approve
+        self.tool_display = tool_display or ToolCallDisplay(ToolDisplayState(expanded=True))
 
     def execute(self, response: LLMResponse) -> ToolExecutionResult:
         executed_calls: list[tuple[Any, str]] = []
         executed_count = 0
 
+        self._render_tool_calls(response.tool_calls)
+
         for tc in response.tool_calls:
-            self._render_tool_call(tc.name, tc.args)
 
             level = self.permissions.check(tc.name)
             if level == "deny":
@@ -139,6 +143,11 @@ class ToolCallExecutor:
             tool_messages=tool_messages,
             executed_count=executed_count,
         )
+
+    def _render_tool_calls(self, tool_calls: list[Any]) -> None:
+        lines = self.tool_display.render_calls(tool_calls)
+        for line in lines:
+            self.console.print(f"  {line}")
 
     def _render_tool_call(self, tool_name: str, args: dict[str, Any]) -> None:
         self.console.print(f"  [bold cyan]## tool.{tool_name}[/bold cyan]")

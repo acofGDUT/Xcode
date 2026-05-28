@@ -107,16 +107,18 @@ def test_llm_loop_handles_tool_error_and_continues(tmp_path: Path, monkeypatch) 
     assert "Tool error" in history[1]["content"]
 
 
-def test_llm_loop_stops_at_max_rounds(tmp_path: Path, monkeypatch) -> None:
+def test_llm_loop_allows_more_than_ten_tool_rounds(tmp_path: Path, monkeypatch) -> None:
     agent = _make_agent(tmp_path, monkeypatch)
     calls = [0]
 
     def fake_complete(**kwargs):
         calls[0] += 1
-        return LLMResponse(
-            content="",
-            tool_calls=[ToolCall(id=f"call_{calls[0]}", name="read_file", args={"path": "x"})],
-        )
+        if calls[0] <= 12:
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(id=f"call_{calls[0]}", name="read_file", args={"path": "x"})],
+            )
+        return LLMResponse(content="final after many tools", tool_calls=[])
 
     agent.llm.complete = fake_complete
     agent.tools._tools["read_file"].execute = lambda **kwargs: "ok"
@@ -124,5 +126,59 @@ def test_llm_loop_stops_at_max_rounds(tmp_path: Path, monkeypatch) -> None:
     history: list[dict] = []
     result = agent._run_llm_loop(history, "system")
 
-    assert result == "Reached maximum tool call rounds."
-    assert calls[0] == 10
+    assert result == "final after many tools"
+    assert calls[0] == 13
+    assert len([m for m in history if m.get("role") == "tool"]) == 12
+
+
+def test_llm_loop_continues_after_user_denies_tool(tmp_path: Path, monkeypatch) -> None:
+    agent = _make_agent(tmp_path, monkeypatch)
+    calls = [0]
+
+    def fake_complete(**kwargs):
+        calls[0] += 1
+        if calls[0] == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(id="call_shell", name="run_shell", args={"command": "echo hi"})],
+            )
+        assert any(
+            m.get("role") == "tool" and "User denied tool" in str(m.get("content", ""))
+            for m in kwargs["messages"]
+        )
+        return LLMResponse(content="I will continue without shell.", tool_calls=[])
+
+    agent.llm.complete = fake_complete
+    monkeypatch.setattr(agent.approval, "prompt", lambda tool_name, scope: "no")
+
+    history: list[dict] = []
+    result = agent._run_llm_loop(history, "system")
+
+    assert result == "I will continue without shell."
+    assert calls[0] == 2
+
+
+def test_llm_loop_empty_response_returns_readable_fallback(tmp_path: Path, monkeypatch) -> None:
+    agent = _make_agent(tmp_path, monkeypatch)
+    agent.llm.complete = lambda **kwargs: LLMResponse(content="", tool_calls=[])
+
+    result = agent._run_llm_loop([], "system")
+
+    assert result == "No response."
+
+
+def test_llm_loop_buffer_then_render_prints_final_answer(tmp_path: Path, monkeypatch) -> None:
+    agent = _make_agent(tmp_path, monkeypatch)
+    cfg = agent.config_store.load()
+    cfg.response_render_mode = "buffer_then_render"
+    agent.config_store.save(cfg)
+    agent.llm.complete = lambda **kwargs: LLMResponse(content="buffered final answer", tool_calls=[])
+
+    printed: list[str] = []
+    monkeypatch.setattr(agent.shell_ui, "print_assistant_bubble", lambda text: printed.append(text))
+    monkeypatch.setattr(agent.shell_ui, "render_assistant_prefix", lambda: None)
+
+    result = agent._run_llm_loop([], "system")
+
+    assert result == "buffered final answer"
+    assert printed == ["buffered final answer"]

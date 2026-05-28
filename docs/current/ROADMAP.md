@@ -28,11 +28,11 @@ Phase 5 生态扩展当前冻结，不作为近期默认开发目标。
 | P0 | 对话历史恢复 | 基础完成 | 已支持 `/compact` + `/resume`，基于 checkpoint + recent tail 恢复可继续推理的 history；后续只保留体验增强和 CLI 入口延后 |
 | P0 | 原生 Windows E2E 验收 | 未完成 | 在 cmd.exe/PowerShell 验证真实交互链路 |
 | P1 | `/context` cost 估算 | 未实现 | 在 token 统计外展示近似费用 |
-| P1 | 工具调用 UI 折叠 | 未实现 | 连续工具调用默认合并为摘要，`Ctrl+O` 展开完整参数 |
-| P1 | 工具调用轮次不中断 | 待调查 | 避免 Xcode 因多轮 tool_calls 停在中间状态 |
+| P1 | 工具调用 UI 折叠 | 基础完成 | 默认已合并为工具摘要；后续补 `Ctrl+O` 展开和原生 Windows 热键验收 |
+| P1 | 工具调用轮次不中断 | 基础完成 | 已支持多轮 tool loop 和关键回归测试；后续补真实终端验收与可选 round 状态提示 |
 | P1 | memory 自管理权限 | 完成 | Xcode 管理 resolved memory 文件时不再频繁要求用户审核，普通文件仍保留审批 |
-| P1 | 流式输出去重 | 未实现 | 避免 streaming token 和 final render 在终端里重复显示同一段内容 |
-| P1 | AgentRuntime 重构 | 第一轮完成 | 已抽出 commands/slash、conversation、tooling、ui 基础模块；后续继续拆 command handlers 和 streaming 状态 |
+| P1 | 流式输出去重 | 基础收口完成 | 已避免结构化内容 raw + Rich 双重完整输出；后续再评估可替换区域式 streaming |
+| P1 | AgentRuntime 重构 | 第一轮完成 | 已抽出 commands/slash、conversation、tooling、ui 基础模块；后续继续拆 command handlers |
 | P1 | 对话回退/分叉设计 | 未实现 | 提供非破坏性的 fork-based rollback |
 | P2 | 项目级配置合并 | 部分实现 | 让 `.xcode/settings.json` 覆盖更多 Config 字段 |
 | P2 | 渲染模式完善 | 部分实现 | 明确 streaming/buffer 模式的用户配置和验收 |
@@ -249,37 +249,37 @@ output_cost_per_1m: float | None = None
 
 ### 背景
 
-当前流式输出会先逐 token 打印，随后又做一次完整 final render。结果是同一段 assistant 内容在终端里出现两遍，尤其在 Markdown、代码块和表格场景更明显。
+当前基础问题已经收口：结构化内容场景不再出现完整 raw + 完整 Rich 的双重输出。但渲染模式的长期边界仍未完全定型，尤其是“即时反馈”和“最终美观渲染”的取舍。
 
 ### 目标
 
-让流式反馈和最终渲染不重复占屏，或者明确只保留其中一种表现。
+继续把当前的“基础可用”推进到“模式边界清晰、终端体验稳定”。
 
-### 推荐方案
+### 后续方向
 
 - 对 `streaming_plus_final_render` 明确设计可替换区域，而不是普通逐行追加。
-- 如果短期无法稳定替换，默认切到 `buffer_then_render`。
-- 对代码块和表格场景做专项回归，避免“去重后又静默”。
+- 评估是否把 `buffer_then_render` 作为更稳的默认模式。
+- 对代码块、表格、长列表和中断场景做更真实的终端验收，避免“去重后又静默”。
 
 ### 建议修改文件
 
 | 文件 | 修改方向 |
 |------|----------|
-| `src/xcode_cli/core/agent.py` | 重整 streaming / final render 的输出流程 |
+| `src/xcode_cli/core/agent.py` | 继续收口 streaming / final render orchestration |
+| `src/xcode_cli/core/ui/streaming.py` | 如需要，承载可替换区域式 streaming 状态 |
 | `src/xcode_cli/ui/renderer.py` | 如有必要增加可替换渲染 helper |
-| `docs/current/DEVNOTES.md` | 记录重复渲染风险和模式取舍 |
 
 ### 验收标准
 
-- 同一轮 assistant 输出不再以两种完整形式重复显示。
-- 流式输出仍保持即时反馈。
+- 同一轮 assistant 输出在真实终端里不再出现明显重复占屏。
+- 流式输出与最终渲染的边界对用户是可解释的。
 - Markdown / code block / table 不出现半成品和重复成品同时占屏。
 
 ## 9. P1：工具调用 UI 折叠与展开
 
 ### 背景
 
-当前 `_render_tool_call()` 会把每个工具调用的 name 和完整 args 持续向下打印。连续读取、搜索和编辑时，终端会快速被工具调用详情刷屏，用户真正需要看的 assistant 输出、diff 和审批信息会被推远。
+基础折叠已经完成，但还没有热键展开和原生 TTY 验收。
 
 期望体验接近 Claude Code：
 
@@ -300,27 +300,24 @@ output_cost_per_1m: float | None = None
   path: D:\Xcode\src
 ```
 
-### 推荐设计
+### 后续方向
 
-引入“工具调用显示状态”：
-
-- 默认折叠连续工具调用，只展示数量和工具名摘要。
 - `Ctrl+O` 在当前会话内切换 collapsed / expanded。
 - expanded 时保留当前详细参数格式。
-- diff preview、审批菜单、工具结果摘要不应被折叠掉。
-- 如果一次工具调用包含危险操作，例如 `write_file`、`edit_file`、`run_shell`，摘要必须显式标出危险工具名。
+- diff preview、审批菜单、工具结果摘要继续保持不被折叠。
+- 原生 Windows 控制台下补热键和审批菜单并存验收。
 
 ### 建议修改文件
 
 | 文件 | 修改方向 |
 |------|----------|
-| `src/xcode_cli/core/agent.py` | 重构 `_render_tool_call()`，增加 tool-call display state 和 `Ctrl+O` key binding |
-| `src/xcode_cli/ui/renderer.py` | 如有必要，增加工具摘要/详情渲染 helper |
-| `tests/` | 增加工具调用摘要格式和展开状态的单元测试 |
+| `src/xcode_cli/core/agent.py` | 如需要，接入 `Ctrl+O` key binding |
+| `src/xcode_cli/core/tooling/display.py` | 继续增强摘要 / 展开状态 |
+| `tests/` | 增加热键切换和终端行为回归测试 |
 
 ### 验收标准
 
-- 连续 3 个只读工具调用默认只产生一行摘要。
+- 连续只读工具调用默认保持一行摘要。
 - 按 `Ctrl+O` 后，同样的工具调用可以展示完整参数。
 - `write_file` / `edit_file` 的 diff preview 和审批 UI 不被折叠隐藏。
 - 非 TTY 环境下有稳定 fallback，不因快捷键能力缺失崩溃。
@@ -330,34 +327,25 @@ output_cost_per_1m: float | None = None
 
 ### 背景
 
-实际使用中观察到 Xcode 可能因为工具调用轮次停下来：模型发起 tool_calls 后，工具结果没有顺畅推动下一轮 LLM 推理，或者 UI/状态让用户误以为 Agent 卡住。
+核心逻辑问题已经收口，但还缺少真实终端层面的补充验收与可视化状态反馈。
 
-这类问题优先级高于纯 UI 美化，因为它会直接中断 Agent 完成任务的能力。
+### 当前状态
 
-### 调查方向
+- `_run_llm_loop()` 已改为 `while True`。
+- 已补超过 10 轮、拒绝后继续、空响应 fallback、最终渲染补洞等回归测试。
+- 重点回归测试已通过。
 
-重点检查 `_run_llm_loop()`：
+### 后续方向
 
-- tool_calls 是否都被合并为一条 assistant message。
-- 每个 tool result 是否都带正确 `tool_call_id`。
-- 多轮 tool_calls 后是否继续调用 `llm.complete()`。
-- 被拒绝、权限 denied、工具异常时，是否仍向模型返回可理解的 tool result。
-- `KeyboardInterrupt`、streaming final render、context compression 是否可能提前 `return final_text`。
-- 是否存在最大工具轮次限制、空 content、空 tool_calls 等边界没有清楚提示。
-
-### 推荐修复方向
-
-- 给 `_run_llm_loop()` 增加明确的 tool round counter 和 debug/status 提示。
-- 对每轮 tool call 都记录：round number、tool count、执行结果数量、是否继续下一轮。
-- 当模型返回空文本且无 tool_calls 时，输出可读 fallback，而不是静默停住。
-- 如果达到最大工具轮次，明确告诉用户并保留 history，不要像卡死一样停在中间。
+- 评估是否给 `_run_llm_loop()` 增加可选 round/status 提示。
+- 在原生 Windows 终端里做真实多轮工具链路验收。
+- 继续覆盖 streaming、context compression、KeyboardInterrupt 等边界交互。
 
 ### 验收标准
 
-- 构造一个两轮工具调用的 fake LLM 测试，验证第二轮会继续执行。
-- 工具被拒绝时，模型能收到拒绝结果并继续生成最终回复。
-- 工具异常时，主循环不崩溃，并能继续下一轮或给出最终说明。
 - 真实运行中连续 read/grep/read 后不会无提示停住。
+- 工具被拒绝或工具异常时，主循环仍能继续完成当前 turn。
+- 原生终端场景下不会因为 streaming / UI 状态让用户误以为卡死。
 
 ## 11. P1：AgentRuntime 重构
 
@@ -382,8 +370,8 @@ output_cost_per_1m: float | None = None
 未完成：
 
 - `/env`、`/memory`、`/context`、`/plan` 等具体 command handlers 仍在 `agent.py`，后续可以继续拆到 `core/commands/`。
-- `_run_llm_loop()` 的 streaming/render 状态仍在 `agent.py`，建议和“流式输出去重”一起设计后再抽到 `core/ui/streaming.py`。
-- 工具调用 UI 折叠和 `Ctrl+O` 展开未纳入本轮。
+- `_run_llm_loop()` 的 streaming/render orchestration 仍在 `agent.py`，但状态判断已收口到 `core/ui/streaming.py`。
+- 工具调用 UI 折叠已完成，`Ctrl+O` 展开未纳入当前交付。
 
 ### 推荐拆分方向
 
@@ -403,9 +391,9 @@ output_cost_per_1m: float | None = None
 
 | 文件 | 修改方向 |
 |------|----------|
-| `src/xcode_cli/core/agent.py` | 继续收缩 command handler glue 和 streaming/render 状态 |
+| `src/xcode_cli/core/agent.py` | 继续收缩 command handler glue |
 | `src/xcode_cli/core/commands/*` | 继续迁移 `/env`、`/memory`、`/context`、`/plan` 等 handler |
-| `src/xcode_cli/core/ui/streaming.py` | 在 streaming 去重方案确定后承载 Thinking/token/final render 状态 |
+| `src/xcode_cli/core/ui/streaming.py` | 继续承载 Thinking/token/final render 状态的后续增强 |
 | `tests/` | 补重构回归测试 |
 
 ### 验收标准

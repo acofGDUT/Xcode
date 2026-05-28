@@ -77,7 +77,7 @@ flowchart TD
 - 工具审批菜单已移到 `core/tooling/approval.py`。
 - tool call 执行、diff preview、memory auto-allow、工具结果摘要已移到 `core/tooling/execution.py`。
 
-当前仍留在 `agent.py` 内的主要职责是 REPL 主循环、slash command handler 具体实现、工具注册、plan/memory/env/context 命令 glue、以及 `_run_llm_loop()` 的 streaming/render 状态。也就是说，第一轮重构已经完成核心服务抽离，但 command handlers 和 streaming 状态还没有完全模块化。
+当前仍留在 `agent.py` 内的主要职责是 REPL 主循环、slash command handler 具体实现、工具注册、plan/memory/env/context 命令 glue、以及 `_run_llm_loop()` 的 orchestration。也就是说，第一轮重构之后，核心服务已经抽离，streaming 状态与工具调用摘要也已有独立模块，但 command handlers 仍未完全模块化。
 
 ## 4. 普通对话数据流
 
@@ -154,6 +154,11 @@ sequenceDiagram
 | 任务 | `task_create`, `task_update`, `task_list` |
 | 计划模式 | `enter_plan_mode`, `write_plan`, `exit_plan_mode` |
 
+工具调用显示当前分两层：
+
+- `core/tooling/display.py` 负责“折叠还是展开”，默认输出一行摘要，例如 `tools: 3 calls: read_file, grep, glob`；危险工具会追加 `[danger]` 标记。
+- `core/tooling/execution.py` 负责真正的执行期展示，包括 diff preview、command preview、审批菜单和工具结果摘要；这些内容不受折叠影响。
+
 ## 7. 权限和审批模型
 
 权限优先级：
@@ -183,6 +188,25 @@ Yes, for this conversation
 支持方向键上下选择 + Enter，也保留 `y/n/a` 快捷键。非 TTY fallback 才退回单行 `input()`。
 
 Memory 自管理权限也在 tool execution 层处理：`write_file` / `edit_file` 命中 `MemoryManager.is_memory_write_target()` 的 resolved memory 路径时跳过用户审批，但显式 `deny` 仍优先生效，普通项目文件仍走原有审批流程。
+
+## 7.1 输出渲染模型
+
+`LLMClient.complete(..., stream=True)` 通过 `on_text_token` / `on_reasoning_token` 回调把流式内容交给运行时。当前渲染链路是：
+
+1. `AgentRuntime._run_llm_loop()` 负责 Thinking Live、assistant prefix、LLM/tool loop orchestration。
+2. `StreamingTurnRenderer` 负责累积 `content_buffer` / `reasoning_buffer`，并根据 `response_render_mode` 决定是继续 raw streaming，还是停止 streaming 等待最终渲染。
+3. `ShellUI.print_assistant_bubble()` / `OutputRenderer` 负责最终的 Rich Markdown 展示。
+
+当前支持两种模式：
+
+- `streaming_plus_final_render`
+  - 普通文本继续逐 token 打印。
+  - 一旦检测到代码块、标题、表格等结构化 Markdown，就停止继续 raw streaming，只保留 buffer，并在 `finish()` 阶段最终渲染一次。
+- `buffer_then_render`
+  - 不逐 token 打印文本。
+  - 在 `finish()` 后由 `agent.py` 补最终 assistant bubble，确保终端能看到完整回答。
+
+当前实现已经避免“结构化内容先整段 raw、再整段 Rich”的双重输出，但还没有实现可替换区域式 streaming，也没有引入 `Ctrl+O` 之类的交互增强。
 
 ## 8. Memory 模型
 
@@ -292,12 +316,14 @@ runtime status 写入：
 
 | 文件 | 职责 |
 |------|------|
-| `src/xcode_cli/core/agent.py` | REPL 主循环、slash command handler glue、工具注册、LLM/tool loop orchestration、streaming 状态 |
+| `src/xcode_cli/core/agent.py` | REPL 主循环、slash command handler glue、工具注册、LLM/tool loop orchestration |
 | `src/xcode_cli/core/commands/slash.py` | slash command 列表和 prompt_toolkit 补全 |
 | `src/xcode_cli/core/conversation/compaction.py` | `/compact` 和自动 compression checkpoint 编排 |
 | `src/xcode_cli/core/conversation/resume.py` | `/resume` 交互命令编排，调用 `SessionResumeBuilder` |
 | `src/xcode_cli/core/tooling/approval.py` | 工具审批 scope、方向键菜单、TTY / non-TTY fallback |
+| `src/xcode_cli/core/tooling/display.py` | 工具调用折叠/展开摘要状态 |
 | `src/xcode_cli/core/tooling/execution.py` | tool call 执行、权限检查、diff preview、memory auto-allow、结果摘要 |
+| `src/xcode_cli/core/ui/streaming.py` | streaming token buffer、结构化内容检测、final render 触发 |
 | `src/xcode_cli/core/ui/shell.py` | welcome、命令建议、状态栏、用户/助手基础输出 |
 | `src/xcode_cli/core/llm.py` | OpenAI-compatible API 调用、streaming、tool call 解析 |
 | `src/xcode_cli/core/tool_registry.py` | 工具定义、schema 转换、异常捕获执行 |
