@@ -87,12 +87,14 @@ class ContextManager:
             )
 
         if previous_summary:
+            char_limit = f" under {self.max_summary_chars} characters" if self.max_summary_chars else ""
             summary_prompt = (
                 "Below is a previous conversation summary and new conversation content since that summary. "
                 "Produce an updated cumulative summary that merges old and new information. "
                 "The new summary must preserve key decisions, constraints, file changes, errors, "
                 "user preferences, pending items, current work, and next steps from BOTH the old summary "
-                "and the new content. Output only the cumulative summary text, under 400 words."
+                "and the new content. "
+                f"Output only the cumulative summary text,{char_limit}."
             )
             middle_text = (
                 f"Previous summary:\n{previous_summary}\n\n"
@@ -100,10 +102,12 @@ class ContextManager:
                 + "\n".join(f"[{m.get('role','unknown')}] {m.get('content','')}" for m in middle)
             )
         else:
+            char_limit = f" under {self.max_summary_chars} characters" if self.max_summary_chars else ""
             summary_prompt = (
                 "Summarize the following conversation. Preserve key requirements, "
                 "completed actions, pending items, constraints, file changes, errors, "
-                "user preferences, current work, and next steps. Output only the summary text, under 300 words."
+                "user preferences, current work, and next steps. "
+                f"Output only the summary text,{char_limit}."
             )
             middle_text = "\n".join(f"[{m.get('role','unknown')}] {m.get('content','')}" for m in middle)
 

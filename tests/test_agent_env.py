@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import json
-import io
 from pathlib import Path
-
-import pytest
 
 from xcode_cli.core.config import Config, ConfigStore
 from xcode_cli.core.context import ContextManager
@@ -58,61 +55,12 @@ def _make_agent(tmp_path: Path, monkeypatch, max_tokens: int = 128000):
 
 
 # ---------------------------------------------------------------------------
-# /env max-tokens — real command path via AgentRuntime._handle_env_command
-# ---------------------------------------------------------------------------
-
-class TestEnvMaxTokensRealPath:
-    def test_valid_value_updates_context_and_persists(self, tmp_path: Path, monkeypatch) -> None:
-        agent = _make_agent(tmp_path, monkeypatch, max_tokens=128000)
-        assert agent.context.max_tokens == 128000
-
-        agent._handle_env_command(["/env", "max-tokens", "64000"])
-
-        assert agent.context.max_tokens == 64000
-        cfg = agent.config_store.load()
-        assert cfg.max_tokens == 64000
-
-    @pytest.mark.parametrize("bad_value", ["abc", "-5", "0"])
-    def test_invalid_value_prints_error_and_does_not_change_state(
-        self, tmp_path: Path, monkeypatch, capsys, bad_value: str
-    ) -> None:
-        agent = _make_agent(tmp_path, monkeypatch, max_tokens=128000)
-        original = agent.context.max_tokens
-
-        parts = ["/env", "max-tokens", bad_value]
-        agent._handle_env_command(parts)
-
-        captured = capsys.readouterr()
-        assert "Invalid" in captured.out
-        assert agent.context.max_tokens == original
-        assert agent.config_store.load().max_tokens == original
-
-    def test_missing_value_shows_usage(self, tmp_path: Path, monkeypatch, capsys) -> None:
-        agent = _make_agent(tmp_path, monkeypatch, max_tokens=128000)
-        agent._handle_env_command(["/env", "max-tokens"])
-        captured = capsys.readouterr()
-        assert "Usage" in captured.out or "max-tokens" in captured.out
-
-
-# ---------------------------------------------------------------------------
-# /env show — real command path
-# ---------------------------------------------------------------------------
-
-class TestEnvShowRealPath:
-    def test_show_includes_max_tokens(self, tmp_path: Path, monkeypatch, capsys) -> None:
-        agent = _make_agent(tmp_path, monkeypatch, max_tokens=96000)
-        agent._handle_env_command(["/env", "show"])
-        captured = capsys.readouterr()
-        assert "96000" in captured.out
-
-
-# ---------------------------------------------------------------------------
 # /context — runtime max_tokens consistency
 # ---------------------------------------------------------------------------
 
 class TestContextRuntimeConsistency:
     def test_display_uses_context_max_tokens_not_config(self, tmp_path: Path, monkeypatch) -> None:
-        """After /env max-tokens changes the runtime value, /context must reflect it."""
+        """After mutating runtime value, /context must reflect it."""
         agent = _make_agent(tmp_path, monkeypatch, max_tokens=128000)
 
         # mutate runtime without touching config on disk
@@ -120,20 +68,22 @@ class TestContextRuntimeConsistency:
 
         # /context should use the runtime value, not the stale config value
         assert agent.context.max_tokens == 99999
-        # _handle_context_command reads from self.context.max_tokens (line 523)
-        # We verify via attribute, since the Rich Table is hard to parse.
-        # The key invariant: compression threshold line 525 also uses
-        # self.context.max_tokens — so both share one source of truth.
 
-    def test_env_max_tokens_syncs_both_sources(self, tmp_path: Path, monkeypatch) -> None:
+    def test_env_dashboard_syncs_context_after_run(self, tmp_path: Path, monkeypatch) -> None:
+        """EnvDashboard 退出后，agent.context 同步 config 中的值。"""
         agent = _make_agent(tmp_path, monkeypatch, max_tokens=128000)
-        agent._handle_env_command(["/env", "max-tokens", "32000"])
 
-        # runtime
+        # 模拟 dashboard 修改了 config 并保存
+        cfg = agent.config_store.load()
+        cfg.max_tokens = 32000
+        agent.config_store.save(cfg)
+
+        # 调用 _handle_env_command，dashboard 在非 TTY 下会直接返回
+        # 但 sync 逻辑仍会执行
+        agent._handle_env_command(["/env"])
+
+        # 同步后 context 应该反映 config 的值
         assert agent.context.max_tokens == 32000
-        # persisted config
-        assert agent.config_store.load().max_tokens == 32000
-        # both are now 32000 — single source of truth
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -52,7 +51,7 @@ class AgentRuntime:
         self.config_store = ConfigStore()
         self.llm = LLMClient()
         cfg = self.config_store.load()
-        self.context = ContextManager(max_tokens=cfg.max_tokens)
+        self.context = ContextManager(max_tokens=cfg.max_tokens, max_summary_chars=cfg.max_summary_chars)
         self.task_tracker = TaskTracker()
         self.memory = MemoryManager(cwd=self.cwd)
         self.permissions = PermissionManager(cwd=self.cwd)
@@ -178,7 +177,7 @@ class AgentRuntime:
         if head == "/help":
             self._show_command_suggestions()
             self.console.print("/skill list|install <path>|enable <name>|disable <name>")
-            self.console.print("/env show|set <api_key>|unset|base-url <url>|model <name>|theme <name>|max-tokens <value>")
+            self.console.print("/env  (配置仪表盘)")
             self.console.print("/context")
             self.console.print("/memory | /memory auto on|off")
             self.console.print("/dashboard")
@@ -256,101 +255,13 @@ class AgentRuntime:
         self.console.print("Usage: /skill list|install <path>|enable <name>|disable <name>")
 
     def _handle_env_command(self, parts: list[str]) -> None:
-        if len(parts) == 1:
-            self.console.print(
-                "/env show | /env set <api_key> | /env unset | /env base-url <url> | "
-                "/env model <name> | /env theme <name> | /env max-tokens <value> | /env edit"
-            )
-            return
-        action = parts[1].lower()
-        if action == "show":
-            cfg = self.config_store.load()
-            key = os.getenv("XCODE_API_KEY") or os.getenv("OPENAI_API_KEY")
-            if not key:
-                self.console.print("API key is not set.")
-            else:
-                masked = key[:6] + "..." + key[-4:] if len(key) > 12 else "(set)"
-                self.console.print(f"API key: {masked}")
-            self.console.print(f"model: {cfg.model or os.getenv('XCODE_MODEL', 'gpt-4o-mini')}")
-            self.console.print(f"base_url: {cfg.base_url or '(default)'}")
-            self.console.print(f"max-tokens: {cfg.max_tokens}")
-            self.console.print(f"syntax theme: {cfg.syntax_theme}")
-            return
-        if action == "set" and len(parts) >= 3:
-            key = " ".join(parts[2:])
-            cfg = self.config_store.load()
-            cfg.api_key = key
-            self.config_store.save(cfg)
-            os.environ["XCODE_API_KEY"] = key
-            self.console.print("API key saved and persisted.")
-            self.console.print(f"Config file: {self.config_store.path}")
-            return
-
-        if action == "unset":
-            cfg = self.config_store.load()
-            cfg.api_key = ""
-            self.config_store.save(cfg)
-            os.environ.pop("XCODE_API_KEY", None)
-            os.environ.pop("OPENAI_API_KEY", None)
-            self.console.print("API key removed from process and config file.")
-            self.console.print(f"Config file: {self.config_store.path}")
-            return
-
-        if action == "base-url" and len(parts) >= 3:
-            cfg = self.config_store.load()
-            cfg.base_url = " ".join(parts[2:])
-            self.config_store.save(cfg)
-            self.console.print(f"base_url saved to {self.config_store.path}")
-            return
-
-        if action == "model" and len(parts) >= 3:
-            cfg = self.config_store.load()
-            cfg.model = " ".join(parts[2:])
-            self.config_store.save(cfg)
-            self.console.print(f"model saved to {self.config_store.path}")
-            return
-
-        if action == "theme" and len(parts) >= 3:
-            cfg = self.config_store.load()
-            cfg.syntax_theme = " ".join(parts[2:]).strip() or "monokai"
-            self.config_store.save(cfg)
-            self.console.print(f"syntax theme saved to {self.config_store.path}")
-            return
-
-        if action == "max-tokens" and len(parts) >= 3:
-            value_str = " ".join(parts[2:])
-            try:
-                value = int(value_str)
-            except ValueError:
-                self.console.print(f"[bold red]Invalid value: '{value_str}'. max-tokens must be a positive integer.[/bold red]")
-                return
-            if value <= 0:
-                self.console.print(f"[bold red]Invalid value: {value}. max-tokens must be a positive integer.[/bold red]")
-                return
-            cfg = self.config_store.load()
-            cfg.max_tokens = value
-            self.config_store.save(cfg)
-            self.context.max_tokens = value
-            self.console.print(f"max-tokens set to {value} and saved to {self.config_store.path}")
-            return
-
-        if action == "edit":
-            config_path = self.config_store.path
-            self.console.print(f"Config file: {config_path}")
-            try:
-                if os.name == "nt":
-                    os.startfile(str(config_path))  # type: ignore[attr-defined]
-                elif os.name == "posix":
-                    subprocess.Popen(["xdg-open", str(config_path)])
-                else:
-                    self.console.print("Auto-open is not supported on this OS. Open the file path manually.")
-                    return
-                self.console.print("Opened config file in your default editor.")
-            except Exception as exc:
-                self.console.print(f"Failed to open config file automatically: {exc}")
-            return
-
-        self.console.print("Usage: /env show|set <api_key>|unset|base-url <url>|model <name>|theme <name>|max-tokens <value>|edit")
+        from xcode_cli.core.ui.env_dashboard import EnvDashboard
+        dashboard = EnvDashboard(self.config_store, self.console)
+        dashboard.run()
+        # 仪表盘退出后，同步关键字段到运行中的 ContextManager
+        cfg = self.config_store.load()
+        self.context.max_tokens = cfg.max_tokens
+        self.context.max_summary_chars = cfg.max_summary_chars
 
     def _create_plan_memory_tools(self) -> list[ToolDef]:
         def write_plan(content: str) -> str:

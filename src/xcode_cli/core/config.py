@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -18,6 +19,7 @@ class Config:
     max_tokens: int = 128000
     response_render_mode: str = "buffer_then_render"
     syntax_theme: str = "monokai"
+    max_summary_chars: int = 6000
 
 
 class ConfigStore:
@@ -41,7 +43,11 @@ class ConfigStore:
         if not isinstance(syntax_theme, str) or not syntax_theme.strip():
             syntax_theme = "monokai"
 
-        return Config(
+        max_summary_chars = data.get("max_summary_chars", 6000)
+        if not isinstance(max_summary_chars, int) or max_summary_chars < 0:
+            max_summary_chars = 6000
+
+        cfg = Config(
             enabled_skills=data.get("enabled_skills", []),
             api_key=data.get("api_key", ""),
             base_url=data.get("base_url", ""),
@@ -51,7 +57,26 @@ class ConfigStore:
             max_tokens=max_tokens,
             response_render_mode=response_render_mode,
             syntax_theme=syntax_theme.strip(),
+            max_summary_chars=max_summary_chars,
         )
+
+        # 项目级 config merge
+        project_config_path = Path.cwd() / ".xcode" / "config.json"
+        if project_config_path.exists():
+            try:
+                project_data = json.loads(project_config_path.read_text(encoding="utf-8"))
+                if isinstance(project_data, dict):
+                    for field_name in [
+                        "enabled_skills", "api_key", "base_url", "model", "provider",
+                        "auto_memory", "max_tokens", "response_render_mode", "syntax_theme",
+                        "max_summary_chars",
+                    ]:
+                        if field_name in project_data:
+                            setattr(cfg, field_name, project_data[field_name])
+            except (json.JSONDecodeError, OSError) as exc:
+                print(f"[warning] Failed to read project config {project_config_path}: {exc}", file=sys.stderr)
+
+        return cfg
 
     def save(self, config: Config) -> None:
         payload = {
@@ -64,5 +89,6 @@ class ConfigStore:
             "max_tokens": config.max_tokens,
             "response_render_mode": config.response_render_mode,
             "syntax_theme": config.syntax_theme,
+            "max_summary_chars": config.max_summary_chars,
         }
         self.path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
