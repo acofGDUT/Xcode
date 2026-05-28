@@ -4,6 +4,49 @@ import os
 import sys
 
 
+def read_key() -> str:
+    """Read a single keypress and return a normalized key name."""
+    if os.name == "nt":
+        import msvcrt
+
+        ch = msvcrt.getwch()
+        if ch in {"\x00", "\xe0"}:
+            second = msvcrt.getwch()
+            if second == "H":
+                return "up"
+            if second == "P":
+                return "down"
+            return ""
+        if ch == "\r":
+            return "enter"
+        if ch == "\x03":
+            raise KeyboardInterrupt
+        return ch.lower()
+
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        ch = sys.stdin.read(1)
+        if ch == "\x1b":
+            rest = sys.stdin.read(2)
+            if rest == "[A":
+                return "up"
+            if rest == "[B":
+                return "down"
+            return "escape"
+        if ch in {"\r", "\n"}:
+            return "enter"
+        if ch == "\x03":
+            raise KeyboardInterrupt
+        return ch.lower()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
 class ToolApprovalController:
     def __init__(self, console, auto_approve: dict[str, bool]) -> None:
         self.console = console
@@ -59,45 +102,7 @@ class ToolApprovalController:
             return "no"
 
     def _read_key(self) -> str:
-        if os.name == "nt":
-            import msvcrt
-
-            ch = msvcrt.getwch()
-            if ch in {"\x00", "\xe0"}:
-                second = msvcrt.getwch()
-                if second == "H":
-                    return "up"
-                if second == "P":
-                    return "down"
-                return ""
-            if ch == "\r":
-                return "enter"
-            if ch == "\x03":
-                raise KeyboardInterrupt
-            return ch.lower()
-
-        import termios
-        import tty
-
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        try:
-            tty.setraw(fd)
-            ch = sys.stdin.read(1)
-            if ch == "\x1b":
-                rest = sys.stdin.read(2)
-                if rest == "[A":
-                    return "up"
-                if rest == "[B":
-                    return "down"
-                return "escape"
-            if ch in {"\r", "\n"}:
-                return "enter"
-            if ch == "\x03":
-                raise KeyboardInterrupt
-            return ch.lower()
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        return read_key()
 
     def _render_options(self, tool_name: str, scope: str, selected: int) -> None:
         options = [

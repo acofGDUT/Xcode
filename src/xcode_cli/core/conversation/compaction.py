@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import threading
+import time
 from dataclasses import dataclass
 from typing import Any
+
+from rich.live import Live
+from rich.text import Text
 
 
 @dataclass
@@ -35,7 +40,34 @@ class ConversationCompactor:
         before_messages = len(history)
         before_tokens = self.context.estimate_tokens(history)
         previous_summary = self.find_previous_summary(history)
-        result = self.context.compress(history, self.llm, previous_summary)
+
+        # 启动 Live 进度
+        start_time = time.monotonic()
+        stop_event = threading.Event()
+
+        def _update_progress():
+            while not stop_event.is_set():
+                elapsed = time.monotonic() - start_time
+                live.update(Text(f"Compacting context... ({elapsed:.1f}s)", style="dim"))
+                time.sleep(0.1)
+
+        live = Live(
+            Text("Compacting context... (0.0s)", style="dim"),
+            console=self.console,
+            refresh_per_second=8,
+            transient=True,
+        )
+        live.start()
+        progress_thread = threading.Thread(target=_update_progress, daemon=True)
+        progress_thread.start()
+
+        try:
+            result = self.context.compress(history, self.llm, previous_summary)
+        finally:
+            # 停止 Live 进度
+            stop_event.set()
+            progress_thread.join(timeout=0.2)
+            live.stop()
 
         if not result.checkpoint_message:
             return None

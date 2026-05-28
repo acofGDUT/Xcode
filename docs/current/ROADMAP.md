@@ -25,7 +25,7 @@ Phase 5 生态扩展当前冻结，不作为近期默认开发目标。
 
 | 优先级 | 能力 | 状态 | 目标 |
 |--------|------|------|------|
-| P0 | 对话历史恢复 | 基础完成 | 已支持 `/compact` + `/resume`，基于 checkpoint + recent tail 恢复可继续推理的 history；后续只保留体验增强和 CLI 入口延后 |
+| P0 | 对话历史恢复 | 完成 | 已支持 `/compact` + `/resume`，基于 checkpoint + recent tail 恢复可继续推理的 history；`/compact` 含 Live 进度，`/resume` 含方向键菜单；CLI 入口延后 |
 | P0 | 原生 Windows E2E 验收 | 未完成 | 在 cmd.exe/PowerShell 验证真实交互链路 |
 | P1 | `/context` cost 估算 | 未实现 | 在 token 统计外展示近似费用 |
 | P1 | 工具调用 UI 折叠 | 基础完成 | 默认已合并为工具摘要；后续补 `Ctrl+O` 展开和原生 Windows 热键验收 |
@@ -120,8 +120,8 @@ CLI `--resume <session_id>` 和 `xcode chat --resume <session_id>` 暂不作为�
 
 ### 后续增强
 
-- `/compact` 调用 LLM 压缩时显示进度或动态状态，避免用户干等。
-- `/resume` 从数字输入改为方向键上下选择 + Enter 确认，并保留非 TTY fallback。
+- `/compact` 调用 LLM 压缩时显示进度或动态状态（已完成：Rich Live + daemon thread 计时）。
+- `/resume` 从数字输入改为方向键上下选择 + Enter 确认，并保留非 TTY fallback（已完成：`ResumeCommandService` TTY 方向键菜单）。
 - 如后续确有命令行恢复需求，再设计 CLI `--resume <session_id>` / `xcode chat --resume <session_id>`。
 
 ## 4. P1：对话回退和分叉

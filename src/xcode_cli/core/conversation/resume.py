@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -8,6 +9,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import ANSI
 
 from xcode_cli.core.session_resume import SessionResumeBuilder
+from xcode_cli.core.tooling.approval import read_key
 
 
 @dataclass
@@ -33,6 +35,63 @@ class ResumeCommandService:
             self.console.print("No recent sessions found for this project.")
             return None
 
+        # 非 TTY 环境回退到数字输入
+        if not sys.stdin.isatty():
+            return self._run_number_input(sessions)
+
+        # TTY 环境：方向键菜单
+        selected = 0
+        self._render_session_list(sessions, selected)
+
+        while True:
+            key = read_key()
+            if key in {"up", "k"}:
+                selected = (selected - 1) % len(sessions)
+                self._refresh_session_list(sessions, selected)
+            elif key in {"down", "j"}:
+                selected = (selected + 1) % len(sessions)
+                self._refresh_session_list(sessions, selected)
+            elif key == "enter":
+                self.console.print()
+                break
+            elif key in {"escape", "q"}:
+                self.console.print()
+                self.console.print("Cancelled.")
+                return None
+            # 数字快捷键
+            elif key in {str(i) for i in range(1, len(sessions) + 1)}:
+                selected = int(key) - 1
+                self._refresh_session_list(sessions, selected)
+            elif key == "c":
+                raise KeyboardInterrupt
+
+        # 选中后执行恢复
+        selected_session = sessions[selected]
+        resume_budget = int(self.context.max_tokens * 0.6)
+        builder = SessionResumeBuilder(self.context, resume_budget)
+        result = builder.build(selected_session.path)
+        if not result.history:
+            self.console.print("Failed to load session history.")
+            return None
+
+        self.console.print(f"Resumed session {selected_session.session_id}")
+        self.console.print(f"Restored from checkpoint: {'yes' if result.restored_from_checkpoint else 'no'}")
+        self.console.print(f"Restored messages: {result.message_count}")
+        self.console.print(f"Estimated context: ~{result.estimated_tokens} tokens")
+        if selected_session.last_user_input:
+            self.console.print(f"Latest user input: {selected_session.last_user_input[:100]}")
+
+        return ResumeResult(
+            history=result.history,
+            session_id=selected_session.session_id,
+            restored_from_checkpoint=result.restored_from_checkpoint,
+            message_count=result.message_count,
+            estimated_tokens=result.estimated_tokens,
+            last_user_input=selected_session.last_user_input,
+        )
+
+    def _run_number_input(self, sessions) -> ResumeResult | None:
+        """非 TTY 环境的数字输入方式"""
         self.console.print("Recent sessions:")
         for i, s in enumerate(sessions, 1):
             ts = datetime.utcfromtimestamp(s.updated_at).strftime("%Y-%m-%d %H:%M")
@@ -80,3 +139,26 @@ class ResumeCommandService:
             estimated_tokens=result.estimated_tokens,
             last_user_input=selected.last_user_input,
         )
+
+    def _render_session_list(self, sessions, selected: int) -> None:
+        """渲染 session 列表"""
+        self.console.print("[bold]Select session to resume:[/bold] [dim](↑/↓, Enter, Esc)[/dim]")
+        for idx, s in enumerate(sessions):
+            ts = datetime.utcfromtimestamp(s.updated_at).strftime("%Y-%m-%d %H:%M")
+            preview = s.last_user_input[:60] if s.last_user_input else "(empty)"
+            cp_mark = " [checkpoint]" if s.has_checkpoint else ""
+
+            prefix = ">" if idx == selected else " "
+            style = "bold cyan" if idx == selected else "dim"
+            self.console.print(f"  {prefix} {ts}  {preview}{cp_mark}", style=style)
+
+    def _refresh_session_list(self, sessions, selected: int) -> None:
+        """刷新 session 列表显示"""
+        count = len(sessions) + 1  # header line + N items
+        sys.stdout.write(f"\x1b[{count}A")
+        for _ in range(count):
+            sys.stdout.write("\x1b[2K")
+            sys.stdout.write("\x1b[1B")
+        sys.stdout.write(f"\x1b[{count}A")
+        sys.stdout.flush()
+        self._render_session_list(sessions, selected)

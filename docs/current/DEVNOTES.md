@@ -271,32 +271,33 @@ Review 注意：
 
 ## 16. `/compact` 需要进度反馈
 
-**状态**：Open
+**状态**：Resolved
 **关联**：session resume 体验优化
 
 现象：`/compact` 会调用 LLM 生成摘要。如果模型响应较慢，用户会看到终端停住，难以判断是在压缩、卡住，还是没有输入被接收。
 
-后续方向：压缩期间显示进度或动态状态。第一版可以复用 Thinking/Live 风格，显示类似 `Compacting context...` 和 elapsed time；不要等摘要完成后才一次性输出结果。
+当前收口：
 
-Review 注意：
-
-- 自动 compression 和手动 `/compact` 最好复用同一套状态展示。
-- 进度 UI 不能吞掉异常或导致 checkpoint 半写入。
-- 原生 PowerShell/cmd.exe 需要手工验收。
+- `ConversationCompactor.compact_history()` 在调用 `ContextManager.compress()` 前后包裹 Rich `Live` 进度显示。
+- 显示 "Compacting context... (Xs)" 动态计时，复用 `_run_llm_loop()` 的 Thinking Live 模式（`Live(transient=True)` + daemon thread）。
+- 手动 `/compact` 和自动 compression 共用 `compact_history()`，进度展示自然统一。
+- `finally` 保护确保 `compress()` 异常时 Live 也停止，不残留终端状态。
+- `Nothing to compact.` 路径（history < 4）在 `_handle_compact_command` 中提前返回，不启动 Live。
 
 ## 17. `/resume` 选择体验需要方向键菜单
 
-**状态**：Open
+**状态**：Resolved
 **关联**：session resume 体验优化
 
 当前 `/resume` 使用数字输入选择 session。实际体验上，用户更希望像审批菜单一样，用方向键上下浏览已有记录，按 Enter 恢复选中的 session。
 
-后续方向：
+当前收口：
 
-- `/resume` 列表改为方向键上下选择 + Enter 确认。
-- 列表项展示 session 时间、最近用户输入、是否有 checkpoint。
-- 保留非 TTY fallback，例如数字输入或取消。
-- 选择菜单不应破坏当前 runtime status，也不应在取消时污染 `_history`。
+- `ResumeCommandService.run()` TTY 路径改为方向键 ↑/↓ 浏览 + Enter 确认 + Esc 取消，复用 `read_key()` 从 `approval.py` 提取的模块级键盘读取函数。
+- `_render_session_list()` / `_refresh_session_list()` 复用审批菜单的 ANSI 光标上移+清行刷新模式。
+- 列表项展示 session 时间、最近用户输入（截断 60 字符）、checkpoint 标记，保留数字快捷键。
+- 非 TTY 环境回退到 `_run_number_input()`，行为与旧版数字输入一致。
+- 取消时返回 `None`，不污染 `_history` 和 runtime status。
 
 ## 18. 验收证据优先
 

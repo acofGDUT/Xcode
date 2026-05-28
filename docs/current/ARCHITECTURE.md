@@ -293,7 +293,7 @@ runtime status 写入：
 
 ### `/compact`
 
-`/compact` 手动触发 `ContextManager.compress()`。成功压缩后：
+`/compact` 手动触发 `ContextManager.compress()`。压缩期间通过 `ConversationCompactor.compact_history()` 显示 Rich `Live` 进度（"Compacting context... (Xs)"，复用 Thinking Live 的 `transient` + daemon thread 模式）。成功压缩后：
 
 - 替换运行时 `_history` 为 compressed messages。
 - 写入一条 `message(system)`，内容为 checkpoint summary。
@@ -303,7 +303,7 @@ runtime status 写入：
 
 ### `/resume`
 
-`/resume` 是当前恢复入口。它列出当前项目 session，用户输入编号选择 session 后，`SessionResumeBuilder` 读取 transcript 并构造 budgeted history。
+`/resume` 是当前恢复入口。TTY 环境下通过方向键 ↑/↓ 浏览 + Enter 确认 + Esc 取消选择 session（复用 `approval.py` 的 `read_key()` 和 ANSI 光标刷新模式），列表项显示时间、最近输入预览和 checkpoint 标记。非 TTY 环境回退到数字输入。选中 session 后，`SessionResumeBuilder` 读取 transcript 并构造 budgeted history。
 
 恢复规则：
 
@@ -320,7 +320,7 @@ runtime status 写入：
 | `src/xcode_cli/core/commands/slash.py` | slash command 列表和 prompt_toolkit 补全 |
 | `src/xcode_cli/core/conversation/compaction.py` | `/compact` 和自动 compression checkpoint 编排 |
 | `src/xcode_cli/core/conversation/resume.py` | `/resume` 交互命令编排，调用 `SessionResumeBuilder` |
-| `src/xcode_cli/core/tooling/approval.py` | 工具审批 scope、方向键菜单、TTY / non-TTY fallback |
+| `src/xcode_cli/core/tooling/approval.py` | 工具审批 scope、方向键菜单、TTY / non-TTY fallback、`read_key()` 模块级键盘读取函数 |
 | `src/xcode_cli/core/tooling/display.py` | 工具调用折叠/展开摘要状态 |
 | `src/xcode_cli/core/tooling/execution.py` | tool call 执行、权限检查、diff preview、memory auto-allow、结果摘要 |
 | `src/xcode_cli/core/ui/streaming.py` | streaming token buffer、结构化内容检测、final render 触发 |
