@@ -193,7 +193,44 @@ Review 结论：第一轮通过。`pytest -q` 为 `184 passed`，`py_compile` �
 - `_run_llm_loop()` 的 streaming/render orchestration 仍在 `agent.py`，但状态判断已经收口到 `core/ui/streaming.py`；后续可以继续细化边界。
 - 工具调用 UI 折叠已实现默认摘要；`Ctrl+O` 展开尚未实现。
 
-## 12. 当前阻塞和遗留
+## 12. `/compact` + `/resume` 体验优化：2026-05-28
+
+背景：`/compact` 调用 LLM 时用户看不见进度，`/resume` 只能用数字输入选择 session。两者都已有基础能力但交互体验差。
+
+完成内容：
+
+- `ConversationCompactor.compact_history()` 在 `ContextManager.compress()` 前后包裹 Rich `Live` 进度显示（"Compacting context... (Xs)"），复用 `_run_llm_loop()` 的 Thinking Live 模式：`Live(transient=True)` + daemon thread 更新 elapsed time。
+- 手动 `/compact` 和自动 compression 共用 `compact_history()`，进度展示自然统一。
+- `finally` 保护确保 `compress()` 异常时 `Live` 也停止。
+- `ResumeCommandService.run()` TTY 路径改为方向键 ↑/↓ 浏览 + Enter 确认 + Esc 取消。
+- `read_key()` 从 `ToolApprovalController._read_key()` 提取为 `approval.py` 模块级函数，`ResumeCommandService` 直接复用。
+- `_render_session_list()` / `_refresh_session_list()` 复用审批菜单的 ANSI 光标上移+清行刷新模式。
+- 非 TTY 环境回退到 `_run_number_input()`，保持数字输入方式。
+- 方案文档：`docs/superpowers/plans/2026-05-28-compact-progress-and-resume-ux.md`。
+- 测试：`tests/test_compaction.py`（Live 进度生命周期、异常安全）、`tests/test_resume.py`（TTY 导航、Esc 取消、非 TTY 回退）。
+
+Review 结论：通过。`pytest -q` 为 `208 passed`；已提交并推送 `3f8cb4e feat: add /compact live progress and /resume arrow-key selection`。
+
+## 13. 项目级配置合并 + /env 仪表盘：2026-05-28
+
+背景：`ConfigStore.load()` 只读全局 `~/.xcode/config.json`，项目级无法覆盖；`max_summary_chars` 在 `ContextManager` 硬编码为 6000，Config 和 `/env` 都管不到；`/env` 子命令散落各处，没有统一的配置入口。
+
+完成内容：
+
+- `Config` dataclass 新增 `max_summary_chars: int = 6000` 字段。
+- `ConfigStore.load()` 增加项目级 merge：加载全局配置后检查 `<project>/.xcode/config.json`，存在则字段级浅覆盖，损坏时打印 warning 不崩。
+- `ConfigStore.save()` 只写全局文件，项目级 config 由用户手动维护。
+- `ContextManager` 压缩 prompt 中 300/400 词软约束统一为 `max_summary_chars` 字符上限；`agent.py` 初始化 `ContextManager` 时补传 `max_summary_chars`。
+- `/env` 重写为 `EnvDashboard`（`core/ui/env_dashboard.py`）全屏 TUI：5 项参数（max_tokens / max_summary_chars / response_render_mode / syntax_theme / auto_memory），↑↓ 导航，Enter 编辑，s 保存，q 退出。
+- 仪表盘使用 ANSI 局部刷新（同 `approval.py` 模式），导航时不清屏不重绘 banner。
+- 旧的 `_handle_env_command` 所有子命令（show/set/unset/base-url/model/theme/max-tokens/edit）移除，改为启动 dashboard + 退出后同步关键字段。
+- `SlashCompleter` 和 `ShellUI` 帮助文案同步更新。
+- spec + plan 文档：`docs/superpowers/specs/2026-05-28-config-merge-design.md`、`docs/superpowers/plans/2026-05-28-config-merge-plan.md`。
+- 测试：`tests/test_config.py`（merge、序列化、损坏文件）、`tests/test_env_dashboard.py`（init、bool 切换、choice 循环、int 校验、save、quit no save、非 TTY）。
+
+Review 结论：通过。合并后 `pytest -q` 为 `221 passed`；已提交并推送 `906e663 feat: add project-level config merge, unified params, and /env TUI dashboard`。Review 后发现三个问题（banner 文案暗示 API 配置、首次 banner 重绘、方向键全屏刷新），修复于 `03ffdbc docs: update project docs for config merge and /env dashboard`。
+
+## 14. 当前阻塞和遗留
 
 | 项目 | 状态 | 说明 |
 |------|------|------|
@@ -214,7 +251,7 @@ Review 结论：第一轮通过。`pytest -q` 为 `184 passed`，`py_compile` �
 | 原生 Windows E2E | 未完成 | 需要在 cmd.exe/PowerShell 验证完整交互 |
 | Phase 5 | 冻结 | 不作为近期默认开发目标 |
 
-## 13. 下一步 3 项
+## 15. 下一步
 
 1. 做原生 cmd.exe/PowerShell 交互验收，重点覆盖审批菜单、diff preview、工具摘要折叠、多轮 tool call、`/resume`、`/compact`。
 2. 继续第二轮结构收口：拆 `/memory`、`/context`、`/plan` 等 command handlers。（`/env` 已收口为 EnvDashboard）
