@@ -52,7 +52,7 @@ class ShellUI:
         table.add_row("/context", "Show token usage and context budget")
         table.add_row("/dashboard", "Open API configuration dashboard")
         table.add_row("/skill", "Manage skills")
-        table.add_row("/env", "Configure API and model settings")
+        table.add_row("/env", "Open interactive config dashboard")
         table.add_row("/memory", "Show memory status and toggle auto-memory")
         table.add_row("/exit", "Exit chat")
         self.console.print(Panel(table, title="Slash Commands", border_style="cyan"))

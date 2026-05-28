@@ -76,6 +76,7 @@ flowchart TD
 - `/compact` 和自动 compression checkpoint 编排已移到 `core/conversation/compaction.py`。
 - 工具审批菜单已移到 `core/tooling/approval.py`。
 - tool call 执行、diff preview、memory auto-allow、工具结果摘要已移到 `core/tooling/execution.py`。
+- `/env` 仪表盘已移到 `core/ui/env_dashboard.py`（全屏 TUI，管理 5 项非 API 参数）。
 
 当前仍留在 `agent.py` 内的主要职责是 REPL 主循环、slash command handler 具体实现、工具注册、plan/memory/env/context 命令 glue、以及 `_run_llm_loop()` 的 orchestration。也就是说，第一轮重构之后，核心服务已经抽离，streaming 状态与工具调用摘要也已有独立模块，但 command handlers 仍未完全模块化。
 
@@ -122,7 +123,7 @@ sequenceDiagram
 | `/context` | `_handle_context_command()` | 展示 token 估算、预算、压缩阈值和消息数 |
 | `/dashboard` | `Dashboard().run()` | 打开 API 配置界面 |
 | `/skill` | `_handle_skill_command()` | list/install/enable/disable |
-| `/env` | `_handle_env_command()` | API key、base-url、model、theme、max-tokens、config edit |
+| `/env` | `_handle_env_command()` → `EnvDashboard` | 全屏 TUI 仪表盘：管理 max_tokens、max_summary_chars、response_render_mode、syntax_theme、auto_memory |
 | `/plan` | `_handle_plan_command()` | enter/show/approve/reject |
 | `/memory` | `_handle_memory_command()` | 查看 memory 状态，开关 auto memory |
 | `/compact` | `_handle_compact_command()` + `ConversationCompactor` | 手动触发累积摘要压缩，写入 checkpoint |
@@ -241,7 +242,7 @@ Auto memory 当前只自动注入 `MEMORY.md` 索引，详细内容需要 Agent 
 
 ## 9. Context 和压缩模型
 
-`ContextManager` 持有实例级 `max_tokens`，由 `Config.max_tokens` 初始化，并在 `/env max-tokens <value>` 时同步更新。它也持有 `max_summary_chars`，用于控制 checkpoint summary 的可选长度策略；设置为 `None` 或 `0` 时不做代码层截断。
+`ContextManager` 持有实例级 `max_tokens` 和 `max_summary_chars`，均从 `Config` 传入（`agent.py:54`）。`max_summary_chars` 设为 `0` 或 `None` 时关闭代码层摘要硬截断，同时 prompt 中不出现字符上限提示。压缩 prompt 中不再使用独立词数限制，统一为 `max_summary_chars` 字符上限。
 
 当前能力：
 
@@ -325,6 +326,7 @@ runtime status 写入：
 | `src/xcode_cli/core/tooling/execution.py` | tool call 执行、权限检查、diff preview、memory auto-allow、结果摘要 |
 | `src/xcode_cli/core/ui/streaming.py` | streaming token buffer、结构化内容检测、final render 触发 |
 | `src/xcode_cli/core/ui/shell.py` | welcome、命令建议、状态栏、用户/助手基础输出 |
+| `src/xcode_cli/core/ui/env_dashboard.py` | `/env` 全屏 TUI 仪表盘，管理 max_tokens、max_summary_chars、render_mode、syntax_theme、auto_memory |
 | `src/xcode_cli/core/llm.py` | OpenAI-compatible API 调用、streaming、tool call 解析 |
 | `src/xcode_cli/core/tool_registry.py` | 工具定义、schema 转换、异常捕获执行 |
 | `src/xcode_cli/core/tools/files.py` | read/write/edit 文件工具 |

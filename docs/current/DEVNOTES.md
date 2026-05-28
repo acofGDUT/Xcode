@@ -224,12 +224,19 @@ Review 结论：第一轮通过，`pytest -q` 为 `184 passed`。已补多轮 to
 
 ## 13. 项目级配置仍不完整
 
-**状态**：Mitigated
+**状态**：Resolved
 **关联**：ROADMAP P2 项目级配置合并
 
-当前权限系统能读取项目 `.xcode/settings.json` 的 permissions，但 `ConfigStore.load()` 还没有通用项目级 merge。
+旧问题：`ConfigStore.load()` 只读全局 `~/.xcode/config.json`，没有项目级覆盖。
 
-影响：不要假设 `.xcode/settings.json` 已经能覆盖 model、base_url、max_tokens、syntax_theme 等配置。
+当前收口：
+
+- `ConfigStore.load()` 在加载全局配置后，检查 `<project>/.xcode/config.json` 是否存在，存在则字段级浅覆盖。
+- 项目文件格式错误时打印 warning 并忽略，不崩。
+- `save()` 仍只写全局文件，项目级 config 由用户手动维护。
+- `max_summary_chars` 补入 Config dataclass，`ContextManager` 通过 `agent.py` 从 Config 传入，不再硬编码。
+- 压缩 prompt 中 300/400 词软约束统一为 `max_summary_chars` 字符上限。
+- `/env` 重写为 `EnvDashboard` TUI，管理 5 项非 API 参数。
 
 ## 14. 工具调用 UI 仍会刷屏
 

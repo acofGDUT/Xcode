@@ -20,9 +20,10 @@
 | AgentRuntime 模块化重构第一轮 | commands/conversation/tooling/ui 服务抽离 | 完成并通过 review | `2026-05-27-agent-runtime-refactor.md` |
 | 输出与工具轮次稳定化 | streaming 去重、tool loop 收口、工具摘要折叠 | 完成并通过重点回归验收 | `2026-05-27-output-tool-loop-stability.md` |
 | `/compact` + `/resume` 体验优化 | compaction Live 进度、resume 方向键菜单 | 完成并通过 review | `2026-05-28-compact-progress-and-resume-ux.md` |
+| 项目级配置合并 + /env 仪表盘 | .xcode/config.json merge、max_summary_chars 收口、/env TUI | 完成并通过 review | `2026-05-28-config-merge-plan.md` |
 | Phase 5 | 生态扩展 | 冻结 | 未开始 |
 
-当前重点不是进入 Phase 5，而是补齐费用估算、原生 Windows 验收，以及 `/compact` / `/resume` 的下一批交互体验优化。
+当前重点不是进入 Phase 5，而是补齐费用估算、原生 Windows 验收，以及继续第二轮结构收口。
 
 ## 2. Phase 1：协议与工具升级
 
@@ -206,10 +207,12 @@ Review 结论：第一轮通过。`pytest -q` 为 `184 passed`，`py_compile` �
 | memory deny 回归测试 | 完成 | 已补 explicit `deny` + memory path 场景，防止未来误放行 |
 | `/compact` 进度反馈 | 完成 | 压缩期间通过 Rich Live 显示 "Compacting context... (Xs)" 动态进度，手动和自动压缩共用 |
 | `/resume` 方向键选择 | 完成 | 改为方向键 ↑/↓ 浏览 + Enter 确认 + Esc 取消，复用审批菜单的 ANSI 光标刷新模式，保留非 TTY 数字输入 fallback |
+| 项目级 config merge | 完成 | `.xcode/config.json` 字段级覆盖全局，`max_summary_chars` 从 Config 统一传入 |
+| `/env` 仪表盘 | 完成 | 重写为全屏 TUI，管理 max_tokens、max_summary_chars、render_mode、syntax_theme、auto_memory 五项，ANSI 局部刷新 |
 | 原生 Windows E2E | 未完成 | 需要在 cmd.exe/PowerShell 验证完整交互 |
 | Phase 5 | 冻结 | 不作为近期默认开发目标 |
 
 ## 13. 下一步 3 项
 
 1. 做原生 cmd.exe/PowerShell 交互验收，重点覆盖审批菜单、diff preview、工具摘要折叠、多轮 tool call、`/resume`、`/compact`。
-2. 继续第二轮结构收口：拆 `/env`、`/memory`、`/context`、`/plan` 等 command handlers。
+2. 继续第二轮结构收口：拆 `/memory`、`/context`、`/plan` 等 command handlers。（`/env` 已收口为 EnvDashboard）

@@ -7,7 +7,7 @@ COMMANDS = {
     "/context": "Show token usage and context budget",
     "/dashboard": "Open API configuration dashboard",
     "/skill": "Manage skills (list/install/enable/disable)",
-    "/env": "Manage API env for current process",
+    "/env": "Open interactive config dashboard",
     "/plan": "Plan mode controls (enter/show/approve/reject)",
     "/memory": "Memory status and auto-memory toggle",
     "/resume": "List and resume previous sessions",
@@ -42,18 +42,11 @@ class SlashCompleter(Completer):
             return
 
         if text.startswith("/env"):
-            for cmd, desc in [
-                ("/env show", "Show current API key status"),
-                ("/env set ", "Set and persist API key"),
-                ("/env unset", "Unset API key from process and config"),
-                ("/env base-url ", "Set provider base URL"),
-                ("/env model ", "Set model name"),
-                ("/env theme ", "Set syntax highlight theme"),
-                ("/env max-tokens ", "Set max token budget for context compression"),
-                ("/env edit", "Open ~/.xcode/config.json in default editor"),
-            ]:
-                if cmd.startswith(text):
-                    yield Completion(cmd, start_position=-len(text), display=f"{cmd} — {desc}")
+            yield Completion(
+                "/env",
+                start_position=-len(text),
+                display="/env — Open interactive config dashboard",
+            )
             return
 
         if text.startswith("/resume"):
