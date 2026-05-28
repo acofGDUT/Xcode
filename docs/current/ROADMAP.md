@@ -33,6 +33,7 @@ Phase 5 生态扩展当前冻结，不作为近期默认开发目标。
 | P1 | memory 自管理权限 | 完成 | Xcode 管理 resolved memory 文件时不再频繁要求用户审核，普通文件仍保留审批 |
 | P1 | 流式输出去重 | 基础收口完成 | 已避免结构化内容 raw + Rich 双重完整输出；后续再评估可替换区域式 streaming |
 | P1 | AgentRuntime 重构 | 第一轮完成 | 已抽出 commands/slash、conversation、tooling、ui 基础模块；后续继续拆 command handlers |
+| P1 | Task 工具免审与 UI 展示 | 未实现 | `task_create/update` 应免审（Xcode 自管理工具），任务变更应格式化展示给用户而非裸 JSON |
 | P1 | 对话回退/分叉设计 | 未实现 | 提供非破坏性的 fork-based rollback |
 | P2 | 项目级配置合并 | 完成 | `.xcode/config.json` 字段级覆盖全局，`max_summary_chars` 等参数已统一定义在 Config，`/env` TUI 仪表盘统一管理 |
 | P2 | 渲染模式完善 | 部分实现 | 明确 streaming/buffer 模式的用户配置和验收 |

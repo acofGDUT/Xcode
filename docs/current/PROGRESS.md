@@ -209,6 +209,8 @@ Review 结论：第一轮通过。`pytest -q` 为 `184 passed`，`py_compile` �
 | `/resume` 方向键选择 | 完成 | 改为方向键 ↑/↓ 浏览 + Enter 确认 + Esc 取消，复用审批菜单的 ANSI 光标刷新模式，保留非 TTY 数字输入 fallback |
 | 项目级 config merge | 完成 | `.xcode/config.json` 字段级覆盖全局，`max_summary_chars` 从 Config 统一传入 |
 | `/env` 仪表盘 | 完成 | 重写为全屏 TUI，管理 max_tokens、max_summary_chars、render_mode、syntax_theme、auto_memory 五项，ANSI 局部刷新 |
+| Task 工具免审与 UI 展示 | 待设计 | `task_create/update` 应免审（参照 memory 模式），任务变更应格式化展示而非裸 JSON |
+| `/resume` last_user_input 不稳定 | 仅记录 | 同一 session 的预览文案随时间变化，用户难识别；后续可考虑首条输入或固定摘要 |
 | 原生 Windows E2E | 未完成 | 需要在 cmd.exe/PowerShell 验证完整交互 |
 | Phase 5 | 冻结 | 不作为近期默认开发目标 |
 

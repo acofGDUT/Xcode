@@ -339,3 +339,32 @@ python -c "from xcode_cli.core.agent import AgentRuntime; print('ok')"
 - 已增加回归测试，锁定 `run_shell()` 必须传入 `encoding` 和 `errors`。
 
 Review 注意：这次修复只覆盖 `run_shell`。其他使用 `subprocess.run(..., text=True)` 的工具如果后续也在 Windows 下读取非默认编码输出，需要单独审查，不要默认已经一起解决。
+
+## 20. Task 工具需要免审和 UI 展示
+
+**状态**：Open
+**关联**：task 工具 / 权限系统 / 输出渲染
+
+现象有两个：
+
+1. **权限**：Xcode 的 `task_create`、`task_update` 是 `is_read_only=False`，默认走 `ask` 审批。但 task 是项目自管理基础设施（和 memory 同类），不应该每次要用户确认。
+2. **展示**：当前工具结果只输出 JSON 字符串，用户需要展开工具结果才能看到 Task 变更。Claude Code 的做法是在 Thinking 区域下方展示格式化的 task 卡片，一目了然。
+
+后续方向：
+
+- `task_create` / `task_update` 参照 memory 模式做 auto-allow，不经过用户审批。
+- 任务创建或状态变更时，在输出中展示格式化 task 列表（状态图标 + 标题 + 进度），类似 Claude Code 的 task 面板。
+- `task_list` 是只读工具，已在 `allow` 列表，无需改权限。
+- 注意 task 工具没有文件路径，不需要 `MemoryManager` 的路径判断——可以直接按 tool_name 放行。
+
+## 21. `/resume` 的 last_user_input 预览不稳定
+
+**状态**：Open
+**关联**：`/resume` 选择体验
+
+现象：`/resume` 列表展示的 `last_user_input` 是 transcript 中最后一条 user 消息。每次用户发新消息后，这个预览就会变化，导致同一个 session 在不同时间点看到的预览文案完全不一样。用户很难通过"最后一条消息"来识别这是哪个 session。
+
+后续方向（仅记录，暂不实现）：
+
+- 可以考虑记录 session 的"简要摘要"或"第一条用户输入"作为不变标识，而非动态变化的最后一条消息。
+- 或者在 session 创建时让用户起名。
