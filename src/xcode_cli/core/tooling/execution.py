@@ -45,7 +45,7 @@ class ToolCallExecutor:
 
         for tc in response.tool_calls:
 
-            level = self.permissions.check(tc.name)
+            level = self.permissions.check(tc.name, is_read_only=self.tools.is_read_only(tc.name))
             if level == "deny":
                 result = f"Permission denied for tool: {tc.name}"
                 self.console.print(f"  [bold red]{result}[/bold red]")

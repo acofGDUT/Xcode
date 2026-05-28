@@ -340,9 +340,9 @@ python -c "from xcode_cli.core.agent import AgentRuntime; print('ok')"
 
 Review 注意：这次修复只覆盖 `run_shell`。其他使用 `subprocess.run(..., text=True)` 的工具如果后续也在 Windows 下读取非默认编码输出，需要单独审查，不要默认已经一起解决。
 
-## 20. Task 工具需要免审和 UI 展示
+## 20. Task 工具免审与 UI 展示
 
-**状态**：Open
+**状态**：Resolved
 **关联**：task 工具 / 权限系统 / 输出渲染
 
 现象有两个：
@@ -350,12 +350,29 @@ Review 注意：这次修复只覆盖 `run_shell`。其他使用 `subprocess.run
 1. **权限**：Xcode 的 `task_create`、`task_update` 是 `is_read_only=False`，默认走 `ask` 审批。但 task 是项目自管理基础设施（和 memory 同类），不应该每次要用户确认。
 2. **展示**：当前工具结果只输出 JSON 字符串，用户需要展开工具结果才能看到 Task 变更。Claude Code 的做法是在 Thinking 区域下方展示格式化的 task 卡片，一目了然。
 
-后续方向：
+2026-05-28 已完成：
 
-- `task_create` / `task_update` 参照 memory 模式做 auto-allow，不经过用户审批。
-- 任务创建或状态变更时，在输出中展示格式化 task 列表（状态图标 + 标题 + 进度），类似 Claude Code 的 task 面板。
-- `task_list` 是只读工具，已在 `allow` 列表，无需改权限。
-- 注意 task 工具没有文件路径，不需要 `MemoryManager` 的路径判断——可以直接按 tool_name 放行。
+- `task_create` / `task_update` 在 `_default_level()` 中返回 `allow`（权限免审）。
+- `PermissionManager.check()` 新增 `is_read_only` 参数：只读工具无显式 deny 时自动 allow。收口了 `task_list`、`exit_plan_mode` 等 `is_read_only=True` 但之前未生效的工具。
+- `ToolRegistry.is_read_only()` 查询方法，供 `ToolExecutor` 传参。
+- `AgentRuntime._render_task_panel()` 在一轮工具执行后检测 task 工具调用并渲染 task 面板（◻/◐/✓ + 标题 + 颜色区分）。
+- 用户仍可通过 settings.json 显式 deny/ask 覆盖。
+- 测试：`test_task_permissions.py`（8）、`test_task_display.py`（4），全量 236 passed。
+
+**当前实现边界 — 瞬时渲染而非持久展示**：
+
+当前 task 面板是在每轮 LLM 工具调用执行完毕后渲染一次：用户看到 task 面板出现在输出流中，新的工具结果和 LLM 输出会把它向上推出可视区域。Claude Code 的做法是将 task 列表持续挂在终端底部 toolbar 区域，始终可见。
+
+这不是 bug，是刻意保持简单的第一版实现：
+- 瞬时渲染不挑终端（普通 print 即可，不依赖 prompt_toolkit 的 bottom_toolbar 或 ANSI 区域预留）。
+- 不引入额外的输出区域管理（在 Rich Live + Thinking 动画 + 流式输出之上再加一层驻留区域会显著增加终端控制复杂度）。
+- 原生 Windows cmd.exe 对 bottom_toolbar 和固定区域的兼容性需要单独验证。
+
+**待优化方向**（后续迭代，不是当前任务）：
+
+- 探索用 prompt_toolkit `bottom_toolbar` 或 Rich `Live` 固定区域将 task 面板持续挂在终端底部。
+- 或者在每次新一轮 Thinking/输出前做轻量刷新，让用户一眼看到当前 task 状态而不用回滚。
+- 优先在原生 Windows cmd.exe/PowerShell 验证热键和固定区域的行为之后再决定方案。
 
 ## 21. `/resume` 的 last_user_input 预览不稳定
 

@@ -49,5 +49,9 @@ class ToolRegistry:
         except Exception as exc:
             return f"Tool error: {exc}"
 
+    def is_read_only(self, name: str) -> bool:
+        tool = self._tools.get(name)
+        return tool.is_read_only if tool else False
+
     def list_names(self) -> list[str]:
         return list(self._tools.keys())

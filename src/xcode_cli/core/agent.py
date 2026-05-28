@@ -451,6 +451,36 @@ class AgentRuntime:
     def _render_assistant_prefix(self) -> None:
         self.shell_ui.render_assistant_prefix()
 
+    def _render_task_panel(self, tool_calls: list) -> None:
+        has_task_tool = any(tc.name in {"task_create", "task_update"} for tc in tool_calls)
+        if not has_task_tool:
+            return
+
+        tasks = self.task_tracker.list_all()
+        visible = [t for t in tasks if t.status != "deleted"]
+        if not visible:
+            return
+
+        status_icons = {
+            "pending": "◻",
+            "in_progress": "◐",
+            "completed": "✓",
+        }
+
+        lines = ["[bold cyan]Tasks[/bold cyan]"]
+        for task in visible:
+            icon = status_icons.get(task.status, "?")
+            if task.status == "completed":
+                color = "green"
+            elif task.status == "in_progress":
+                color = "yellow"
+            else:
+                color = "dim"
+            lines.append(f"  [{color}]{icon} {task.subject}[/{color}]")
+
+        self.console.print()
+        self.console.print("\n".join(lines))
+
     def _run_llm_loop(self, history: list[dict[str, Any]], system_prompt: str) -> str:
         cfg = self.config_store.load()
         render_mode = cfg.response_render_mode
@@ -571,6 +601,7 @@ class AgentRuntime:
             self._tool_call_count += tool_result.executed_count
             history.append(tool_result.assistant_message)
             history.extend(tool_result.tool_messages)
+            self._render_task_panel(response.tool_calls)
 
             if self._session_id:
                 self.sessions.append_message(self._session_id, tool_result.assistant_message)

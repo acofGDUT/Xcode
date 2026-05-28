@@ -23,7 +23,7 @@ class PermissionManager:
             raise ValueError(f"Invalid permission level: {level}")
         self.session_rules[tool_name] = level
 
-    def check(self, tool_name: str) -> str:
+    def check(self, tool_name: str, is_read_only: bool = False) -> str:
         session_level = self.session_rules.get(tool_name)
         if session_level in self.VALID_LEVELS:
             return session_level
@@ -35,6 +35,9 @@ class PermissionManager:
         global_level = self._load_global_rules().get(tool_name)
         if global_level in self.VALID_LEVELS:
             return global_level
+
+        if is_read_only:
+            return "allow"
 
         return self._default_level(tool_name)
 
@@ -65,6 +68,8 @@ class PermissionManager:
         return cleaned
 
     def _default_level(self, tool_name: str) -> str:
+        if tool_name in {"task_create", "task_update"}:
+            return "allow"
         if tool_name == "run_shell":
             return "ask"
         if tool_name in {"write_file", "edit_file"}:
