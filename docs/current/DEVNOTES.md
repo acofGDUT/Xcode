@@ -385,3 +385,41 @@ Review 注意：这次修复只覆盖 `run_shell`。其他使用 `subprocess.run
 
 - 可以考虑记录 session 的"简要摘要"或"第一条用户输入"作为不变标识，而非动态变化的最后一条消息。
 - 或者在 session 创建时让用户起名。
+
+## 22. Textual Batch 4/5 hardening
+
+**状态**：Mitigated
+**关联**：Textual Claude-style UI / slash command / task slots / resume selection / compacting state
+
+背景：Batch 4/5 要求 Textual path 支持必需 slash command，并补 task/status/pet 插槽。第一轮只做了入口和事件骨架，`/resume`、`/compact`、`/env`、`/plan` 仍偏浅；本轮 hardening 将这些路径接到真实 runtime 服务和 ChatApp 消费层，但仍不做默认入口切换。
+
+当前收口：
+
+- `RuntimeController` 的 `/resume` 已读取真实 `SessionStore.list_sessions()`，发出包含 session id、最近输入、消息数、checkpoint 标记的 `ResumeListLoaded`。
+- `ResumeSessionCommand` 已改用 `SessionResumeBuilder` 做 checkpoint-aware 历史恢复：找到最后一个 `compaction_checkpoint`，取 summary + checkpoint 后的消息，按 `max_tokens * 0.6` token budget 裁剪。行为与 legacy `ResumeCommandService` 一致。无 `context_manager` 时回退到原始 `load_history()`。
+- `ResumeSessionCommand` 失败语义已修复：session store 不存在或 session id 不在 `list_sessions()` 结果中时发 `UICommandFailed`；`SessionResumeBuilder` 返回空 history 时也发 `UICommandFailed`。
+- ChatApp 收到 `ResumeListLoaded` 后进入 resume selection 状态：`ResumeSelector` 作为 transient widget 渲染为纯文本样式（无边框、无背景），通过 `render()` 输出带 `>` 选中标记的 session 列表。长列表最多显示 10 条 session，并显示当前范围；选中项越过窗口底部/顶部时窗口跟随滚动。导航时只更新 widget 内部状态，不向 `RichLog` 写入重复内容。
+- `ResumeCompleted` 事件携带 legacy 恢复元数据（`restored_from_checkpoint`、`estimated_tokens`、`last_user_input`），ChatApp 渲染为与 legacy `/resume` 一致的多行系统通知。
+- 取消显示 `Cancelled.`，空 session 提示为 `No recent sessions found for this project.`。
+- `CompactCommand` 已直接调用 `ContextManager.compress()`，不复用 legacy Rich Live；成功发 `CompactionCompleted`，无内容发 `CompactionSkipped`，异常发 `CompactionFailed`。
+- `/compact` 是原子 session mutation：`RuntimeController._is_compacting` 标记在 compact 开始时设置，完成/跳过/失败时清除；compacting 期间 `SubmitUserInputCommand` 和 `RunSlashCommandCommand` 被拒绝并返回 `UICommandFailed`。
+- ChatApp 消费 `CompactionStarted/Completed/Skipped/Failed` 管理 UI 层 `_is_compacting`，期间输入提交显示 "Compacting context... please wait." 提示。
+- `/compact` 继续保持 active turn / pending permission 并发保护。
+- `/plan enter/show/approve/reject` 已接入 `PlanMode` 状态机，并通过 `PlanUpdated` / `StatusUpdated` 通知 UI。
+- `/env` 明确是 read-only display；`SaveEnvCommand` 仍可用于后续最小编辑 UI，事件进入 UI 前会脱敏。
+- `ChatApp` 已消费 `ResumeListLoaded`、`ResumeCompleted`、`ConfigUpdated`、`PlanUpdated`、`PlanApprovalRequested`。
+- `ChatApp` 维护当前 task 列表，`TaskStateChanged` 会生成聚合后的精简 `TaskSnapshotBlock`，并把 in-progress task 显示到 active-turn 区域。
+- `StatusBar` 已通过 `StatusPresenter` 生成单行状态；`PetSurface` 仍是隐藏插槽，不加载资源。
+- 已检查 `docs/current/DEVNOTES.md`，当前 UTF-8 读取未发现明显 mojibake 模式。
+
+风险：
+
+- Textual path 目前仍不能标记 default-ready；它还缺 `/env` 编辑 screen、`run_shell` stdout/stderr capture 和原生 Windows E2E。
+- `/resume` 选择器已是纯文本 transient widget，恢复反馈已与 legacy 对齐，但还不是最终 screen（无搜索、无预览扩展）。
+- `/env` 当前明确为只读展示；如果要编辑，后续必须通过 `SaveEnvCommand`，不能让 Widget 直接写配置。
+- `/compact` 同步执行，未做 worker 化；长 LLM 压缩可能导致 UI 冻结，但至少输入已被阻塞不会误操作。
+
+验证记录：
+
+- Batch 4/5 hardening 第四轮全量回归：`pytest -q`，passed。
+- 编译检查：`python -m py_compile src/xcode_cli/core/runtime/controller.py src/xcode_cli/core/ui/textual/app.py src/xcode_cli/core/ui/textual/widgets.py`，OK。

@@ -35,9 +35,20 @@ def root(ctx: typer.Context) -> None:
 
 
 @app.command()
-def chat() -> None:
+def chat(
+    textual: bool = typer.Option(False, "--textual", help="Use Textual-based UI (experimental)"),
+    legacy: bool = typer.Option(False, "--legacy", help="Use legacy prompt_toolkit UI"),
+) -> None:
     """Start interactive chat session."""
-    AgentRuntime().run_chat()
+    if textual:
+        from xcode_cli.core.runtime.services import RuntimeServices
+        from xcode_cli.core.ui.textual.app import ChatApp
+
+        services = RuntimeServices.create()
+        app = ChatApp(controller=services.create_textual_controller())
+        app.run()
+    else:
+        AgentRuntime().run_chat()
 
 
 @app.command()

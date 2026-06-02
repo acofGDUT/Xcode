@@ -15,6 +15,7 @@ Codex 在 Xcode 项目中默认担任“强 Agent / 架构 Agent”角色。
 - 代码审查：review Coding Agent 的实现，优先发现 bug、行为回归、缺失测试和架构偏移。
 - Git 管理：负责查看变更、区分用户改动和 agent 改动、协助提交前检查。
 - 文档维护：保持 README、ARCHITECTURE、DEVNOTES、PROGRESS、ROADMAP 等核心文档同步。
+- SDD 管理：默认采用 Spec-Driven Development，把需求先收敛为 spec / plan / coding brief，再交给 Coding Agent 实现，最后由 Codex review 并同步项目跟踪文档。
 
 ## 默认工作边界
 
@@ -23,6 +24,23 @@ Codex 在 Xcode 项目中默认担任“强 Agent / 架构 Agent”角色。
 - 文档类更新属于 Codex 的职责范围，可以在用户明确要求时直接执行。
 - Codex 不应随意回滚他人改动，不应覆盖未理解的脏工作区内容。
 - Codex 不应为了减少短期工作量而引入过度抽象；三个类似函数不等价于必须抽象基类。
+- 本项目默认走 SDD，不默认走 TDD。测试仍然作为验收和回归保护，但不要求每次代码改动都严格先写 failing test，除非用户或具体计划明确要求。
+
+## 默认 SDD 工作流
+
+本项目默认采用 SDD（Spec-Driven Development）：
+
+```text
+Spec -> Plan -> Implementation -> Review -> Progress Tracking
+```
+
+- Spec：明确目标、用户体验、架构边界、非目标和风险。
+- Plan：拆成 Coding Agent 可执行任务，写清文件范围、约束、实现建议和验收标准。
+- Implementation：Coding Agent 按 plan 实现。
+- Review：Codex 按 P0/P1/P2 审查行为、架构、测试和文档。
+- Progress Tracking：Codex 同步 `PROGRESS.md`、`ARCHITECTURE.md`、`DEVNOTES.md`、必要时同步 `ROADMAP.md`。
+
+详细规范见 `docs/current/SDD开发.md`。
 
 ## 与 Coding Agent 的分工
 
@@ -71,11 +89,12 @@ Review 输出应以问题为主，按严重程度排序，并提供文件和行�
 接手项目或进行架构判断前，优先按以下顺序阅读：
 
 1. `docs/current/PROGRESS.md`
-2. `docs/current/ARCHITECTURE.md`
-3. `docs/current/ROADMAP.md`
-4. `docs/current/DEVNOTES.md`
-5. `PHASE*_ACCEPTANCE.md`
-6. `UI_REDESIGN.md`
+2. `docs/current/SDD开发.md`
+3. `docs/current/ARCHITECTURE.md`
+4. `docs/current/ROADMAP.md`
+5. `docs/current/DEVNOTES.md`
+6. `PHASE*_ACCEPTANCE.md`
+7. `UI_REDESIGN.md`
 
 根目录的 `ARCHITECTURE.md`、`ROADMAP.md`、`PROGRESS.md`、`DEVNOTES.md` 现在只作为兼容入口。旧版内容保存在 `docs/old/2026-05-25-before-docs-restructure/`。
 

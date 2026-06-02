@@ -5,6 +5,7 @@ from prompt_toolkit.completion import Completer, Completion
 COMMANDS = {
     "/help": "Show available commands",
     "/context": "Show token usage and context budget",
+    "/tasks": "Show current task list",
     "/dashboard": "Open API configuration dashboard",
     "/skill": "Manage skills (list/install/enable/disable)",
     "/env": "Open interactive config dashboard",

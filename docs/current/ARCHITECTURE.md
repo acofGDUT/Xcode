@@ -80,6 +80,37 @@ flowchart TD
 
 当前仍留在 `agent.py` 内的主要职责是 REPL 主循环、slash command handler 具体实现、工具注册、plan/memory/env/context 命令 glue、以及 `_run_llm_loop()` 的 orchestration。也就是说，第一轮重构之后，核心服务已经抽离，streaming 状态与工具调用摘要也已有独立模块，但 command handlers 仍未完全模块化。
 
+### Textual 开发路径
+
+Textual Claude-style UI 目前是开发路径，不是默认入口。它的核心模块是：
+
+| 文件 | 职责 |
+|------|------|
+| `core/runtime/services.py` | 组装 Config、LLM、ToolRegistry、PermissionManager、MemoryManager、TaskTracker 等共享服务 |
+| `core/runtime/controller.py` | 消费 `UICommand`，驱动 agent/tool/slash/runtime 操作，并只通过 `UIEvent` 向 UI 汇报 |
+| `core/runtime/agent_engine.py` | UI-free LLM/tool turn loop，通过回调发出 streaming、tool started/finished/output/error |
+| `core/ui/commands.py` | Textual path 的用户意图命令模型 |
+| `core/ui/events.py` | Textual path 的事实事件模型 |
+| `core/ui/state.py` | UI-only message blocks、current-turn surfaces 和 pending permission 状态 |
+| `core/ui/presenters.py` | Task、Status、ActiveTurn、Pet 等 view model 转换 |
+| `core/ui/textual/app.py` | Textual ChatApp，消费事件并更新 UIStore/widgets |
+
+Batch 4/5 hardening 后，Textual path 已补齐这些基础能力：
+
+- `RunSlashCommandCommand` 支持 `/help`、`/context`、`/tasks`、`/compact`、`/resume`、`/env`、`/memory`、`/plan`、`/exit` 的 UIEvent 分发。
+- `/compact` 在 active turn 或 pending permission 存在时拒绝执行，避免并发修改 history/surfaces。
+- `/compact` 是原子 session mutation：`RuntimeController._is_compacting` 标记在 compact 开始时设置，完成/跳过/失败时清除；compacting 期间 `SubmitUserInputCommand` 和 `RunSlashCommandCommand` 被拒绝。ChatApp 消费 `CompactionStarted/Completed/Skipped/Failed` 管理 UI 层 `_is_compacting`，期间输入提交显示提示。
+- `/compact` 成功/跳过/失败分别发出 `CompactionCompleted`、`CompactionSkipped`、`CompactionFailed`，Textual path 不调用 Rich Live。
+- `/resume` 会先 fail closed pending permission，并发出 transient surface 清理信号；随后从真实 `SessionStore` 发出 `ResumeListLoaded`，ChatApp 进入 resume selection 状态。`ResumeSelector` 作为 transient widget 渲染为纯文本样式（无边框、无背景），通过 `render()` 输出带 `>` 选中标记的 session 列表，导航时只更新 widget 内部状态，不向 `RichLog` 写入重复内容。长列表最多显示 10 条 session，并显示当前范围；选中项越过窗口底部/顶部时窗口跟随滚动，避免 cmd.exe/PowerShell 中选中项移出可视区域。`ResumeSessionCommand` 改用 `SessionResumeBuilder` 做 checkpoint-aware 历史恢复（summary + post-checkpoint messages + token budget 裁剪），无 `context_manager` 时回退到原始 `load_history()`。成功恢复后 `ResumeCompleted` 携带 legacy 元数据（checkpoint 标记、消息数、token 估算、最近用户输入），ChatApp 渲染为与 legacy `/resume` 一致的多行系统通知。不存在的 session 发 `UICommandFailed`。取消显示 `Cancelled.`。
+- `/plan enter/show/approve/reject` 已接入 `PlanMode`，并通过 `PlanUpdated` / `StatusUpdated` 汇报。
+- `/env` 当前明确为只读展示；后续编辑应继续通过 `SaveEnvCommand`。
+- `SaveEnvCommand` 在生成 `ConfigUpdated` 前对敏感字段脱敏。
+- `task_create` / `task_update` 执行后发出 `TaskStateChanged`，`ChatApp` 维护当前 task 列表，将其转成聚合的精简 `TaskSnapshotBlock`，并把 in-progress task 显示到 active-turn 区域。
+- `StatusBar` 通过 `StatusPresenter` 渲染单行状态。
+- `PetSurface` / `PetState` / `PetViewModel` 仅作为隐藏插槽存在，默认不加载资源。
+
+当前 Textual 边界：`/resume` 选择器已为纯文本 transient widget，不再向 RichLog 写入重复内容；恢复反馈已与 legacy `/resume` 对齐；`/env` 还不是完整编辑 screen；`run_shell` stdout/stderr capture、默认入口切换和原生 Windows 全流程验收仍未完成。
+
 ## 4. 普通对话数据流
 
 ```mermaid
@@ -305,6 +336,8 @@ runtime status 写入：
 ### `/resume`
 
 `/resume` 是当前恢复入口。TTY 环境下通过方向键 ↑/↓ 浏览 + Enter 确认 + Esc 取消选择 session（复用 `approval.py` 的 `read_key()` 和 ANSI 光标刷新模式），列表项显示时间、最近输入预览和 checkpoint 标记。非 TTY 环境回退到数字输入。选中 session 后，`SessionResumeBuilder` 读取 transcript 并构造 budgeted history。
+
+Textual path 的 `ResumeSessionCommand` 现在也使用 `SessionResumeBuilder`，行为与 legacy `ResumeCommandService` 一致。
 
 恢复规则：
 

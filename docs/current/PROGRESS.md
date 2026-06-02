@@ -2,7 +2,7 @@
 
 > 本文档记录项目如何一步步走到现在。当前实现细节见 `ARCHITECTURE.md`，未来计划见 `ROADMAP.md`，已知问题和设计取舍见 `DEVNOTES.md`。
 
-最后更新：2026-05-28
+最后更新：2026-06-02
 
 ## 1. 当前状态总览
 
@@ -22,6 +22,8 @@
 | `/compact` + `/resume` 体验优化 | compaction Live 进度、resume 方向键菜单 | 完成并通过 review | `2026-05-28-compact-progress-and-resume-ux.md` |
 | 项目级配置合并 + /env 仪表盘 | .xcode/config.json merge、max_summary_chars 收口、/env TUI | 完成并通过 review | `2026-05-28-config-merge-plan.md` |
 | Task 工具免审 + UI 面板 + is_read_only 权限收口 | task_create/update 免审、瞬时 task 面板、只读工具默认 allow | 完成并通过 review | `2026-05-28-task-auto-allow-and-ui-plan.md` |
+| Textual Claude-style UI Batch 4/5 | slash command 事件化、task/status/pet slots | 完成定向实现，等待更广验收 | `2026-06-01-textual-claude-style-ui-implementation-plan.md` |
+| Textual Batch 4/5 hardening | /resume 选择交互、/compact 状态管理、失败语义修复 | 完成定向验收 | 同上 |
 | Phase 5 | 生态扩展 | 冻结 | 未开始 |
 
 当前重点不是进入 Phase 5，而是补齐费用估算、原生 Windows 验收，以及继续第二轮结构收口。
@@ -231,7 +233,65 @@ Review 结论：通过。`pytest -q` 为 `208 passed`；已提交并推送 `3f8c
 
 Review 结论：通过。合并后 `pytest -q` 为 `221 passed`；已提交并推送 `906e663 feat: add project-level config merge, unified params, and /env TUI dashboard`。Review 后发现三个问题（banner 文案暗示 API 配置、首次 banner 重绘、方向键全屏刷新），修复于 `03ffdbc docs: update project docs for config merge and /env dashboard`。
 
-## 14. 当前阻塞和遗留
+## 14. Textual Claude-style UI Batch 4/5 hardening：2026-06-02
+
+背景：Textual 路径已经具备 ChatApp、RuntimeController、streaming、工具摘要、审批和 diff/current-turn surface 基础能力。第一轮 Batch 4/5 只把 slash command 和 task/status/pet slots 做成事件骨架，本轮继续补真实 runtime 服务连接和 ChatApp 消费层。
+
+完成内容：
+
+- `RuntimeController` 的 `RunSlashCommandCommand` 为 `/help`、`/context`、`/tasks`、`/env`、`/memory`、`/plan`、`/compact`、`/resume`、`/exit` 走 UIEvent 路径。
+- `/resume` 接入真实 `SessionStore.list_sessions()`，列表事件包含 session id、最近输入、消息数、checkpoint 标记；`ResumeSessionCommand` 可通过 `load_history()` 恢复指定 session。
+- `/compact` 直接调用 `ContextManager.compress()`，不复用 legacy Rich Live；成功/跳过/失败分别发 `CompactionCompleted`、`CompactionSkipped`、`CompactionFailed`。
+- `/compact` 在已有 turn 或 pending permission 时 fail closed，避免压缩与工具审批/agent turn 并发污染状态。
+- `/plan enter/show/approve/reject` 接入 `PlanMode` 状态机，避免走 legacy console 文案。
+- `/env` 明确为 read-only display；`SaveEnvCommand` 保留为后续最小编辑 UI 的入口。
+- `SaveEnvCommand` 对 `api_key` 等敏感字段做 UI 事件前脱敏。
+- `RuntimeController` 接入 `TaskTracker`；`task_create` / `task_update` 执行后发出 `TaskStateChanged`。
+- `ChatApp` 消费 `ResumeListLoaded`、`ResumeCompleted`、`ConfigUpdated`、`PlanUpdated`、`PlanApprovalRequested`。
+- `ChatApp` 消费 `TaskStateChanged`，维护当前 task 列表，生成聚合后的精简 `TaskSnapshotBlock`，并把 in-progress task 显示到 active-turn 区域。
+- `TaskPresenter`、`StatusPresenter`、`ActiveTurnPresenter`、`PetPresenter` 补齐 batch5 slots；pet 默认隐藏、无资源加载。
+- `StatusBar` 改为通过 `StatusPresenter` 输出单行状态。
+- `RuntimeServices.create_textual_controller()` 传入共享 `task_tracker`、`SessionStore`、`ContextManager` 和 `PlanMode`，保持 Textual path 与工具注册/会话/压缩/计划状态一致。
+- 新增测试：`tests/test_textual_slash_commands.py`、`tests/test_task_status_pet_slots.py`；同步旧 runtime/Textual 测试到 batch4 slash 契约。
+
+**第二轮 hardening（2026-06-02）**：
+
+- `/resume` Textual 最小选择交互：`ResumeListLoaded` 到达 ChatApp 后进入 resume selection 状态，`ResumeSelector` widget 显示 session 列表，支持 up/down/j/k 导航、enter 确认、escape 取消。选择期间禁用普通消息提交。
+- `ResumeSessionCommand` 失败语义修复：session store 不存在时发 `UICommandFailed`；session id 不存在时用 `list_sessions()` 校验后发 `UICommandFailed`；不再静默假成功。
+- `/compact` compacting 状态管理：`RuntimeController` 增加 `_is_compacting` 状态，`_handle_compact()` 开始时设置、结束/失败/跳过时清除。compacting 期间 `SubmitUserInputCommand` 和 `RunSlashCommandCommand` 被拒绝并返回 `UICommandFailed`。
+- ChatApp 消费 `CompactionStarted/Completed/Skipped/Failed` 时管理 `_is_compacting` 标记，compacting 期间输入提交显示 "Compacting context... please wait." 提示。
+- `ApprovalAwareInput` 在 resume selection 期间也拦截键盘事件，让 up/down/enter/escape 由 ChatApp 处理。
+- `/env` 仍是 read-only display，本轮不做编辑 screen。
+- 不做 pet 具体 UI，不做默认入口切换。
+
+**第三轮 hardening（2026-06-02）**：
+
+- `ResumeSessionCommand` 改用 `SessionResumeBuilder` 做 checkpoint-aware 历史恢复：找到最后一个 `compaction_checkpoint`，取 summary + checkpoint 后的消息，按 `max_tokens * 0.6` token budget 裁剪。行为与 legacy `/resume` 的 `ResumeCommandService` 一致。无 context_manager 时回退到原始 `load_history()`。
+
+**第四轮 hardening（2026-06-02，Textual resume legacy alignment）**：
+
+- `/resume` 选择器改为纯文本 transient widget：`ResumeSelector.DEFAULT_CSS` 移除边框、背景色、边距，视觉上与普通 transcript 文本一致。`render()` 输出带 `>` 选中标记的 session 列表，样式为 bold cyan（选中）或 dim（未选中），底部显示操作提示。
+- `/resume` 长列表采用窗口化渲染：最多显示 10 条 session，超过 10 条时显示当前范围（例如 `1-10 of 12`），上下移动选中项时窗口跟随滚动，避免选中项移动到 cmd.exe/PowerShell 可视范围之外。
+- `/resume` 选择不再向 `RichLog` 写入重复内容：移除了 `_render_resume_list_notice()` 和 `_append_notice_text()` 方法，导航（up/down）时只更新 `ResumeSelector` widget 内部状态。
+- `ResumeCompleted` 事件扩展了 legacy 恢复元数据：新增 `restored_from_checkpoint`、`estimated_tokens`、`last_user_input` 字段。`RuntimeController._handle_resume_session()` 发出完整元数据。
+- `/resume` 恢复反馈与 legacy `/resume` 输出对齐：`ChatApp._handle_resume_completed()` 渲染多行系统通知，包含 session id、checkpoint 标记、恢复消息数、token 估算、最近用户输入。
+- `/resume` 取消文案改为 `Cancelled.`，与 legacy 一致。
+- `/resume` 空 session 提示改为 `No recent sessions found for this project.`，与 legacy 一致。
+
+当前边界：
+
+- Textual 仍不是默认入口，不能标记为 default-ready。
+- `/resume` 选择器已是纯文本 transient widget，恢复反馈已与 legacy 对齐，但还不是最终 screen（无搜索、无预览扩展）。
+- `/env` 当前明确是只读展示，还不是完整编辑 screen。
+- `/compact` 是原子 session mutation，期间拒绝新输入；同步执行，未做 worker 化。
+- `run_shell` stdout/stderr capture、Textual 默认切换、PowerShell/cmd.exe 全流程验收仍属于后续 Batch 6 前 blocker。
+
+验证：
+
+- `python -m py_compile src/xcode_cli/core/runtime/controller.py src/xcode_cli/core/ui/textual/app.py src/xcode_cli/core/ui/textual/widgets.py`：OK。
+- `pytest -q`：passed。
+
+## 15. 当前阻塞和遗留
 
 | 项目 | 状态 | 说明 |
 |------|------|------|
@@ -248,11 +308,13 @@ Review 结论：通过。合并后 `pytest -q` 为 `221 passed`；已提交并�
 | 项目级 config merge | 完成 | `.xcode/config.json` 字段级覆盖全局，`max_summary_chars` 从 Config 统一传入 |
 | `/env` 仪表盘 | 完成 | 重写为全屏 TUI，管理 max_tokens、max_summary_chars、render_mode、syntax_theme、auto_memory 五项，ANSI 局部刷新 |
 | Task 工具免审与 UI 展示 | 基础完成，持久化展示待后续迭代 | `task_create/update` auto-allow + 面板渲染 + `is_read_only` 权限消费已收口；当前面板为瞬时渲染，非 Claude Code 式的持久底部驻留 |
+| Textual Claude-style UI | Batch 4/5 hardening 完成（含 resume legacy alignment + compacting state），未默认切换 | slash commands 已接真实 resume/compact/plan 基础服务，task/status/pet slots 已接入 ChatApp；`/resume` 选择器为纯文本 transient widget，恢复反馈已与 legacy 对齐，`/compact` 期间拒绝新输入，`/env` 仍是 read-only；完整编辑 screen、run_shell capture、Windows E2E、默认入口切换仍未完成 |
 | `/resume` last_user_input 不稳定 | 仅记录 | 同一 session 的预览文案随时间变化，用户难识别；后续可考虑首条输入或固定摘要 |
+| `/resume` legacy header 重复渲染 | Bug | 老版本 `/resume` 上下选择时，`_refresh_session_list` 的 ANSI 光标跳行数与 Rich `console.print()` 实际输出行数不一致，导致 "Select session to resume: (↑/↓, Enter, Esc)" 行重复堆积。根因：`_refresh_session_list` 用 `count = len(sessions) + 1` 估算行数，但 Rich 可能因 terminal width 自动换行或添加额外转义序列，使实际行数 > count。修复方向：header 只在首次渲染时打印，`_refresh_session_list` 只刷新 item 行；或用 Rich `Live` / `Panel` 整体替换而非 ANSI 光标控制。 |
 | 原生 Windows E2E | 未完成 | 需要在 cmd.exe/PowerShell 验证完整交互 |
 | Phase 5 | 冻结 | 不作为近期默认开发目标 |
 
-## 15. 下一步
+## 16. 下一步
 
 1. 做原生 cmd.exe/PowerShell 交互验收，重点覆盖审批菜单、diff preview、工具摘要折叠、多轮 tool call、`/resume`、`/compact`。
 2. 继续第二轮结构收口：拆 `/memory`、`/context`、`/plan` 等 command handlers。（`/env` 已收口为 EnvDashboard）

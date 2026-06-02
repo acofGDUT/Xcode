@@ -5,6 +5,7 @@
 本目录保留当前权威文档正文：
 
 - `PROGRESS.md`
+- `SDD开发.md`
 - `ARCHITECTURE.md`
 - `ROADMAP.md`
 - `DEVNOTES.md`
