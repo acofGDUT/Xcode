@@ -17,6 +17,8 @@ SDD 关注的是“规格驱动开发”，不是“测试先行开发”。测�
 
 ## 2. 文档分工
 
+SDD 流程文档默认使用中文，包括 spec、plan、coding brief、review handoff 和项目跟踪更新。代码标识符、命令、路径、类名、函数名、协议名和必要英文术语可以保留英文。
+
 | 阶段 | 文档/产物 | 作用 |
 |------|-----------|------|
 | Spec | `docs/superpowers/specs/*.md` 或当前对话中的设计稿 | 定义目标、用户体验、架构边界、非目标、风险 |
@@ -24,6 +26,8 @@ SDD 关注的是“规格驱动开发”，不是“测试先行开发”。测�
 | Implementation | 代码变更 | coding agent 按 plan 实现 |
 | Review | Codex review 输出 | 按 P0/P1/P2 找 bug、回归、架构偏移、测试缺口、文档不一致 |
 | Progress Tracking | `docs/current/PROGRESS.md`、`ARCHITECTURE.md`、`DEVNOTES.md`、`ROADMAP.md` | 记录当前状态、架构事实、已知风险、后续方向 |
+
+权威项目跟踪文档默认由 Codex 在 review 后更新。Coding Agent 不默认直接修改 `docs/current/PROGRESS.md`、`ARCHITECTURE.md`、`DEVNOTES.md`、`ROADMAP.md`、`AGENTS.md` 或 `XCODE.md`；除非 plan 明确写出允许修改的文件和范围。
 
 ## 3. 默认流程
 
@@ -49,6 +53,21 @@ SDD 关注的是“规格驱动开发”，不是“测试先行开发”。测�
 - “把审批选择从按钮改成上下三行”
 
 这类任务可以直接进入 coding brief，但 brief 仍需包含目标、文件范围、约束和验收标准。
+
+### 文档更新分工
+
+默认分工：
+
+- Coding Agent：实现代码、补测试、运行验证，可以记录实现摘要、验收结果或临时 notes。
+- Codex：review 实现，判断架构事实是否成立，然后更新 `PROGRESS.md`、`ARCHITECTURE.md`、`DEVNOTES.md`、必要时更新 `ROADMAP.md`。
+
+禁止默认行为：
+
+- Coding Agent 不应在实现未 review 前把状态写成“完成”。
+- Coding Agent 不应把愿景写进 `ARCHITECTURE.md`，该文档只记录当前真实架构。
+- Coding Agent 不应自行修改 `AGENTS.md` 或 `XCODE.md`。
+
+例外：如果 Codex 写给 Coding Agent 的 plan 明确允许修改某个权威文档的某一节，Coding Agent 可以按限定范围修改；但这些修改仍需 Codex review 后确认。
 
 ### Review 后的小修
 
@@ -102,6 +121,12 @@ Codex 默认是架构/规划/review agent，不默认直接写功能代码。
 - 验收标准：要跑哪些命令、手工如何验证。
 - 文档要求：哪些文档要同步。
 - 非目标：本轮明确不做什么，避免 scope 漂移。
+
+默认语言要求：
+
+- 面向用户和 coding agent 的说明使用中文。
+- 命令、路径、代码片段、类型名和测试名保持原样。
+- 如果引用英文架构术语，应在上下文中说明含义，避免只写英文关键词。
 
 ## 7. Review 标准
 

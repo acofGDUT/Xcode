@@ -43,7 +43,7 @@ The root `README.md` is the single documentation index. Detailed current project
 | Document | Answers | Boundary |
 |----------|---------|----------|
 | [docs/current/PROGRESS.md](docs/current/PROGRESS.md) | How the project reached its current state | Phase/Batch history, review conclusions, acceptance state, current next steps |
-| [docs/current/SDD开发.md](docs/current/SDD%E5%BC%80%E5%8F%91.md) | How development work is specified and handed off | Default Spec-Driven Development workflow, Codex/Coding Agent split, testing and review policy |
+| [docs/current/SDD.md](docs/current/SDD.md) | How development work is specified and handed off | Default Spec-Driven Development workflow, Codex/Coding Agent split, testing and review policy |
 | [docs/current/ARCHITECTURE.md](docs/current/ARCHITECTURE.md) | How the system works now | Current component relationships, data flows, memory/context/session/approval models |
 | [docs/current/ROADMAP.md](docs/current/ROADMAP.md) | What remains to build | Future goals, unfinished capabilities, implementation sketches, acceptance ideas |
 | [docs/current/DEVNOTES.md](docs/current/DEVNOTES.md) | Why decisions were made and where risks are | Known issues, design decisions, compatibility limits, validation risks |
@@ -51,7 +51,7 @@ The root `README.md` is the single documentation index. Detailed current project
 Recommended reading order:
 
 1. `docs/current/PROGRESS.md`
-2. `docs/current/SDD开发.md`
+2. `docs/current/SDD.md`
 3. `docs/current/ARCHITECTURE.md`
 4. `docs/current/ROADMAP.md`
 5. `docs/current/DEVNOTES.md`
@@ -67,7 +67,7 @@ Root-level `ARCHITECTURE.md`, `ROADMAP.md`, `PROGRESS.md`, `DEVNOTES.md`, and `�
 | 文档 | 说明 |
 |------|------|
 | [docs/current/PROGRESS.md](docs/current/PROGRESS.md) | 项目是怎么一步步推进到现在的，包含阶段历史、当前状态、阻塞和下一步 |
-| [docs/current/SDD开发.md](docs/current/SDD%E5%BC%80%E5%8F%91.md) | 默认 SDD 开发方式，包含 spec、plan、coding agent、review、项目跟踪文档的分工 |
+| [docs/current/SDD.md](docs/current/SDD.md) | 默认 SDD 开发方式，包含 spec、plan、coding agent、review、项目跟踪文档的分工 |
 | [docs/current/ARCHITECTURE.md](docs/current/ARCHITECTURE.md) | 当前系统怎么工作，包含组件关系、数据流、memory/context/session/approval 模型 |
 | [docs/current/ROADMAP.md](docs/current/ROADMAP.md) | 后续还要做什么，包含未完成能力、目标态和实现草案 |
 | [docs/current/DEVNOTES.md](docs/current/DEVNOTES.md) | 踩坑、边界、设计决策、兼容性风险和问题状态 |
@@ -75,7 +75,7 @@ Root-level `ARCHITECTURE.md`, `ROADMAP.md`, `PROGRESS.md`, `DEVNOTES.md`, and `�
 推荐阅读顺序：
 
 1. [docs/current/PROGRESS.md](docs/current/PROGRESS.md)
-2. [docs/current/SDD开发.md](docs/current/SDD%E5%BC%80%E5%8F%91.md)
+2. [docs/current/SDD.md](docs/current/SDD.md)
 3. [docs/current/ARCHITECTURE.md](docs/current/ARCHITECTURE.md)
 4. [docs/current/ROADMAP.md](docs/current/ROADMAP.md)
 5. [docs/current/DEVNOTES.md](docs/current/DEVNOTES.md)

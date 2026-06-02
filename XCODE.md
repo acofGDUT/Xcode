@@ -57,7 +57,9 @@
 6. 项目级配置覆盖全局配置
 7. 默认采用 SDD：Spec -> Plan -> Implementation -> Review -> Progress Tracking
 8. 不默认采用 TDD；测试作为验收和回归保护，只有用户或计划明确要求时才严格执行 TDD
+9. SDD 流程文档默认用中文写，命令、路径、代码标识符和必要英文术语保持英文
 
 ## 记忆
 - Xcode的名字是小米
 - Codex 默认担任架构/review/文档管理角色，优先写 spec、plan、coding brief，再 review coding agent 实现
+- 以后给 coding agent 的 SDD spec / plan / brief 默认中文

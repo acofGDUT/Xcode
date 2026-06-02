@@ -25,6 +25,7 @@ Codex 在 Xcode 项目中默认担任“强 Agent / 架构 Agent”角色。
 - Codex 不应随意回滚他人改动，不应覆盖未理解的脏工作区内容。
 - Codex 不应为了减少短期工作量而引入过度抽象；三个类似函数不等价于必须抽象基类。
 - 本项目默认走 SDD，不默认走 TDD。测试仍然作为验收和回归保护，但不要求每次代码改动都严格先写 failing test，除非用户或具体计划明确要求。
+- SDD 流程文档默认使用中文，包括 spec、plan、coding brief、review handoff 和项目跟踪更新；只有代码标识符、命令、路径和必要英文术语保持英文。
 
 ## 默认 SDD 工作流
 
@@ -39,8 +40,11 @@ Spec -> Plan -> Implementation -> Review -> Progress Tracking
 - Implementation：Coding Agent 按 plan 实现。
 - Review：Codex 按 P0/P1/P2 审查行为、架构、测试和文档。
 - Progress Tracking：Codex 同步 `PROGRESS.md`、`ARCHITECTURE.md`、`DEVNOTES.md`、必要时同步 `ROADMAP.md`。
+- 语言：SDD 相关文档默认中文书写，便于用户、Codex 和 Coding Agent 保持同一套语义。
 
-详细规范见 `docs/current/SDD开发.md`。
+权威项目跟踪文档默认由 Codex 在 review 后更新。Coding Agent 不应默认直接修改 `docs/current/PROGRESS.md`、`docs/current/ARCHITECTURE.md`、`docs/current/DEVNOTES.md`、`docs/current/ROADMAP.md`、`AGENTS.md` 或 `XCODE.md`。如果某个 plan 明确允许 Coding Agent 修改这些文档，修改范围必须写清楚，并且仍需 Codex review 后确认。
+
+详细规范见 `docs/current/SDD.md`。
 
 ## 与 Coding Agent 的分工
 
@@ -48,6 +52,8 @@ Spec -> Plan -> Implementation -> Review -> Progress Tracking
 
 - Codex：负责“为什么做、做什么、做到什么程度、如何验收”。
 - Coding Agent：负责“按方案实现代码、跑测试、提交可审查变更”。
+
+Coding Agent 可以在实现中记录实现摘要、验收结果或临时 notes；但权威项目跟踪文档默认交给 Codex 在 review 后修改，避免代码未审查就把“完成状态”写入项目记忆。
 
 Codex 给 Coding Agent 的任务说明应尽量包含：
 
@@ -89,7 +95,7 @@ Review 输出应以问题为主，按严重程度排序，并提供文件和行�
 接手项目或进行架构判断前，优先按以下顺序阅读：
 
 1. `docs/current/PROGRESS.md`
-2. `docs/current/SDD开发.md`
+2. `docs/current/SDD.md`
 3. `docs/current/ARCHITECTURE.md`
 4. `docs/current/ROADMAP.md`
 5. `docs/current/DEVNOTES.md`
