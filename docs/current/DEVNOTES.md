@@ -414,12 +414,46 @@ Review 注意：这次修复只覆盖 `run_shell`。其他使用 `subprocess.run
 
 风险：
 
-- Textual path 目前仍不能标记 default-ready；它还缺 `/env` 编辑 screen、`run_shell` stdout/stderr capture 和原生 Windows E2E。
+- Textual path 目前仍不能标记 default-ready；它还缺 `/env` 编辑 screen 和原生 Windows E2E 验收。
 - `/resume` 选择器已是纯文本 transient widget，恢复反馈已与 legacy 对齐，但还不是最终 screen（无搜索、无预览扩展）。
-- `/env` 当前明确为只读展示；如果要编辑，后续必须通过 `SaveEnvCommand`，不能让 Widget 直接写配置。
+- `/env` 当前明确为只读展示，文案已修正；如果要编辑，后续必须通过 `SaveEnvCommand`，不能让 Widget 直接写配置。
 - `/compact` 同步执行，未做 worker 化；长 LLM 压缩可能导致 UI 冻结，但至少输入已被阻塞不会误操作。
+- Textual transcript 持久化当前只写 model-visible message，不写 UI-only event；后续如果增加更丰富的 UI surface，仍要保护这个边界，避免 transcript 被 diff preview、permission prompt、status/task/pet 等内容污染。
+- Textual memory 尚未完整迁移：当前 `/memory` 仍偏基础状态展示，未和 legacy 的完整字段、`/memory auto on|off`、写入后下一轮 system prompt 生效测试完全对齐。执行 `docs/superpowers/plans/2026-06-02-textual-memory-full-migration.md` 时，普通文件审批测试必须避免同步调用 `_execute_tools_in_turn()` 后无人响应审批造成卡死；应在线程中触发、断言 `PermissionRequestEvent`，再用 cancellation 或显式 decision 释放等待。
+
+Batch 6 完成项：
+
+- `/env` 文案修复：`/help` 中描述改为 "Show environment settings (read-only)"。
+- 运行时输出边界审计：确认 Textual runtime 可达路径无直接终端写入；`main.py --textual` 的直接打印仅用于启动回退或运行时错误报告。
+- `run_shell` 输出语义：stdout/stderr 通过 `ToolOutputProduced` 事件进入 Textual UI。
+- Textual session transcript 持久化：普通 final assistant 会进入 `_history`，Textual turn 会把 user、assistant、assistant tool_calls 和 tool result 写入现有 transcript，支持后续 `/resume` 恢复。
+- 审批窄窗口弹性：`ApprovalCard` 已有截断和样式机制，新增测试验证。
+- 启动回退策略：`main.py` 中 `--textual` import 失败可回退到 legacy。
+- Windows 手动验收清单：已创建 `docs/current/TEXTUAL_BATCH6_MANUAL_ACCEPTANCE.md`。
 
 验证记录：
 
-- Batch 4/5 hardening 第四轮全量回归：`pytest -q`，passed。
-- 编译检查：`python -m py_compile src/xcode_cli/core/runtime/controller.py src/xcode_cli/core/ui/textual/app.py src/xcode_cli/core/ui/textual/widgets.py`，OK。
+- Batch 6 全量回归：`pytest -q`，passed。
+- 编译检查：`python -m py_compile src/xcode_cli/main.py src/xcode_cli/core/runtime/agent_engine.py src/xcode_cli/core/runtime/controller.py src/xcode_cli/core/ui/textual/app.py src/xcode_cli/core/ui/textual/widgets.py`，OK。
+
+## 23. Textual UI rendering pipeline 仍未成型
+
+**状态**：Open
+**关联**：Textual UI / Claude Code-style rendering / task and tool display
+
+当前 Textual UI 仍主要是事件到 block/widget 的直接映射。它已经有 transcript、streaming、approval、diff、resume selector、基础 task/status/pet slots，但还没有 Claude Code 式的 normalize -> reorder -> group -> collapse -> expand 管线。
+
+后续方向已记录在 `docs/superpowers/plans/2026-06-02-textual-ui-rendering-pipeline-redesign.md`。执行顺序应是：
+
+1. UI Agent 先输出交互和组件设计稿。
+2. Codex review 设计稿，确认信息架构、显示密度、Windows 约束和 UI-only/transcript 边界。
+3. Coding Agent 再分批实现 view state、tool grouping/collapse、shell progress、thinking 折叠和 task checklist。
+
+设计约束：
+
+- thinking delta、shell progress tick、tool output chunk 不应逐条进入长期 transcript。
+- 当前 turn 动态状态应放进 UI-only view state。
+- read/grep/glob 默认合并摘要，可展开。
+- edit/write 的 diff 和 approval 不得被折叠隐藏。
+- shell 长输出显示 tail、elapsed、line count、byte count，完整输出按需展开。
+- task UI 需要显示任务标题和状态，不能长期停留在 `Tasks: N active`。

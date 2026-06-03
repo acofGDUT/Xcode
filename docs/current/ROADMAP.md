@@ -34,6 +34,8 @@ Phase 5 生态扩展当前冻结，不作为近期默认开发目标。
 | P1 | 流式输出去重 | 基础收口完成 | 已避免结构化内容 raw + Rich 双重完整输出；后续再评估可替换区域式 streaming |
 | P1 | AgentRuntime 重构 | 第一轮完成 | 已抽出 commands/slash、conversation、tooling、ui 基础模块；后续继续拆 command handlers |
 | P1 | Task 工具免审与 UI 展示 | 基础完成 | 免审 + 瞬时面板渲染已实现；`is_read_only` 消费已收口；持久化底部驻留展示（同 Claude Code 的 toolbar 模式）留待后续迭代 |
+| P1 | Textual UI rendering pipeline | 计划中 | 借鉴 Claude Code 的 normalize/reorder/group/collapse/expand 管线，先交给 UI Agent 做设计，再由 Coding Agent 分批实现 |
+| P1 | Textual memory 完整迁移 | 计划已建立，未实现 | 按 `2026-06-02-textual-memory-full-migration.md` 对齐 legacy memory：system prompt、工具注册、权限、写入后生效、`/memory auto on|off`、slash 展示和测试 |
 | P1 | 对话回退/分叉设计 | 未实现 | 提供非破坏性的 fork-based rollback |
 | P2 | 项目级配置合并 | 完成 | `.xcode/config.json` 字段级覆盖全局，`max_summary_chars` 等参数已统一定义在 Config，`/env` TUI 仪表盘统一管理 |
 | P2 | 渲染模式完善 | 部分实现 | 明确 streaming/buffer 模式的用户配置和验收 |

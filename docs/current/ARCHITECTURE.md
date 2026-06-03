@@ -108,8 +108,11 @@ Batch 4/5 hardening 后，Textual path 已补齐这些基础能力：
 - `task_create` / `task_update` 执行后发出 `TaskStateChanged`，`ChatApp` 维护当前 task 列表，将其转成聚合的精简 `TaskSnapshotBlock`，并把 in-progress task 显示到 active-turn 区域。
 - `StatusBar` 通过 `StatusPresenter` 渲染单行状态。
 - `PetSurface` / `PetState` / `PetViewModel` 仅作为隐藏插槽存在，默认不加载资源。
+- Textual 普通 turn 和 tool-call turn 会把 model-visible message 追加到当前 `SessionStore` transcript：user message 在提交时写入，assistant final、assistant tool_calls 和 tool result 由 `AgentEngine` 追加到 `_history` 后按顺序写入 transcript。diff preview、permission UI、status/task/pet 等 UI-only event 不写入 transcript。
 
-当前 Textual 边界：`/resume` 选择器已为纯文本 transient widget，不再向 RichLog 写入重复内容；恢复反馈已与 legacy `/resume` 对齐；`/env` 还不是完整编辑 screen；`run_shell` stdout/stderr capture、默认入口切换和原生 Windows 全流程验收仍未完成。
+当前 Textual 边界：`/resume` 选择器已为纯文本 transient widget，不再向 RichLog 写入重复内容；恢复反馈已与 legacy `/resume` 对齐；`/env` 文案已修正为 read-only；普通对话和工具调用 transcript 已持久化；`run_shell` 输出通过 `ToolOutputProduced` 事件进入 Textual UI，不直接写入终端；`main.py` 中 `--textual` 启动失败可回退到 legacy；审批/diff 窄窗口弹性已验证；Windows E2E 手动验收清单已创建；默认入口切换仍未完成。
+
+Textual memory 当前仍未完整迁移。虽然 `RuntimeServices` 会创建 `MemoryManager`，`system_prompt()` 也走 `build_system_prompt()`，并且 controller 已具备 memory target auto-allow 的基础判断，但 `/memory` 仍只是基础状态 notice，尚未支持和 legacy 对齐的完整展示、`/memory auto on|off`、写入后下一轮 prompt 生效的完整回归测试。计划见 `docs/superpowers/plans/2026-06-02-textual-memory-full-migration.md`。
 
 ## 4. 普通对话数据流
 

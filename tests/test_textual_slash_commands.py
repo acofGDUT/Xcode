@@ -38,6 +38,8 @@ def test_help_slash_command_emits_local_system_notice() -> None:
     assert len(notices) == 1
     assert "/context" in notices[0].content
     assert "/tasks" in notices[0].content
+    assert "editable" not in notices[0].content.lower()
+    assert "read-only" in notices[0].content
     assert not any(
         isinstance(event, StatusUpdated) and event.field == "command"
         for event in events

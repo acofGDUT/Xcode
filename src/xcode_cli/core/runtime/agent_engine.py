@@ -83,11 +83,21 @@ class AgentEngine:
 
             # No tool calls - turn complete
             if not response.tool_calls:
-                return response.content or ""
+                final_content = response.content or ""
+                assistant_msg: dict[str, Any] = {"role": "assistant", "content": final_content}
+                if response.reasoning_content:
+                    assistant_msg["reasoning_content"] = response.reasoning_content
+                history.append(assistant_msg)
+                return final_content
 
             # Execute tools
             if execute_tools is None:
-                return response.content or ""
+                final_content = response.content or ""
+                assistant_msg = {"role": "assistant", "content": final_content}
+                if response.reasoning_content:
+                    assistant_msg["reasoning_content"] = response.reasoning_content
+                history.append(assistant_msg)
+                return final_content
 
             # Notify tool calls started
             for tc in response.tool_calls:

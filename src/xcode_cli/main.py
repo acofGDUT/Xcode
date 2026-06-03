@@ -41,12 +41,21 @@ def chat(
 ) -> None:
     """Start interactive chat session."""
     if textual:
-        from xcode_cli.core.runtime.services import RuntimeServices
-        from xcode_cli.core.ui.textual.app import ChatApp
+        try:
+            from xcode_cli.core.runtime.services import RuntimeServices
+            from xcode_cli.core.ui.textual.app import ChatApp
+        except Exception as exc:
+            console.print(f"[yellow]Textual UI unavailable, falling back to legacy: {exc}[/yellow]")
+            AgentRuntime().run_chat()
+            return
 
         services = RuntimeServices.create()
-        app = ChatApp(controller=services.create_textual_controller())
-        app.run()
+        try:
+            app = ChatApp(controller=services.create_textual_controller())
+            app.run()
+        except Exception as exc:
+            console.print(f"[red]Textual UI exited with error: {exc}[/red]")
+            raise
     else:
         AgentRuntime().run_chat()
 

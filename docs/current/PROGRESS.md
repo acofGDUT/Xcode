@@ -278,20 +278,37 @@ Review 结论：通过。合并后 `pytest -q` 为 `221 passed`；已提交并�
 - `/resume` 取消文案改为 `Cancelled.`，与 legacy 一致。
 - `/resume` 空 session 提示改为 `No recent sessions found for this project.`，与 legacy 一致。
 
+## 15. Textual Batch 6 Default-Ready Blockers：2026-06-02
+
+背景：Textual path 已具备基本功能，但要成为默认入口还需要解决几个 blocker。Batch 6 聚焦于终端输出边界、Windows 交互、`/env` 文案、审批/diff 窄窗口弹性和启动回退策略。
+
+完成内容：
+
+- `/env` 文案修复：`/help` 中 `/env` 描述改为 "Show environment settings (read-only)"，不再误导用户以为可编辑。
+- 运行时输出边界审计：确认 Textual runtime 可达路径（RuntimeController、AgentEngine、ChatApp、widgets）无直接终端写入；`main.py --textual` 仅在启动回退或运行时错误报告时直接打印提示。
+- `run_shell` 输出语义：shell 工具使用 `capture_output=True`，stdout/stderr 通过 `ToolOutputProduced` 事件进入 Textual UI，不直接写入终端。
+- Textual session transcript 持久化：`RuntimeController` 在 Textual turn 中把 user、assistant、assistant tool_calls 和 tool result 等 model-visible message 写入现有 `SessionStore` transcript；`AgentEngine` 会把普通 final assistant 回复追加到 `_history`，确保下一轮上下文和 `/resume` 都能看到 Textual 创建的会话内容。
+- 审批窄窗口弹性：`ApprovalCard` 已有 `max-height: 11`、`_compact_diff_lines(max_lines=4)`、截断标记等机制，新增测试验证长 diff 截断和样式分配。
+- Textual 启动回退策略：`main.py` 中 `--textual` 选项增加 import 异常捕获，失败时回退到 legacy；运行时异常不回退，直接报错。
+- Windows 手动验收清单：创建 `docs/current/TEXTUAL_BATCH6_MANUAL_ACCEPTANCE.md`，覆盖 cmd.exe 和 PowerShell 的关键交互测试项。
+
 当前边界：
 
 - Textual 仍不是默认入口，不能标记为 default-ready。
 - `/resume` 选择器已是纯文本 transient widget，恢复反馈已与 legacy 对齐，但还不是最终 screen（无搜索、无预览扩展）。
-- `/env` 当前明确是只读展示，还不是完整编辑 screen。
-- `/compact` 是原子 session mutation，期间拒绝新输入；同步执行，未做 worker 化。
-- `run_shell` stdout/stderr capture、Textual 默认切换、PowerShell/cmd.exe 全流程验收仍属于后续 Batch 6 前 blocker。
+- `/env` 当前明确是只读展示，文案已修正。
+- `run_shell` 输出已通过事件进入 Textual UI。
+- Textual 普通对话和工具调用 transcript 已写入 `SessionStore`，并有普通 turn、tool-call 顺序、工具错误、工具拒绝、重复 final 防护、session 缺失容错等回归测试。
+- 审批/diff 窄窗口弹性已验证。
+- 启动回退策略已实现（import 失败回退，运行时不回退）。
+- Windows E2E 手动验收清单已创建，待实际执行。
 
 验证：
 
-- `python -m py_compile src/xcode_cli/core/runtime/controller.py src/xcode_cli/core/ui/textual/app.py src/xcode_cli/core/ui/textual/widgets.py`：OK。
-- `pytest -q`：passed。
+- `python -m py_compile src/xcode_cli/main.py src/xcode_cli/core/runtime/agent_engine.py src/xcode_cli/core/runtime/controller.py src/xcode_cli/core/ui/textual/app.py src/xcode_cli/core/ui/textual/widgets.py`：OK。
+- `pytest -q`：`451 passed`。
 
-## 15. 当前阻塞和遗留
+## 16. 当前阻塞和遗留
 
 | 项目 | 状态 | 说明 |
 |------|------|------|
@@ -308,13 +325,14 @@ Review 结论：通过。合并后 `pytest -q` 为 `221 passed`；已提交并�
 | 项目级 config merge | 完成 | `.xcode/config.json` 字段级覆盖全局，`max_summary_chars` 从 Config 统一传入 |
 | `/env` 仪表盘 | 完成 | 重写为全屏 TUI，管理 max_tokens、max_summary_chars、render_mode、syntax_theme、auto_memory 五项，ANSI 局部刷新 |
 | Task 工具免审与 UI 展示 | 基础完成，持久化展示待后续迭代 | `task_create/update` auto-allow + 面板渲染 + `is_read_only` 权限消费已收口；当前面板为瞬时渲染，非 Claude Code 式的持久底部驻留 |
-| Textual Claude-style UI | Batch 4/5 hardening 完成（含 resume legacy alignment + compacting state），未默认切换 | slash commands 已接真实 resume/compact/plan 基础服务，task/status/pet slots 已接入 ChatApp；`/resume` 选择器为纯文本 transient widget，恢复反馈已与 legacy 对齐，`/compact` 期间拒绝新输入，`/env` 仍是 read-only；完整编辑 screen、run_shell capture、Windows E2E、默认入口切换仍未完成 |
+| Textual Claude-style UI | Batch 6 完成（含 /env 文案修复、输出边界审计、transcript 持久化、启动回退），未默认切换；memory full migration 已有 plan，未完成 | slash commands 已接真实 resume/compact/plan 基础服务，task/status/pet slots 已接入 ChatApp；`/resume` 选择器为纯文本 transient widget，恢复反馈已与 legacy 对齐，`/compact` 期间拒绝新输入，`/env` 文案已修正为 read-only；Textual 普通对话和工具调用会写入 `SessionStore` transcript；`run_shell` 输出通过事件进入 Textual UI；Textual `/memory` 当前仍只是基础状态展示，尚未和 legacy 完整对齐；启动失败可回退到 legacy；Windows E2E 手动验收清单已创建，待执行；默认入口切换仍未完成 |
 | `/resume` last_user_input 不稳定 | 仅记录 | 同一 session 的预览文案随时间变化，用户难识别；后续可考虑首条输入或固定摘要 |
 | `/resume` legacy header 重复渲染 | Bug | 老版本 `/resume` 上下选择时，`_refresh_session_list` 的 ANSI 光标跳行数与 Rich `console.print()` 实际输出行数不一致，导致 "Select session to resume: (↑/↓, Enter, Esc)" 行重复堆积。根因：`_refresh_session_list` 用 `count = len(sessions) + 1` 估算行数，但 Rich 可能因 terminal width 自动换行或添加额外转义序列，使实际行数 > count。修复方向：header 只在首次渲染时打印，`_refresh_session_list` 只刷新 item 行；或用 Rich `Live` / `Panel` 整体替换而非 ANSI 光标控制。 |
 | 原生 Windows E2E | 未完成 | 需要在 cmd.exe/PowerShell 验证完整交互 |
 | Phase 5 | 冻结 | 不作为近期默认开发目标 |
 
-## 16. 下一步
+## 17. 下一步
 
-1. 做原生 cmd.exe/PowerShell 交互验收，重点覆盖审批菜单、diff preview、工具摘要折叠、多轮 tool call、`/resume`、`/compact`。
-2. 继续第二轮结构收口：拆 `/memory`、`/context`、`/plan` 等 command handlers。（`/env` 已收口为 EnvDashboard）
+1. 按 `docs/superpowers/plans/2026-06-02-textual-memory-full-migration.md` 推进 Textual memory 完整迁移，覆盖 system prompt、工具注册、权限、写入后生效、`/memory auto on|off`、slash 展示和测试。
+2. 做原生 cmd.exe/PowerShell 交互验收，重点覆盖审批菜单、diff preview、工具摘要折叠、多轮 tool call、`/resume`、`/compact`。
+3. 继续第二轮结构收口：拆 `/memory`、`/context`、`/plan` 等 command handlers。（`/env` 已收口为 EnvDashboard）

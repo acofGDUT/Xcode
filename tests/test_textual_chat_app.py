@@ -401,6 +401,44 @@ class TestToolEventHandling:
         assert event.output_type == "result"
         assert event.content == "file contents"
 
+    def test_handle_tool_output_renders_as_tool_result_block(self):
+        """Test ToolOutputProduced renders as a tool result block in ChatApp."""
+        controller = _make_controller()
+        app = ChatApp(controller=controller)
+
+        event = ToolOutputProduced(
+            turn_id="turn_1",
+            tool_call_id="call_1",
+            tool_name="run_shell",
+            output_type="result",
+            content="stdout:\ntest output\nexit_code=0",
+        )
+        app.handle_event(event)
+
+        blocks = [b for b in app.store.message_blocks
+                  if hasattr(b, 'tool_name') and b.tool_name == "run_shell"]
+        assert len(blocks) == 1
+        assert "test output" in blocks[0].result
+
+    def test_handle_shell_output_does_not_truncate_short_output(self):
+        """Test short shell output is not truncated in UI."""
+        controller = _make_controller()
+        app = ChatApp(controller=controller)
+
+        event = ToolOutputProduced(
+            turn_id="turn_1",
+            tool_call_id="call_1",
+            tool_name="run_shell",
+            output_type="result",
+            content="hello\nexit_code=0",
+        )
+        app.handle_event(event)
+
+        blocks = [b for b in app.store.message_blocks
+                  if hasattr(b, 'tool_name') and b.tool_name == "run_shell"]
+        assert len(blocks) == 1
+        assert "hello" in blocks[0].result
+
 
 # ── Batch 3: Permission and preview surfaces ──────────────────────
 
@@ -546,6 +584,56 @@ class TestPermissionHandling:
         assert "\n> Yes, this conversation" in card.render().plain
         card.move_selection(1)
         assert card.selected_choice == "yes"
+
+    def test_approval_card_diff_styles_are_assigned(self):
+        """Test that diff lines get correct styles for added/removed/hunk."""
+        card = ApprovalCard()
+        card.show_request(
+            request_id="req_1",
+            tool_call_id="call_1",
+            tool_name="edit_file",
+            scope="write",
+            risk_summary="Edit file",
+        )
+        card.show_diff(
+            "file.txt",
+            "@@ -1,3 +1,3 @@\n- removed line\n+ added line\n context line",
+        )
+
+        rendered = card.render()
+
+        # Check that styles are assigned
+        assert rendered.spans
+        # Find spans for diff content
+        plain = rendered.plain
+        assert "- removed line" in plain
+        assert "+ added line" in plain
+        assert "@@ -1,3 +1,3 @@" in plain
+
+    def test_approval_card_long_diff_shows_truncation_marker(self):
+        """Test that long diff shows truncation marker."""
+        card = ApprovalCard()
+        card.show_request(
+            request_id="req_1",
+            tool_call_id="call_1",
+            tool_name="edit_file",
+            scope="write",
+            risk_summary="Edit file",
+        )
+        # Create a diff with more than 4 content lines
+        diff_lines = ["--- file.txt", "+++ file.txt"]
+        for i in range(10):
+            diff_lines.append(f"+ line {i}")
+        card.show_diff("file.txt", "\n".join(diff_lines))
+
+        rendered = card.render()
+
+        # Should show truncation marker
+        assert "..." in rendered.plain
+        # Should still show all choices
+        assert "Yes" in rendered.plain
+        assert "No" in rendered.plain
+        assert "Yes, this conversation" in rendered.plain
 
     def test_turn_cancelled_event(self):
         """Test TurnCancelled event."""

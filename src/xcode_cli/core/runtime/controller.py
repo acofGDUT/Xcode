@@ -219,6 +219,19 @@ class RuntimeController:
         """Set system prompt provider."""
         self._system_prompt_provider = provider
 
+    # Transcript persistence
+
+    def _append_transcript_message(self, message: dict[str, Any]) -> None:
+        """Append a model-visible message to the session transcript when available."""
+        if self._session_store is None or not self._session_id:
+            return
+        self._session_store.append_message(self._session_id, dict(message))
+
+    def _append_transcript_messages(self, messages: list[dict[str, Any]]) -> None:
+        """Append multiple model-visible messages to the session transcript."""
+        for message in messages:
+            self._append_transcript_message(message)
+
     # Turn management
 
     def _start_turn(self, turn_id: str) -> bool:
@@ -277,6 +290,11 @@ class RuntimeController:
         ))
         self._enqueue_event(StatusUpdated(field="turn", value=f"busy:{turn_id}"))
 
+        # Append user message to persistent cross-turn history and transcript
+        user_message = {"role": "user", "content": command.text}
+        self._history.append(user_message)
+        self._append_transcript_message(user_message)
+
         # In headless mode, skip the worker thread (for testing)
         if self._headless:
             self._end_turn()
@@ -291,9 +309,6 @@ class RuntimeController:
 
         # Tool schemas
         tool_schemas = self._tool_registry.get_openai_schemas()
-
-        # Append user message to persistent cross-turn history
-        self._history.append({"role": "user", "content": command.text})
 
         # Spawn worker thread (agent engine appends assistant/tool messages in-place)
         self._worker_thread = threading.Thread(
@@ -313,6 +328,8 @@ class RuntimeController:
     ) -> None:
         """Run the agent turn in a worker thread."""
         try:
+            history_start_index = len(history)
+
             final_text = self._agent_engine.run_turn(
                 history=history,
                 system_prompt=system_prompt,
@@ -358,6 +375,10 @@ class RuntimeController:
                 ),
                 cancellation=cancellation,
             )
+
+            # Persist newly added messages (assistant/tool) to transcript
+            new_messages = history[history_start_index:]
+            self._append_transcript_messages(new_messages)
 
             # Enqueue final message
             message_id = f"msg_final_{turn_id}"
@@ -610,7 +631,7 @@ class RuntimeController:
                     "/tasks - Show task list",
                     "/compact - Compact current conversation",
                     "/resume - Show resumable sessions",
-                    "/env - Show editable environment settings",
+                    "/env - Show environment settings (read-only)",
                     "/memory - Show memory status",
                     "/plan - Plan mode controls",
                     "/exit - Exit chat",
@@ -667,7 +688,29 @@ class RuntimeController:
             return
 
         if head == "/memory":
-            self._enqueue_system_notice("slash_memory", self._format_memory_status())
+            action = parts[1].lower() if len(parts) > 1 else ""
+            if action == "auto":
+                value = parts[2].lower() if len(parts) > 2 else ""
+                if value in ("on", "off"):
+                    cfg = self._config_store.load()
+                    cfg.auto_memory = (value == "on")
+                    self._config_store.save(cfg)
+                    self._enqueue_system_notice(
+                        "memory_auto_toggle",
+                        f"Auto-memory set to {value}",
+                    )
+                else:
+                    self._enqueue_system_notice(
+                        "memory_auto_usage",
+                        "Usage: /memory auto on|off",
+                    )
+            elif action == "":
+                self._enqueue_system_notice("slash_memory", self._format_memory_status())
+            else:
+                self._enqueue_system_notice(
+                    "memory_usage",
+                    "Usage: /memory | /memory auto on|off",
+                )
             return
 
         if head == "/plan":
@@ -1001,10 +1044,26 @@ class RuntimeController:
         cfg = self._config_store.load()
         lines = [f"auto_memory: {'on' if cfg.auto_memory else 'off'}"]
         if self._memory_manager is not None:
-            lines.extend([
-                f"project_memory: {self._memory_manager.project_memory_path()}",
-                f"user_memory: {self._memory_manager.user_memory_path()}",
-            ])
+            proj = self._memory_manager.project_memory_path()
+            user = self._memory_manager.user_memory_path()
+            proj_status = "exists" if proj.exists() else "missing"
+            user_status = "exists" if user.exists() else "missing"
+            lines.append(f"project_memory: {proj} ({proj_status})")
+            lines.append(f"user_memory: {user} ({user_status})")
+            mem_dir = self._memory_manager.memory_dir_path()
+            lines.append(f"Memory dir: {mem_dir}")
+            # Count memory files and index entries
+            file_count = 0
+            index_entries = 0
+            if mem_dir.exists():
+                file_count = len(list(mem_dir.glob("*.md")))
+            idx = self._memory_manager.memory_index_path()
+            if idx.exists():
+                for raw_line in idx.read_text(encoding="utf-8").splitlines():
+                    line = raw_line.strip()
+                    if line.startswith("- ["):
+                        index_entries += 1
+            lines.append(f"Memory files: {file_count} (index: {index_entries} entries)")
         return "\n".join(lines)
 
     def _format_plan_status(self) -> str:

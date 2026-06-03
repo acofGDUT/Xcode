@@ -34,6 +34,16 @@ def _make_controller(**kwargs) -> RuntimeController:
     return RuntimeController(headless=True, **kwargs)
 
 
+def wait_for_controller_idle(controller: RuntimeController, timeout: float = 3.0) -> None:
+    """Wait until the controller has no active turn."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not controller.has_active_turn:
+            return
+        time.sleep(0.01)
+    raise AssertionError("controller did not become idle")
+
+
 class TestRuntimeController:
     """Tests for RuntimeController."""
 
@@ -457,6 +467,33 @@ class TestRuntimeControllerBatch2:
         assert len(results) == 1
         assert results[0][1] == "file content here"
 
+    def test_tool_output_does_not_write_directly_to_stdout(self, capsys):
+        """Test that tool execution emits output through events, not direct stdout."""
+        from xcode_cli.core.llm import ToolCall
+        from xcode_cli.core.runtime.cancellation import CancellationToken
+        from xcode_cli.core.tool_registry import ToolDef
+
+        controller = _make_controller()
+        controller._tool_registry.register(ToolDef(
+            name="fake_tool",
+            description="Fake tool",
+            parameters={},
+            required=[],
+            execute=lambda: "tool output content",
+            is_read_only=True,
+        ))
+
+        results = controller._execute_tools_in_turn(
+            [ToolCall(id="call_1", name="fake_tool", args={})],
+            "turn_test",
+            CancellationToken(),
+        )
+
+        assert results[0][1] == "tool output content"
+        # Verify no direct stdout from tool execution
+        captured = capsys.readouterr()
+        assert "tool output content" not in captured.out
+
     def test_tool_denied_emits_rejected(self):
         """Test that denied tools emit ToolRejected."""
         from xcode_cli.core.llm import ToolCall
@@ -676,3 +713,389 @@ class TestRuntimeControllerBatch2:
             assert "boom" in tool_errors[0].error
         finally:
             controller.close()
+
+    def test_shell_tool_output_does_not_write_directly_to_stdout(self, capsys):
+        """Test that run_shell output does not write directly to stdout."""
+        from xcode_cli.core.llm import ToolCall
+        from xcode_cli.core.runtime.cancellation import CancellationToken
+        from xcode_cli.core.tool_registry import ToolDef
+
+        controller = _make_controller()
+        controller._tool_registry.register(ToolDef(
+            name="run_shell",
+            description="Run shell command",
+            parameters={},
+            required=[],
+            execute=lambda command: "shell output here\nexit_code=0",
+            is_read_only=True,
+        ))
+
+        results = controller._execute_tools_in_turn(
+            [ToolCall(id="call_1", name="run_shell", args={"command": "echo test"})],
+            "turn_test",
+            CancellationToken(),
+        )
+
+        assert "shell output here" in results[0][1]
+        # Verify no direct stdout from tool execution
+        captured = capsys.readouterr()
+        assert "shell output here" not in captured.out
+
+
+class _TranscriptFakeLLM:
+    """Fake LLM for transcript persistence tests."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self._call_count = 0
+
+    def complete(self, system_prompt, messages, tool_schemas,
+                 on_text_token=None, on_reasoning_token=None):
+        resp = self._responses[self._call_count]
+        self._call_count += 1
+        if resp.content and on_text_token:
+            for char in resp.content:
+                on_text_token(char)
+        return resp
+
+
+class TestTranscriptPersistence:
+    """Tests for Textual session transcript persistence."""
+
+    def test_submit_user_input_persists_user_and_assistant_messages(self, tmp_path, monkeypatch):
+        """Test normal turn writes user and assistant to transcript."""
+        from xcode_cli.core import session as session_module
+        from xcode_cli.core.llm import LLMResponse
+        from xcode_cli.core.session import SessionStore
+        from xcode_cli.core.tool_registry import ToolRegistry
+
+        monkeypatch.setattr(session_module, "ensure_xcode_home", lambda: tmp_path / ".xcode")
+        store = SessionStore(cwd=str(tmp_path / "project"))
+        session_id = store.new_session_id()
+        llm = _TranscriptFakeLLM([LLMResponse(content="answer", tool_calls=[])])
+        controller = RuntimeController(
+            llm_client=llm,
+            tool_registry=ToolRegistry(),
+            session_store=store,
+            session_id=session_id,
+        )
+
+        controller.dispatch(SubmitUserInputCommand(text="question"))
+        wait_for_controller_idle(controller)
+
+        history = store.load_history(session_id)
+        assert history == [
+            {"role": "user", "content": "question"},
+            {"role": "assistant", "content": "answer"},
+        ]
+
+    def test_session_store_none_does_not_crash(self):
+        """Test that session_store=None doesn't crash on submit."""
+        from xcode_cli.core.llm import LLMResponse
+        from xcode_cli.core.tool_registry import ToolRegistry
+
+        llm = _TranscriptFakeLLM([LLMResponse(content="answer", tool_calls=[])])
+        controller = RuntimeController(
+            llm_client=llm,
+            tool_registry=ToolRegistry(),
+            session_store=None,
+            session_id="",
+        )
+        controller.dispatch(SubmitUserInputCommand(text="question"))
+        wait_for_controller_idle(controller)
+        assert not controller.has_active_turn
+
+    def test_session_id_empty_does_not_crash(self, tmp_path, monkeypatch):
+        """Test that session_id='' doesn't crash on submit."""
+        from xcode_cli.core import session as session_module
+        from xcode_cli.core.llm import LLMResponse
+        from xcode_cli.core.session import SessionStore
+        from xcode_cli.core.tool_registry import ToolRegistry
+
+        monkeypatch.setattr(session_module, "ensure_xcode_home", lambda: tmp_path / ".xcode")
+        store = SessionStore(cwd=str(tmp_path / "project"))
+        llm = _TranscriptFakeLLM([LLMResponse(content="answer", tool_calls=[])])
+        controller = RuntimeController(
+            llm_client=llm,
+            tool_registry=ToolRegistry(),
+            session_store=store,
+            session_id="",
+        )
+        controller.dispatch(SubmitUserInputCommand(text="question"))
+        wait_for_controller_idle(controller)
+        assert not controller.has_active_turn
+
+    def test_tool_call_turn_writes_correct_transcript_order(self, tmp_path, monkeypatch):
+        """Test tool-call turn writes user, assistant(tool_calls), tool result, final assistant."""
+        from xcode_cli.core import session as session_module
+        from xcode_cli.core.llm import LLMResponse, ToolCall
+        from xcode_cli.core.session import SessionStore
+        from xcode_cli.core.tool_registry import ToolDef, ToolRegistry
+
+        monkeypatch.setattr(session_module, "ensure_xcode_home", lambda: tmp_path / ".xcode")
+        store = SessionStore(cwd=str(tmp_path / "project"))
+        session_id = store.new_session_id()
+
+        llm = _TranscriptFakeLLM([
+            LLMResponse(content=None, tool_calls=[
+                ToolCall(id="call_1", name="fake_read", args={}),
+            ]),
+            LLMResponse(content="done", tool_calls=[]),
+        ])
+
+        registry = ToolRegistry()
+        registry.register(ToolDef(
+            name="fake_read",
+            description="Fake read tool",
+            parameters={"type": "object", "properties": {}},
+            required=[],
+            execute=lambda: "fake output",
+            is_read_only=True,
+        ))
+
+        controller = RuntimeController(
+            llm_client=llm,
+            tool_registry=registry,
+            session_store=store,
+            session_id=session_id,
+        )
+
+        controller.dispatch(SubmitUserInputCommand(text="use tool"))
+        wait_for_controller_idle(controller)
+
+        history = store.load_history(session_id)
+        assert history[0] == {"role": "user", "content": "use tool"}
+        assert history[1]["role"] == "assistant"
+        assert history[1]["tool_calls"][0]["id"] == "call_1"
+        assert history[2]["role"] == "tool"
+        assert history[2]["tool_call_id"] == "call_1"
+        assert history[2]["content"] == "fake output"
+        assert history[3] == {"role": "assistant", "content": "done"}
+
+    def test_tool_error_enters_transcript(self, tmp_path, monkeypatch):
+        """Test tool errors are recorded in transcript."""
+        from xcode_cli.core import session as session_module
+        from xcode_cli.core.llm import LLMResponse, ToolCall
+        from xcode_cli.core.session import SessionStore
+        from xcode_cli.core.tool_registry import ToolDef, ToolRegistry
+
+        monkeypatch.setattr(session_module, "ensure_xcode_home", lambda: tmp_path / ".xcode")
+        store = SessionStore(cwd=str(tmp_path / "project"))
+        session_id = store.new_session_id()
+
+        llm = _TranscriptFakeLLM([
+            LLMResponse(content=None, tool_calls=[
+                ToolCall(id="call_1", name="bad_tool", args={}),
+            ]),
+            LLMResponse(content="recovered", tool_calls=[]),
+        ])
+
+        registry = ToolRegistry()
+        registry.register(ToolDef(
+            name="bad_tool",
+            description="Bad tool",
+            parameters={"type": "object", "properties": {}},
+            required=[],
+            execute=lambda: (_ for _ in ()).throw(RuntimeError("tool broke")),
+            is_read_only=True,
+        ))
+
+        controller = RuntimeController(
+            llm_client=llm,
+            tool_registry=registry,
+            session_store=store,
+            session_id=session_id,
+        )
+
+        controller.dispatch(SubmitUserInputCommand(text="break tool"))
+        wait_for_controller_idle(controller)
+
+        history = store.load_history(session_id)
+        assert history[0] == {"role": "user", "content": "break tool"}
+        assert history[1]["role"] == "assistant"
+        assert history[2]["role"] == "tool"
+        assert history[2]["content"].startswith(("Error:", "Tool error:"))
+        assert history[3] == {"role": "assistant", "content": "recovered"}
+
+    def test_tool_rejection_enters_transcript(self, tmp_path, monkeypatch):
+        """Test denied tool result is visible in transcript."""
+        from xcode_cli.core import session as session_module
+        from xcode_cli.core.llm import LLMResponse, ToolCall
+        from xcode_cli.core.permissions import PermissionManager
+        from xcode_cli.core.session import SessionStore
+        from xcode_cli.core.tool_registry import ToolDef, ToolRegistry
+
+        monkeypatch.setattr(session_module, "ensure_xcode_home", lambda: tmp_path / ".xcode")
+        store = SessionStore(cwd=str(tmp_path / "project"))
+        session_id = store.new_session_id()
+
+        llm = _TranscriptFakeLLM([
+            LLMResponse(content=None, tool_calls=[
+                ToolCall(id="call_1", name="write_file", args={"path": "/f.txt", "content": "x"}),
+            ]),
+            LLMResponse(content="ok after deny", tool_calls=[]),
+        ])
+
+        registry = ToolRegistry()
+        registry.register(ToolDef(
+            name="write_file",
+            description="Write file",
+            parameters={},
+            required=[],
+            execute=lambda path, content: "wrote",
+            is_read_only=False,
+        ))
+
+        pm = PermissionManager(cwd=str(tmp_path))
+        pm.set_session_rule("write_file", "deny")
+
+        controller = RuntimeController(
+            llm_client=llm,
+            tool_registry=registry,
+            permission_manager=pm,
+            session_store=store,
+            session_id=session_id,
+        )
+
+        controller.dispatch(SubmitUserInputCommand(text="write something"))
+        wait_for_controller_idle(controller)
+
+        history = store.load_history(session_id)
+        assert history[0] == {"role": "user", "content": "write something"}
+        assert history[1]["role"] == "assistant"
+        assert "tool_calls" in history[1]
+        assert history[2]["role"] == "tool"
+        assert "denied" in history[2]["content"].lower() or "denied" in history[2]["content"].lower()
+        assert history[3] == {"role": "assistant", "content": "ok after deny"}
+
+    def test_no_duplicate_assistant_final_in_transcript(self, tmp_path, monkeypatch):
+        """Test assistant final is written exactly once."""
+        from xcode_cli.core import session as session_module
+        from xcode_cli.core.llm import LLMResponse
+        from xcode_cli.core.session import SessionStore
+        from xcode_cli.core.tool_registry import ToolRegistry
+
+        monkeypatch.setattr(session_module, "ensure_xcode_home", lambda: tmp_path / ".xcode")
+        store = SessionStore(cwd=str(tmp_path / "project"))
+        session_id = store.new_session_id()
+
+        llm = _TranscriptFakeLLM([LLMResponse(content="answer", tool_calls=[])])
+        controller = RuntimeController(
+            llm_client=llm,
+            tool_registry=ToolRegistry(),
+            session_store=store,
+            session_id=session_id,
+        )
+
+        controller.dispatch(SubmitUserInputCommand(text="question"))
+        wait_for_controller_idle(controller)
+
+        history = store.load_history(session_id)
+        assistant_messages = [
+            m for m in history
+            if m.get("role") == "assistant" and m.get("content") == "answer"
+        ]
+        assert len(assistant_messages) == 1
+
+    def test_resume_restores_textual_created_session(self, tmp_path, monkeypatch):
+        """Test /resume restores _history from a Textual-created session."""
+        from xcode_cli.core import session as session_module
+        from xcode_cli.core.llm import LLMResponse
+        from xcode_cli.core.session import SessionStore
+        from xcode_cli.core.tool_registry import ToolRegistry
+
+        monkeypatch.setattr(session_module, "ensure_xcode_home", lambda: tmp_path / ".xcode")
+        store = SessionStore(cwd=str(tmp_path / "project"))
+        session_id = store.new_session_id()
+
+        # Controller 1: create a session with one turn
+        llm1 = _TranscriptFakeLLM([LLMResponse(content="answer", tool_calls=[])])
+        controller1 = RuntimeController(
+            llm_client=llm1,
+            tool_registry=ToolRegistry(),
+            session_store=store,
+            session_id=session_id,
+        )
+        controller1.dispatch(SubmitUserInputCommand(text="question"))
+        wait_for_controller_idle(controller1)
+        controller1.close()
+
+        # Controller 2: resume the session
+        llm2 = _TranscriptFakeLLM([])
+        controller2 = RuntimeController(
+            llm_client=llm2,
+            tool_registry=ToolRegistry(),
+            session_store=store,
+            session_id="",
+        )
+        controller2.dispatch(ResumeSessionCommand(session_id=session_id))
+
+        assert controller2._history == [
+            {"role": "user", "content": "question"},
+            {"role": "assistant", "content": "answer"},
+        ]
+
+    def test_resume_list_shows_textual_created_session(self, tmp_path, monkeypatch):
+        """Test /resume list contains Textual-created sessions."""
+        from xcode_cli.core import session as session_module
+        from xcode_cli.core.llm import LLMResponse
+        from xcode_cli.core.session import SessionStore
+        from xcode_cli.core.tool_registry import ToolRegistry
+        from xcode_cli.core.ui.events import ResumeListLoaded
+
+        monkeypatch.setattr(session_module, "ensure_xcode_home", lambda: tmp_path / ".xcode")
+        store = SessionStore(cwd=str(tmp_path / "project"))
+        session_id = store.new_session_id()
+
+        llm = _TranscriptFakeLLM([LLMResponse(content="answer", tool_calls=[])])
+        controller = RuntimeController(
+            llm_client=llm,
+            tool_registry=ToolRegistry(),
+            session_store=store,
+            session_id=session_id,
+        )
+        controller.dispatch(SubmitUserInputCommand(text="question"))
+        wait_for_controller_idle(controller)
+
+        # Now dispatch /resume
+        controller.dispatch(RunSlashCommandCommand(raw="/resume"))
+        events = controller.drain_events()
+        loaded = next(e for e in events if isinstance(e, ResumeListLoaded))
+        assert loaded.sessions[0]["session_id"] == session_id
+        assert loaded.sessions[0]["last_user_input"] == "question"
+        assert loaded.sessions[0]["message_count"] == 2
+
+    def test_resume_then_continue_appends_to_same_session(self, tmp_path, monkeypatch):
+        """Test resume + continue appends to the same session transcript."""
+        from xcode_cli.core import session as session_module
+        from xcode_cli.core.llm import LLMResponse
+        from xcode_cli.core.session import SessionStore
+        from xcode_cli.core.tool_registry import ToolRegistry
+
+        monkeypatch.setattr(session_module, "ensure_xcode_home", lambda: tmp_path / ".xcode")
+        store = SessionStore(cwd=str(tmp_path / "project"))
+        session_id = store.new_session_id()
+
+        # Create initial session
+        store.append_message(session_id, {"role": "user", "content": "old question"})
+        store.append_message(session_id, {"role": "assistant", "content": "old answer"})
+
+        # Resume and continue
+        llm = _TranscriptFakeLLM([LLMResponse(content="new answer", tool_calls=[])])
+        controller = RuntimeController(
+            llm_client=llm,
+            tool_registry=ToolRegistry(),
+            session_store=store,
+            session_id="",
+        )
+        controller.dispatch(ResumeSessionCommand(session_id=session_id))
+        controller.dispatch(SubmitUserInputCommand(text="new question"))
+        wait_for_controller_idle(controller)
+
+        history = store.load_history(session_id)
+        assert [m["content"] for m in history if m["role"] in {"user", "assistant"}] == [
+            "old question",
+            "old answer",
+            "new question",
+            "new answer",
+        ]

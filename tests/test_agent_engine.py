@@ -278,3 +278,50 @@ class TestAgentEngine:
         )
 
         assert final_text == ""
+
+    def test_final_assistant_message_is_appended_to_history(self):
+        """Test that a simple assistant reply is appended to history."""
+        fake_llm = FakeLLMClient(responses=[
+            LLMResponse(content="hello back", tool_calls=[]),
+        ])
+        engine = AgentEngine(llm_client=fake_llm)
+        history = [{"role": "user", "content": "hello"}]
+
+        final_text = engine.run_turn(
+            history=history,
+            system_prompt="",
+            tool_schemas=[],
+            on_text_token=lambda delta: None,
+        )
+
+        assert final_text == "hello back"
+        assert history[-1] == {"role": "assistant", "content": "hello back"}
+
+    def test_tool_turn_appends_tool_messages_and_final_assistant_message(self):
+        """Test tool-call turn appends assistant(tool_calls), tool result, and final assistant."""
+        fake_llm = FakeLLMClient(responses=[
+            LLMResponse(
+                content=None,
+                tool_calls=[ToolCall(id="call_1", name="read_file", args={"path": "README.md"})],
+            ),
+            LLMResponse(content="I read it.", tool_calls=[]),
+        ])
+        engine = AgentEngine(llm_client=fake_llm)
+        history = [{"role": "user", "content": "read README"}]
+
+        def fake_execute_tools(tool_calls, turn_id, cancellation):
+            return [(tc, "file content") for tc in tool_calls]
+
+        final_text = engine.run_turn(
+            history=history,
+            system_prompt="",
+            tool_schemas=[],
+            on_text_token=lambda delta: None,
+            execute_tools=fake_execute_tools,
+        )
+
+        assert final_text == "I read it."
+        assert history[1]["role"] == "assistant"
+        assert history[1]["tool_calls"][0]["id"] == "call_1"
+        assert history[2] == {"role": "tool", "tool_call_id": "call_1", "content": "file content"}
+        assert history[3] == {"role": "assistant", "content": "I read it."}
