@@ -34,6 +34,16 @@ class AssistantDelta(UIEvent):
 
 
 @dataclass(frozen=True)
+class ReasoningDelta(UIEvent):
+    """Streaming reasoning/thinking text delta.
+
+    属于 ScrollLayer transcript tail，不进入 current_turn 固定面板。
+    """
+    turn_id: str
+    delta: str
+
+
+@dataclass(frozen=True)
 class AssistantFinal(UIEvent):
     """Assistant response finalized."""
     turn_id: str

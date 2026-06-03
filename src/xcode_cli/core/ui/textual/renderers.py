@@ -1,6 +1,7 @@
-"""Renderers for Textual UI.
+"""Renderers for Textual UI — ScrollLayer 渲染管线.
 
-Provides the rendering layer between UIStore/MessageBlock and Textual widgets.
+RichLogRenderer = 第一版 TranscriptRenderer，只渲染 finalized rows。
+后续扩展：ToolUseRow / ToolProgressRow / ToolResultRow / InlineTransientRows / SpinnerRow。
 """
 from __future__ import annotations
 
@@ -9,6 +10,7 @@ from textual.widgets import RichLog
 
 from xcode_cli.core.ui.state import (
     AssistantMessageBlock,
+    AssistantThinkingBlock,
     ContextSummaryBlock,
     MemoryStatusBlock,
     MessageBlock,
@@ -24,7 +26,10 @@ from xcode_cli.core.ui.state import (
 
 
 class RichLogRenderer:
-    """Renderer that writes MessageBlocks to a RichLog widget."""
+    """ScrollLayer: TranscriptRenderer（第一版） — 将 MessageBlock 渲染到 RichLog.
+
+    只渲染 finalized rows，streaming/tool 动态行由其他 widget 处理。
+    """
 
     def __init__(self, rich_log: RichLog) -> None:
         self._rich_log = rich_log
@@ -35,6 +40,8 @@ class RichLogRenderer:
             self._render_user_message(block)
         elif isinstance(block, AssistantMessageBlock):
             self._render_assistant_message(block)
+        elif isinstance(block, AssistantThinkingBlock):
+            self._render_assistant_thinking(block)
         elif isinstance(block, ToolSummaryBlock):
             self._render_tool_summary(block)
         elif isinstance(block, ToolResultBlock):
@@ -63,6 +70,19 @@ class RichLogRenderer:
 
     def _render_assistant_message(self, block: AssistantMessageBlock) -> None:
         self._rich_log.write(Text(str(block.content)))
+
+    def _render_assistant_thinking(self, block: AssistantThinkingBlock) -> None:
+        if block.display_mode == "hidden":
+            return
+        if block.display_mode == "expanded":
+            text = Text("Thinking\n", style="dim italic")
+            text.append(str(block.content), style="dim")
+        else:
+            suffix = ""
+            if block.elapsed is not None:
+                suffix = f" for {block.elapsed:.1f}s"
+            text = Text(f"Thinking{suffix}", style="dim italic")
+        self._rich_log.write(text)
 
     def _render_tool_summary(self, block: ToolSummaryBlock) -> None:
         text = Text(f"Tool: {block.tool_name}", style="bold dim")

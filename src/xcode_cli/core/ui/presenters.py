@@ -1,4 +1,12 @@
-"""Presenters for transforming UI state to view models."""
+"""Presenters for transforming UI state to view models.
+
+各 presenter 按五层布局分区：
+  StatusPresenter     → BottomLayer (StatusBar)
+  TaskPresenter       → ScrollLayer (task snapshots)
+  TranscriptPresenter → ScrollLayer (transcript blocks)
+  ActiveTurnPresenter → ScrollLayer (current turn — 只保存状态，不固定占位)
+  PetPresenter        → FloatLayer
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,7 +21,7 @@ from xcode_cli.core.ui.state import (
 
 @dataclass
 class PetState:
-    """Pet state model (placeholder for future pet UI)."""
+    """FloatLayer: Pet state model (placeholder)."""
     visible: bool = False
     mood: str = "neutral"
     position: tuple[int, int] = (0, 0)
@@ -21,7 +29,7 @@ class PetState:
 
 @dataclass
 class PetViewModel:
-    """Pet view model (placeholder for future pet UI)."""
+    """FloatLayer: Pet view model (placeholder)."""
     visible: bool = False
     sprite: str = ""
     animation: str = ""
@@ -29,14 +37,14 @@ class PetViewModel:
 
 @dataclass
 class ActiveTurnViewModel:
-    """Compact active-turn view model."""
+    """ScrollLayer: 紧凑 active-turn 视图模型 — current_turn 只作为状态域，不固定占位."""
     turn_id: str | None = None
     current_task: str = ""
     next_task: str = ""
 
 
 class PetPresenter:
-    """Presenter for pet UI (placeholder for future pet UI)."""
+    """FloatLayer: Pet UI presenter (placeholder)."""
 
     def __init__(self) -> None:
         self._state = PetState()
@@ -55,7 +63,7 @@ class PetPresenter:
 
 
 class TaskPresenter:
-    """Presenter for task state."""
+    """ScrollLayer: Task state presenter — 从 message_blocks 提取 task snapshot."""
 
     def get_task_snapshot(self, store: UIStore) -> list[dict[str, Any]]:
         """Get concise task snapshot for current turn."""
@@ -87,19 +95,19 @@ class TaskPresenter:
 
 
 class StatusPresenter:
-    """Presenter for status bar."""
+    """BottomLayer: StatusBar presenter — 使用新旧兼容属性访问状态."""
 
     def get_status_line(self, store: UIStore) -> dict[str, Any]:
-        """Get status line data."""
+        """Get status line data — 优先使用新状态域，fallback 到兼容属性."""
         return {
-            "turn_id": store.current_turn_id,
-            "has_pending_permission": store.pending_permission is not None,
-            "is_at_bottom": store.is_at_bottom,
+            "turn_id": store.current_turn.turn_id,  # 新状态域
+            "has_pending_permission": store.pending_interaction.permission is not None,  # 新状态域
+            "is_at_bottom": store.viewport.is_at_bottom,  # 新状态域
             "message_count": len(store.message_blocks),
         }
 
     def get_status_text(self, store: UIStore) -> str:
-        """Get a one-line status string suitable for the status bar."""
+        """BottomLayer: 单行状态文本."""
         data = self.get_status_line(store)
         permission = " approval" if data["has_pending_permission"] else ""
         viewport = "bottom" if data["is_at_bottom"] else "history"
@@ -108,7 +116,7 @@ class StatusPresenter:
 
 
 class ActiveTurnPresenter:
-    """Presenter for the active turn slot."""
+    """ScrollLayer: active turn presenter — current_turn 只作为状态域，不固定占位."""
 
     def get_view_model(self, store: UIStore) -> ActiveTurnViewModel:
         """Build active-turn view model from current task snapshots."""
@@ -122,14 +130,14 @@ class ActiveTurnPresenter:
             None,
         )
         return ActiveTurnViewModel(
-            turn_id=store.current_turn_id,
+            turn_id=store.current_turn.turn_id,
             current_task=str(running.get("subject", "")) if running else "",
             next_task=str(pending.get("subject", "")) if pending else "",
         )
 
 
 class TranscriptPresenter:
-    """Presenter for transcript area."""
+    """ScrollLayer: transcript presenter — 管理可见 message blocks."""
 
     def get_visible_blocks(self, store: UIStore, max_blocks: int = 100) -> list[MessageBlock]:
         """Get visible message blocks."""
@@ -137,4 +145,4 @@ class TranscriptPresenter:
 
     def should_auto_scroll(self, store: UIStore) -> bool:
         """Check if should auto-scroll to bottom."""
-        return store.is_at_bottom
+        return store.viewport.is_at_bottom

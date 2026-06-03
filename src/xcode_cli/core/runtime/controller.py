@@ -57,6 +57,7 @@ from xcode_cli.core.ui.events import (
     PermissionRequestEvent,
     PlanApprovalRequested,
     PlanUpdated,
+    ReasoningDelta,
     ResumeCompleted,
     ResumeListLoaded,
     StatusUpdated,
@@ -336,6 +337,9 @@ class RuntimeController:
                 tool_schemas=tool_schemas,
                 on_text_token=lambda delta: self._enqueue_event(
                     AssistantDelta(turn_id=turn_id, delta=delta)
+                ),
+                on_reasoning_token=lambda delta: self._enqueue_event(
+                    ReasoningDelta(turn_id=turn_id, delta=delta)
                 ),
                 on_tool_call_started=lambda tc_id, tc_name, tc_args: (
                     self._enqueue_event(ToolCallStarted(

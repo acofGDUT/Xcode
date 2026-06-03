@@ -25,6 +25,7 @@ from xcode_cli.core.ui.events import (
     PermissionRequestEvent,
     PlanApprovalRequested,
     PlanUpdated,
+    ReasoningDelta,
     ResumeCompleted,
     ResumeListLoaded,
     ToolCallFinished,
@@ -35,7 +36,7 @@ from xcode_cli.core.ui.events import (
     UICommandFailed,
     UserMessageAdded,
 )
-from xcode_cli.core.ui.state import UserMessageBlock
+from xcode_cli.core.ui.state import AssistantThinkingBlock, UserMessageBlock
 from xcode_cli.core.ui.textual.app import ChatApp
 from xcode_cli.core.ui.textual.renderers import RichLogRenderer
 from xcode_cli.core.ui.textual.widgets import (
@@ -90,8 +91,28 @@ class TestWidgets:
         assert widget.text == ""
         widget.update_text("hello")
         assert widget.text == "hello"
+        widget.update_thinking("thinking")
+        assert "thinking" in widget.render().plain
         widget.clear_text()
         assert widget.text == ""
+        assert widget.thinking_text == ""
+
+    def test_transcript_area_owns_streaming_and_tool_rows(self):
+        """Test streaming/thinking tail lives inside TranscriptArea."""
+        import asyncio
+        from xcode_cli.core.ui.textual.widgets import ActiveToolIndicator
+
+        async def run_test():
+            controller = _make_controller()
+            app = ChatApp(controller=controller)
+            async with app.run_test():
+                transcript = app.query_one("#transcript", TranscriptArea)
+                streaming = app.query_one("#streaming", StreamingWidget)
+                active_tool = app.query_one("#active-tool", ActiveToolIndicator)
+                assert streaming.parent is transcript
+                assert active_tool.parent is transcript
+
+        asyncio.run(run_test())
 
     def test_new_messages_pill(self):
         """Test NewMessagesPill."""
@@ -142,6 +163,31 @@ class TestEventHandler:
         app = ChatApp(controller=controller)
         event = AssistantFinal(turn_id="turn_123", message_id="msg_456", content="Hello world")
         assert event.content == "Hello world"
+
+    def test_reasoning_finalizes_as_transcript_thinking_block(self):
+        """Test reasoning is transcript state, not current-turn surface."""
+        controller = _make_controller()
+        app = ChatApp(controller=controller)
+        streaming = StreamingWidget()
+        app.query_one = lambda selector, *args, **kwargs: streaming
+
+        app.handle_event(ReasoningDelta(turn_id="turn_1", delta="thinking"))
+        app.handle_event(ReasoningDelta(turn_id="turn_1", delta=" more"))
+
+        assert app.store.thinking.active_buffer == "thinking more"
+        assert app.store.current_turn.inline_surfaces == []
+        assert "Thinking:" in streaming.render().plain
+
+        app.handle_event(AssistantFinal(
+            turn_id="turn_1",
+            message_id="msg_1",
+            content="answer",
+        ))
+
+        assert app.store.thinking.active_buffer is None
+        assert app.store.stream.thinking_text is None
+        assert any(isinstance(block, AssistantThinkingBlock) for block in app.store.message_blocks)
+        assert "msg_1" in app.store.thinking.finalized_blocks
 
     def test_handle_resume_list_loaded_adds_system_notice(self):
         """Test ResumeListLoaded enters resume selection state."""

@@ -1,4 +1,23 @@
-"""Textual widgets for ChatApp."""
+"""Textual widgets for ChatApp — 五层布局.
+
+ScrollLayer:
+  TranscriptArea (TranscriptViewport) → RichLogHistory (TranscriptRenderer)
+    StreamingWidget (StreamingThinkingTail + StreamingAssistantTail)
+    ActiveToolIndicator (transient tool row → 后续替换为 ToolUseRow)
+
+OverlayLayer:
+  ApprovalCard (语义 PermissionOverlay, 属于 pending_interaction)
+  PermissionPrompt (兼容旧测试)
+
+ModalLayer:
+  ResumeSelector (screen-like transient surface)
+
+BottomLayer:
+  NewMessagesPill → CommandSuggestions → InputBox → StatusBar
+
+FloatLayer:
+  PetSurface (默认不占位)
+"""
 from __future__ import annotations
 
 from rich.text import Text
@@ -9,8 +28,10 @@ from textual.widget import Widget
 from textual.widgets import Input, Label, ListItem, ListView, RichLog
 
 
+# ══ ScrollLayer: TranscriptViewport + TranscriptRenderer ══
+
 class TranscriptArea(Widget):
-    """Transcript area for displaying message history."""
+    """ScrollLayer: TranscriptViewport — 承载长期 transcript、thinking/assistant tail 和工具行."""
 
     DEFAULT_CSS = """
     TranscriptArea {
@@ -22,10 +43,12 @@ class TranscriptArea(Widget):
 
     def compose(self) -> ComposeResult:
         yield RichLogHistory(id="history")
+        yield StreamingWidget(id="streaming")
+        yield ActiveToolIndicator(id="active-tool")
 
 
 class RichLogHistory(RichLog):
-    """RichLog used for finalized message history."""
+    """ScrollLayer: TranscriptRenderer — 只渲染 finalized rows."""
 
     DEFAULT_CSS = """
     RichLogHistory {
@@ -40,7 +63,11 @@ class RichLogHistory(RichLog):
 
 
 class StreamingWidget(Widget):
-    """Current streaming assistant output."""
+    """ScrollLayer: StreamingThinkingTail + StreamingAssistantTail.
+
+    renders both assistant_text (primary) and thinking_text (dim prefix).
+    thinking 作为 TranscriptRenderer tail 一部分渲染，不进入 current_turn 固定层。
+    """
 
     DEFAULT_CSS = """
     StreamingWidget {
@@ -52,19 +79,37 @@ class StreamingWidget(Widget):
     """
 
     text = reactive("")
+    thinking_text = reactive("")
 
-    def render(self) -> str:
-        return self.text
+    def render(self) -> Text:
+        """Render thinking (dim) above assistant text."""
+        result = Text()
+        if self.thinking_text:
+            # 截断显示 tail 最后 300 字符，加 "Thinking: " 前缀
+            tail = self.thinking_text[-300:]
+            result.append("Thinking: ", style="dim italic")
+            result.append(tail, style="dim")
+            if len(self.thinking_text) > 300:
+                result.append(" ...", style="dim")
+            result.append("\n")
+        if self.text:
+            result.append(self.text)
+        return result
 
     def update_text(self, text: str) -> None:
         self.text = text
 
+    def update_thinking(self, thinking: str) -> None:
+        """Update thinking text — 来自 ReasoningDelta，进入 transcript tail."""
+        self.thinking_text = thinking
+
     def clear_text(self) -> None:
         self.text = ""
+        self.thinking_text = ""
 
 
 class NewMessagesPill(Widget):
-    """Small notice shown when new messages arrive above the viewport."""
+    """FloatLayer/BottomLayer: 新消息提示 pill — 用户上滚后显示."""
 
     DEFAULT_CSS = """
     NewMessagesPill {
@@ -114,7 +159,7 @@ class ApprovalAwareInput(Input):
 
 
 class InputBox(Widget):
-    """Input box for user prompts."""
+    """BottomLayer: 用户输入框 — 固定在底部."""
 
     DEFAULT_CSS = """
     InputBox {
@@ -179,7 +224,7 @@ class UserInputSubmitted(Message):
 
 
 class CommandSuggestions(Widget):
-    """Slash command suggestions."""
+    """BottomLayer: 斜杠命令建议 — 作为 input 上方 overlay，不进入 transcript."""
 
     DEFAULT_CSS = """
     CommandSuggestions {
@@ -207,7 +252,7 @@ class CommandSuggestions(Widget):
 
 
 class StatusBar(Widget):
-    """One-line runtime status."""
+    """BottomLayer: 单行运行时状态 — 固定在底部，保持稳定一行."""
 
     DEFAULT_CSS = """
     StatusBar {
@@ -229,7 +274,7 @@ class StatusBar(Widget):
 
 
 class PetSurface(Widget):
-    """Reserved pet slot, hidden by default."""
+    """FloatLayer: 预留 pet 插槽 — 默认 invisible 且不占位."""
 
     DEFAULT_CSS = """
     PetSurface {
@@ -241,7 +286,10 @@ class PetSurface(Widget):
 
 
 class PermissionPrompt(Widget):
-    """Legacy permission prompt widget kept for compatibility tests."""
+    """OverlayLayer (legacy): 为兼容旧测试保留的权限提示 widget.
+
+    新代码应使用 ApprovalCard（语义 PermissionOverlay）。
+    """
 
     DEFAULT_CSS = """
     PermissionPrompt {
@@ -304,7 +352,11 @@ class PermissionPrompt(Widget):
 
 
 class ApprovalCard(Widget):
-    """Compact approval card with preview and selectable rows."""
+    """OverlayLayer: PermissionOverlay — 紧凑审批卡片，带预览和可选项.
+
+    语义属于 pending_interaction.permission，不成为长期 MessageBlock。
+    长 diff 截断后保证审批选项仍可见。类名保留 ApprovalCard 以兼容旧测试。
+    """
 
     DEFAULT_CSS = """
     ApprovalCard {
@@ -450,15 +502,15 @@ class ApprovalCard(Widget):
 
 
 class DiffPreview(Widget):
-    """Reserved legacy diff preview surface."""
+    """Reserved: 后续作为 OverlayLayer diff 预览独立组件."""
 
 
 class CommandPreview(Widget):
-    """Reserved legacy command preview surface."""
+    """Reserved: 后续作为 OverlayLayer 命令预览独立组件."""
 
 
 class ResumeSelector(Widget):
-    """Transient resume session selector with keyboard navigation."""
+    """ModalLayer: screen-like transient — 恢复会话选择器，带键盘导航."""
 
     VISIBLE_SESSION_LIMIT = 10
 
@@ -555,7 +607,10 @@ class ResumeSelector(Widget):
 
 
 class ActiveToolIndicator(Widget):
-    """Shows currently running tool."""
+    """ScrollLayer: 工具 transient row — 挂在 TranscriptArea 内部，不是 fixed current-turn 面板.
+
+    后续将替换为 ToolUseRow / ToolProgressRow / ToolResultRow 三元组。
+    """
 
     DEFAULT_CSS = """
     ActiveToolIndicator {

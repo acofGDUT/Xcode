@@ -2,7 +2,7 @@
 
 > 本文档记录项目如何一步步走到现在。当前实现细节见 `ARCHITECTURE.md`，未来计划见 `ROADMAP.md`，已知问题和设计取舍见 `DEVNOTES.md`。
 
-最后更新：2026-06-02
+最后更新：2026-06-03
 
 ## 1. 当前状态总览
 
@@ -24,9 +24,11 @@
 | Task 工具免审 + UI 面板 + is_read_only 权限收口 | task_create/update 免审、瞬时 task 面板、只读工具默认 allow | 完成并通过 review | `2026-05-28-task-auto-allow-and-ui-plan.md` |
 | Textual Claude-style UI Batch 4/5 | slash command 事件化、task/status/pet slots | 完成定向实现，等待更广验收 | `2026-06-01-textual-claude-style-ui-implementation-plan.md` |
 | Textual Batch 4/5 hardening | /resume 选择交互、/compact 状态管理、失败语义修复 | 完成定向验收 | 同上 |
+| Textual Batch 6 Default-Ready Blockers | 输出边界、transcript 持久化、启动回退、Windows 手动验收清单 | 完成定向验收 | `TEXTUAL_BATCH6_MANUAL_ACCEPTANCE.md` |
+| Textual layout/thinking renderer 收口 | TranscriptRenderer 分层、thinking 流式 tail、工具真实消费路径修复 | 完成并通过回归验收 | `2026-06-03-textual-ui-layout-layers-design.md` / `2026-06-03-textual-ui-layout-layers-coding-brief.md` |
 | Phase 5 | 生态扩展 | 冻结 | 未开始 |
 
-当前重点不是进入 Phase 5，而是补齐费用估算、原生 Windows 验收，以及继续第二轮结构收口。
+当前重点不是进入 Phase 5，而是补齐费用估算、原生 Windows 验收，以及继续第二轮结构收口。Textual 相关收口直接在 `app-v2` 推进，不再维护单独 textual 分支。
 
 ## 2. Phase 1：协议与工具升级
 
@@ -308,7 +310,30 @@ Review 结论：通过。合并后 `pytest -q` 为 `221 passed`；已提交并�
 - `python -m py_compile src/xcode_cli/main.py src/xcode_cli/core/runtime/agent_engine.py src/xcode_cli/core/runtime/controller.py src/xcode_cli/core/ui/textual/app.py src/xcode_cli/core/ui/textual/widgets.py`：OK。
 - `pytest -q`：`451 passed`。
 
-## 16. 当前阻塞和遗留
+## 16. Textual 布局层与 thinking transcript 收口：2026-06-03
+
+背景：此前 review 发现 Textual 的 `thinking` 又被放回 current turn 固定区，偏离了 Claude Code 式 transcript tail 模型；同时存在代码写了但没有进入真实 UI 消费路径的问题，例如工具输出事件到达顺序变化时不会进入 transcript、permission preview 先到时无法挂到真实审批 UI。
+
+完成内容：
+
+- `ReasoningDelta` 明确进入 Textual 事件模型，`RuntimeController` 将 reasoning token 通过 `on_reasoning_token` 发给 UI。
+- `UIStore` 补齐 `stream`、`thinking`、`tool_views`、`current_turn`、`pending_interaction`、`modal`、`bottom`、`viewport`、`pet` 等 UI-only 状态域，并保留旧构造参数兼容。
+- `thinking.active_buffer` 作为流式 thinking live 状态；`AssistantFinal` 到达时固化为 `AssistantThinkingBlock`，由 transcript renderer 渲染，而不是放在 current turn 固定层。
+- `TranscriptArea` 内部拥有 `RichLogHistory`、`StreamingWidget` 和 `ActiveToolIndicator`；`StreamingThinkingTail`、`StreamingAssistantTail`、tool transient rows 都位于 transcript viewport 内。
+- `StreamingWidget` 同时消费 assistant streaming 文本和 thinking streaming tail；默认折叠显示 thinking，展开模式可显示完整 markdown。
+- `RichLogRenderer` 能渲染 `AssistantThinkingBlock`，历史 thinking 默认折叠/隐藏策略仍保留后续可配置空间。
+- 修复工具真实消费路径：即使 `ToolCallFinished` 先于 `ToolOutputProduced` 到达，shell/read-only 输出仍会进入 transcript；diff/command preview 即使早于 permission request 到达，也会缓存并挂到 `pending_interaction.permission.preview`。
+- 这轮只收口 Textual 布局层和 thinking/tool 消费路径，不切默认入口，不做单独 textual 分支，不完成 Textual memory full migration。
+
+验证：
+
+- `python -m py_compile src/xcode_cli/core/ui/state.py src/xcode_cli/core/ui/events.py src/xcode_cli/core/runtime/controller.py src/xcode_cli/core/ui/textual/app.py src/xcode_cli/core/ui/textual/widgets.py src/xcode_cli/core/ui/textual/renderers.py tests/test_textual_chat_app.py`：OK。
+- `pytest tests/test_textual_chat_app.py tests/test_task_status_pet_slots.py -q`：`78 passed`。
+- `pytest tests/test_runtime_controller.py tests/test_ui_events_commands.py -q`：`88 passed`。
+- `pytest tests/test_streaming_renderer.py -q`：`6 passed`。
+- `pytest -q`：`476 passed`。
+
+## 17. 当前阻塞和遗留
 
 | 项目 | 状态 | 说明 |
 |------|------|------|
@@ -325,14 +350,14 @@ Review 结论：通过。合并后 `pytest -q` 为 `221 passed`；已提交并�
 | 项目级 config merge | 完成 | `.xcode/config.json` 字段级覆盖全局，`max_summary_chars` 从 Config 统一传入 |
 | `/env` 仪表盘 | 完成 | 重写为全屏 TUI，管理 max_tokens、max_summary_chars、render_mode、syntax_theme、auto_memory 五项，ANSI 局部刷新 |
 | Task 工具免审与 UI 展示 | 基础完成，持久化展示待后续迭代 | `task_create/update` auto-allow + 面板渲染 + `is_read_only` 权限消费已收口；当前面板为瞬时渲染，非 Claude Code 式的持久底部驻留 |
-| Textual Claude-style UI | Batch 6 完成（含 /env 文案修复、输出边界审计、transcript 持久化、启动回退），未默认切换；memory full migration 已有 plan，未完成 | slash commands 已接真实 resume/compact/plan 基础服务，task/status/pet slots 已接入 ChatApp；`/resume` 选择器为纯文本 transient widget，恢复反馈已与 legacy 对齐，`/compact` 期间拒绝新输入，`/env` 文案已修正为 read-only；Textual 普通对话和工具调用会写入 `SessionStore` transcript；`run_shell` 输出通过事件进入 Textual UI；Textual `/memory` 当前仍只是基础状态展示，尚未和 legacy 完整对齐；启动失败可回退到 legacy；Windows E2E 手动验收清单已创建，待执行；默认入口切换仍未完成 |
+| Textual Claude-style UI | Batch 6 与 layout/thinking 收口完成，未默认切换；memory full migration 已有 plan，未完成 | slash commands 已接真实 resume/compact/plan 基础服务，task/status/pet slots 已接入 ChatApp；`/resume` 选择器为纯文本 transient widget，恢复反馈已与 legacy 对齐；`/compact` 期间拒绝新输入，`/env` 文案已修正为 read-only；Textual 普通对话和工具调用会写入 `SessionStore` transcript；`thinking` 已进入 transcript renderer/tail 而非 current turn 固定层；`run_shell` 输出通过事件进入 Textual UI，且工具完成/输出事件乱序时不会丢失展示；diff/command preview 会进入真实 pending permission surface；Textual `/memory` 当前仍只是基础状态展示，尚未和 legacy 完整对齐；启动失败可回退到 legacy；Windows E2E 手动验收清单已创建，待执行；默认入口切换仍未完成 |
 | `/resume` last_user_input 不稳定 | 仅记录 | 同一 session 的预览文案随时间变化，用户难识别；后续可考虑首条输入或固定摘要 |
 | `/resume` legacy header 重复渲染 | Bug | 老版本 `/resume` 上下选择时，`_refresh_session_list` 的 ANSI 光标跳行数与 Rich `console.print()` 实际输出行数不一致，导致 "Select session to resume: (↑/↓, Enter, Esc)" 行重复堆积。根因：`_refresh_session_list` 用 `count = len(sessions) + 1` 估算行数，但 Rich 可能因 terminal width 自动换行或添加额外转义序列，使实际行数 > count。修复方向：header 只在首次渲染时打印，`_refresh_session_list` 只刷新 item 行；或用 Rich `Live` / `Panel` 整体替换而非 ANSI 光标控制。 |
 | 原生 Windows E2E | 未完成 | 需要在 cmd.exe/PowerShell 验证完整交互 |
 | Phase 5 | 冻结 | 不作为近期默认开发目标 |
 
-## 17. 下一步
+## 18. 下一步
 
 1. 按 `docs/superpowers/plans/2026-06-02-textual-memory-full-migration.md` 推进 Textual memory 完整迁移，覆盖 system prompt、工具注册、权限、写入后生效、`/memory auto on|off`、slash 展示和测试。
-2. 做原生 cmd.exe/PowerShell 交互验收，重点覆盖审批菜单、diff preview、工具摘要折叠、多轮 tool call、`/resume`、`/compact`。
+2. 做原生 cmd.exe/PowerShell 交互验收，重点覆盖审批菜单、diff preview、工具摘要折叠、多轮 tool call、`/resume`、`/compact`、thinking transcript tail。
 3. 继续第二轮结构收口：拆 `/memory`、`/context`、`/plan` 等 command handlers。（`/env` 已收口为 EnvDashboard）

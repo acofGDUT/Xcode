@@ -436,24 +436,45 @@ Batch 6 完成项：
 - Batch 6 全量回归：`pytest -q`，passed。
 - 编译检查：`python -m py_compile src/xcode_cli/main.py src/xcode_cli/core/runtime/agent_engine.py src/xcode_cli/core/runtime/controller.py src/xcode_cli/core/ui/textual/app.py src/xcode_cli/core/ui/textual/widgets.py`，OK。
 
-## 23. Textual UI rendering pipeline 仍未成型
+## 23. Textual UI rendering pipeline 基础收口，完整管线待后续
 
-**状态**：Open
+**状态**：Mitigated
 **关联**：Textual UI / Claude Code-style rendering / task and tool display
 
-当前 Textual UI 仍主要是事件到 block/widget 的直接映射。它已经有 transcript、streaming、approval、diff、resume selector、基础 task/status/pet slots，但还没有 Claude Code 式的 normalize -> reorder -> group -> collapse -> expand 管线。
+当前 Textual UI 已完成 layout/thinking 基础收口：transcript、streaming assistant tail、streaming thinking tail、active tool transient row、approval/diff、resume selector、基础 task/status/pet slots 已经进入明确的 UIStore 状态域和 Textual widget 消费路径。它仍没有完整 Claude Code 式的 normalize -> reorder -> group -> collapse -> expand 管线，因此状态是 mitigated，而不是 resolved。
 
-后续方向已记录在 `docs/superpowers/plans/2026-06-02-textual-ui-rendering-pipeline-redesign.md`。执行顺序应是：
+2026-06-03 收口：
 
-1. UI Agent 先输出交互和组件设计稿。
-2. Codex review 设计稿，确认信息架构、显示密度、Windows 约束和 UI-only/transcript 边界。
-3. Coding Agent 再分批实现 view state、tool grouping/collapse、shell progress、thinking 折叠和 task checklist。
+- `TranscriptArea` 现在拥有 `RichLogHistory`、`StreamingWidget` 和 `ActiveToolIndicator`，避免 streaming/thinking/tool transient rows 落到 main layout 兄弟节点或 current turn 固定层。
+- `ReasoningDelta -> UIStore.thinking.active_buffer -> StreamingWidget` 形成 live thinking tail；assistant final 时固化为 `AssistantThinkingBlock`，由 `RichLogRenderer` 作为 transcript row 渲染。
+- `UIStore` 拆出 `stream`、`thinking`、`tool_views`、`current_turn`、`pending_interaction`、`modal`、`bottom`、`viewport`、`pet` 等状态域，同时保留旧构造参数兼容。
+- `ToolCallFinished` 早于 `ToolOutputProduced` 到达时，shell/read-only 输出仍会进入 transcript，不再出现代码写了但 UI 不消费的路径。
+- diff/command preview 会缓存并挂到 `pending_interaction.permission.preview`；preview 早于 permission request 到达时也不会丢失。
+- 这轮直接在 `app-v2` 收口，不再维护单独 textual 分支；Textual 仍未切为默认入口。
+
+仍然保留的风险：
+
+- 完整 tool grouping/collapse/expand 管线尚未完成；read/grep/glob 的聚合、shell tail 统计、完整输出展开仍待后续。
+- 历史 thinking 默认折叠/隐藏策略已有状态入口，但还没有完整用户可配置开关。
+- Textual memory full migration 尚未完成，`/memory` 仍未和 legacy 完整对齐。
+- Windows cmd.exe/PowerShell E2E 手动验收仍待执行。
+
+后续方向已记录在 `docs/superpowers/plans/2026-06-02-textual-ui-rendering-pipeline-redesign.md` 和 `docs/superpowers/plans/2026-06-02-textual-memory-full-migration.md`。执行顺序应是：
+
+1. 先在现有 transcript ownership 基础上补 tool grouping/collapse、shell progress、thinking 展示配置和 task checklist。
+2. Codex review 信息架构、显示密度、Windows 约束和 UI-only/transcript 边界。
+3. 再考虑是否把 Textual 设为默认入口；默认切换必须以 Windows E2E 和 memory full migration 验收为前置条件。
 
 设计约束：
 
-- thinking delta、shell progress tick、tool output chunk 不应逐条进入长期 transcript。
-- 当前 turn 动态状态应放进 UI-only view state。
+- thinking delta、shell progress tick、tool output chunk 不应逐条进入长期 transcript；final thinking 可以作为 `AssistantThinkingBlock` 进入 transcript renderer。
+- current turn 固定层不承载 thinking；thinking 和 streaming answer 一样属于 assistant turn 的动态 transcript 渲染。
 - read/grep/glob 默认合并摘要，可展开。
 - edit/write 的 diff 和 approval 不得被折叠隐藏。
 - shell 长输出显示 tail、elapsed、line count、byte count，完整输出按需展开。
 - task UI 需要显示任务标题和状态，不能长期停留在 `Tasks: N active`。
+
+验证记录：
+
+- `python -m py_compile src/xcode_cli/core/ui/state.py src/xcode_cli/core/ui/events.py src/xcode_cli/core/runtime/controller.py src/xcode_cli/core/ui/textual/app.py src/xcode_cli/core/ui/textual/widgets.py src/xcode_cli/core/ui/textual/renderers.py tests/test_textual_chat_app.py`：OK。
+- `pytest -q`：`476 passed`。

@@ -90,12 +90,12 @@ Textual Claude-style UI 目前是开发路径，不是默认入口。它的核�
 | `core/runtime/controller.py` | 消费 `UICommand`，驱动 agent/tool/slash/runtime 操作，并只通过 `UIEvent` 向 UI 汇报 |
 | `core/runtime/agent_engine.py` | UI-free LLM/tool turn loop，通过回调发出 streaming、tool started/finished/output/error |
 | `core/ui/commands.py` | Textual path 的用户意图命令模型 |
-| `core/ui/events.py` | Textual path 的事实事件模型 |
-| `core/ui/state.py` | UI-only message blocks、current-turn surfaces 和 pending permission 状态 |
+| `core/ui/events.py` | Textual path 的事实事件模型，包含 streaming、reasoning、tool、permission、slash/runtime 事件 |
+| `core/ui/state.py` | UI-only message blocks，以及 stream、thinking、tool_views、current_turn、pending_interaction、modal/bottom/viewport/pet 等状态域 |
 | `core/ui/presenters.py` | Task、Status、ActiveTurn、Pet 等 view model 转换 |
 | `core/ui/textual/app.py` | Textual ChatApp，消费事件并更新 UIStore/widgets |
 
-Batch 4/5 hardening 后，Textual path 已补齐这些基础能力：
+Batch 4/5/6 hardening 与 layout/thinking 收口后，Textual path 已补齐这些基础能力：
 
 - `RunSlashCommandCommand` 支持 `/help`、`/context`、`/tasks`、`/compact`、`/resume`、`/env`、`/memory`、`/plan`、`/exit` 的 UIEvent 分发。
 - `/compact` 在 active turn 或 pending permission 存在时拒绝执行，避免并发修改 history/surfaces。
@@ -109,8 +109,13 @@ Batch 4/5 hardening 后，Textual path 已补齐这些基础能力：
 - `StatusBar` 通过 `StatusPresenter` 渲染单行状态。
 - `PetSurface` / `PetState` / `PetViewModel` 仅作为隐藏插槽存在，默认不加载资源。
 - Textual 普通 turn 和 tool-call turn 会把 model-visible message 追加到当前 `SessionStore` transcript：user message 在提交时写入，assistant final、assistant tool_calls 和 tool result 由 `AgentEngine` 追加到 `_history` 后按顺序写入 transcript。diff preview、permission UI、status/task/pet 等 UI-only event 不写入 transcript。
+- `ReasoningDelta` 将 reasoning/thinking token 映射到 `UIStore.thinking.active_buffer` 与 `UIStore.stream.thinking_text`，由 transcript 内的 `StreamingWidget` 渲染 live thinking tail；assistant final 到达时，active thinking 固化为 `AssistantThinkingBlock`，由 `RichLogRenderer` 作为 transcript row 渲染。
+- `TranscriptArea` 拥有 `RichLogHistory`、`StreamingWidget` 和 `ActiveToolIndicator`，所以 `StreamingThinkingTail`、`StreamingAssistantTail` 和 active tool transient row 都位于 transcript viewport 内，不属于 Approval/current_turn 固定层。
+- `current_turn` 只保留当前 turn 的辅助 surface 和兼容状态；thinking 与 streaming answer 一样属于 assistant turn 的动态 transcript 渲染。
+- `ToolOutputProduced` 与 `ToolCallFinished` 到达顺序不会决定展示是否丢失：shell/read-only 工具输出会按事件写入 transcript，并通过 tool snapshot 做去重。
+- diff/command preview 会缓存到 `pending_interaction.permission.preview`，即使 preview 早于 permission request 到达，也会进入真实审批 surface。
 
-当前 Textual 边界：`/resume` 选择器已为纯文本 transient widget，不再向 RichLog 写入重复内容；恢复反馈已与 legacy `/resume` 对齐；`/env` 文案已修正为 read-only；普通对话和工具调用 transcript 已持久化；`run_shell` 输出通过 `ToolOutputProduced` 事件进入 Textual UI，不直接写入终端；`main.py` 中 `--textual` 启动失败可回退到 legacy；审批/diff 窄窗口弹性已验证；Windows E2E 手动验收清单已创建；默认入口切换仍未完成。
+当前 Textual 边界：`/resume` 选择器已为纯文本 transient widget，不再向 RichLog 写入重复内容；恢复反馈已与 legacy `/resume` 对齐；`/env` 文案已修正为 read-only；普通对话和工具调用 transcript 已持久化；thinking 已进入 transcript renderer/tail，而不是 current turn 固定层；`run_shell` 输出通过 `ToolOutputProduced` 事件进入 Textual UI，不直接写入终端；`main.py` 中 `--textual` 启动失败可回退到 legacy；审批/diff 窄窗口弹性已验证；Windows E2E 手动验收清单已创建；默认入口切换仍未完成。Textual 相关收口当前直接落在 `app-v2`，不再维护单独 textual 分支。
 
 Textual memory 当前仍未完整迁移。虽然 `RuntimeServices` 会创建 `MemoryManager`，`system_prompt()` 也走 `build_system_prompt()`，并且 controller 已具备 memory target auto-allow 的基础判断，但 `/memory` 仍只是基础状态 notice，尚未支持和 legacy 对齐的完整展示、`/memory auto on|off`、写入后下一轮 prompt 生效的完整回归测试。计划见 `docs/superpowers/plans/2026-06-02-textual-memory-full-migration.md`。
 

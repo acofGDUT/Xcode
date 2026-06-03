@@ -18,6 +18,7 @@ Xcode v0.1.0 已完成 Phase 1-4 和 Phase 4.5 Batch 1-2 的稳定化工作。
 - `/context`、`/env max-tokens`、syntax theme、工具结果语义化显示。
 - Phase 4.5 memory/path/context 测试基线。
 - 对话历史恢复基础能力：`/compact`、`/resume`、UUID transcript、checkpoint + recent tail 恢复。
+- Textual Claude-style UI 开发路径：slash/resume/compact/plan 基础服务、transcript 持久化、streaming assistant/thinking transcript tail、审批/diff surface 和工具输出真实消费路径已收口；仍未切为默认入口。
 
 Phase 5 生态扩展当前冻结，不作为近期默认开发目标。
 
@@ -34,7 +35,7 @@ Phase 5 生态扩展当前冻结，不作为近期默认开发目标。
 | P1 | 流式输出去重 | 基础收口完成 | 已避免结构化内容 raw + Rich 双重完整输出；后续再评估可替换区域式 streaming |
 | P1 | AgentRuntime 重构 | 第一轮完成 | 已抽出 commands/slash、conversation、tooling、ui 基础模块；后续继续拆 command handlers |
 | P1 | Task 工具免审与 UI 展示 | 基础完成 | 免审 + 瞬时面板渲染已实现；`is_read_only` 消费已收口；持久化底部驻留展示（同 Claude Code 的 toolbar 模式）留待后续迭代 |
-| P1 | Textual UI rendering pipeline | 计划中 | 借鉴 Claude Code 的 normalize/reorder/group/collapse/expand 管线，先交给 UI Agent 做设计，再由 Coding Agent 分批实现 |
+| P1 | Textual UI rendering pipeline | 基础收口完成，完整管线待后续 | 已完成 transcript ownership、streaming assistant/thinking tail、active tool transient row、preview/permission 真实消费路径；后续继续补 tool grouping/collapse/expand、shell progress 和 task checklist |
 | P1 | Textual memory 完整迁移 | 计划已建立，未实现 | 按 `2026-06-02-textual-memory-full-migration.md` 对齐 legacy memory：system prompt、工具注册、权限、写入后生效、`/memory auto on|off`、slash 展示和测试 |
 | P1 | 对话回退/分叉设计 | 未实现 | 提供非破坏性的 fork-based rollback |
 | P2 | 项目级配置合并 | 完成 | `.xcode/config.json` 字段级覆盖全局，`max_summary_chars` 等参数已统一定义在 Config，`/env` TUI 仪表盘统一管理 |
