@@ -49,6 +49,7 @@ class ShellUI:
         table.add_column("Command", style="green")
         table.add_column("Description", style="white")
         table.add_row("/help", "Show available commands")
+        table.add_row("/init", "Initialize a new XCODE.md file with codebase documentation")
         table.add_row("/context", "Show token usage and context budget")
         table.add_row("/dashboard", "Open API configuration dashboard")
         table.add_row("/skill", "Manage skills")

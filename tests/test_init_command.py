@@ -95,3 +95,30 @@ def test_run_chat_feeds_init_prompt_through_normal_user_turn(tmp_path: Path, mon
     assert agent._run_llm_loop.call_count == 1
     assert agent._history[0] == {"role": "user", "content": INIT_PROMPT}
     assert agent._history[1] == {"role": "assistant", "content": "created XCODE.md"}
+
+
+def test_shell_command_suggestions_include_init(tmp_path: Path, monkeypatch) -> None:
+    from io import StringIO
+
+    from rich.console import Console
+
+    from xcode_cli.core.ui.shell import ShellUI
+
+    agent = _make_agent(tmp_path, monkeypatch)
+    output = StringIO()
+    console = Console(file=output, force_terminal=False, width=120)
+    shell = ShellUI(
+        console=console,
+        config_store=agent.config_store,
+        context=agent.context,
+        session_start_getter=lambda: 0.0,
+        tool_count_getter=lambda: 0,
+        token_getter=lambda: 0,
+        cwd=agent.cwd,
+    )
+
+    shell.show_command_suggestions()
+
+    rendered = output.getvalue()
+    assert "/init" in rendered
+    assert "Initialize a new XCODE.md" in rendered
