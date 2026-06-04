@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from xcode_cli.core.context import ContextManager
 from xcode_cli.core.conversation.resume import ResumeCommandService
+from xcode_cli.core.session import SessionStore
+from xcode_cli.core.session_resume import SessionResumeBuilder
 
 
 class TestResumeTTY:
@@ -172,3 +176,37 @@ class TestReadKeyFunction:
         """read_key 函数可导入"""
         from xcode_cli.core.tooling.approval import read_key
         assert callable(read_key)
+
+
+class TestResumeSkillInvocation:
+    def test_resume_uses_skill_model_content_from_metadata(self, tmp_path: Path, monkeypatch) -> None:
+        import xcode_cli.paths
+
+        xcode_dir = tmp_path / ".xcode"
+        monkeypatch.setattr(xcode_cli.paths, "XCODE_DIR", xcode_dir, raising=True)
+        for subdir in ("sessions", "skills", "bin"):
+            (xcode_dir / subdir).mkdir(parents=True, exist_ok=True)
+
+        store = SessionStore(cwd=str(tmp_path / "project"))
+        session_id = store.new_session_id()
+        store.append_message(
+            session_id,
+            {
+                "role": "user",
+                "content": "/review src/foo.py",
+                "metadata": {
+                    "kind": "skill_invocation",
+                    "skill": "review",
+                    "model_content": "Review this: src/foo.py",
+                    "skill_source_hash": "sha256:test",
+                },
+            },
+        )
+        store.append_message(session_id, {"role": "assistant", "content": "ok"})
+
+        result = SessionResumeBuilder(ContextManager(max_tokens=128000), token_budget=100000).build(
+            store.transcript_path(session_id)
+        )
+
+        assert result.history[0] == {"role": "user", "content": "Review this: src/foo.py"}
+        assert result.history[1] == {"role": "assistant", "content": "ok"}

@@ -50,10 +50,7 @@ class SessionResumeBuilder:
                     post_checkpoint_messages = []
                     found_checkpoint = True
                 elif event.get("type") == "message":
-                    msg: dict[str, Any] = {}
-                    for key, value in event.items():
-                        if key not in ("type", "ts"):
-                            msg[key] = value
+                    msg = _message_for_model_history(event)
                     if found_checkpoint:
                         post_checkpoint_messages.append(msg)
 
@@ -97,11 +94,7 @@ class SessionResumeBuilder:
                 except json.JSONDecodeError:
                     continue
                 if event.get("type") == "message":
-                    msg: dict[str, Any] = {}
-                    for key, value in event.items():
-                        if key not in ("type", "ts"):
-                            msg[key] = value
-                    all_messages.append(msg)
+                    all_messages.append(_message_for_model_history(event))
 
         history = self._trim_tail_to_budget(all_messages)
         estimated = self._context.estimate_tokens(history)
@@ -158,3 +151,22 @@ class SessionResumeBuilder:
                                 del m["tool_calls"]
                             break
         return history
+
+
+def _message_for_model_history(event: dict[str, Any]) -> dict[str, Any]:
+    msg: dict[str, Any] = {}
+    for key, value in event.items():
+        if key not in ("type", "ts"):
+            msg[key] = value
+
+    metadata = msg.pop("metadata", None)
+    if (
+        msg.get("role") == "user"
+        and isinstance(metadata, dict)
+        and isinstance(metadata.get("model_content"), str)
+    ):
+        # Transcript keeps the visible slash command; resumed LLM history needs
+        # the hidden expanded prompt that originally reached the model.
+        msg["content"] = metadata["model_content"]
+
+    return msg
