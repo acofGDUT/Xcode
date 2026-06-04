@@ -25,6 +25,7 @@ Thumbs.db
 
 # Xcode user data (never commit)
 .xcode/
+.worktrees/
 
 # Test artifacts
 test_output/
