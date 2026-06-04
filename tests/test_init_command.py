@@ -90,7 +90,9 @@ def test_handle_slash_command_returns_init_prompt(tmp_path: Path, monkeypatch) -
 
     result = agent._handle_slash_command("/init")
 
-    assert result == INIT_PROMPT
+    assert result is not None
+    assert result.display_content == "/init"
+    assert result.model_content == INIT_PROMPT
     assert agent._history == []
 
 

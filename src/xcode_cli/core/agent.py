@@ -40,6 +40,7 @@ from xcode_cli.core.task_tracker import TaskTracker, create_task_tools
 from xcode_cli.core.tool_registry import ToolDef, ToolRegistry
 from xcode_cli.core.tools import ALL_TOOLS
 from xcode_cli.core.tools.agent_tool import create_dispatch_agent_tool
+from xcode_cli.core.turn import UserTurnInput, coerce_user_turn_input
 from xcode_cli.skills.manager import SkillManager
 
 
@@ -132,12 +133,12 @@ class AgentRuntime:
                     continue
 
                 if user_input.startswith("/"):
-                    prompt_command_text = self._handle_slash_command(user_input)
-                    if prompt_command_text is None:
+                    prompt_turn = self._handle_slash_command(user_input)
+                    if prompt_turn is None:
                         continue
-                    user_input = prompt_command_text
+                    user_input = prompt_turn
 
-                if self.plan_mode.pending_approval and self._handle_plan_approval_input(user_input):
+                if isinstance(user_input, str) and self.plan_mode.pending_approval and self._handle_plan_approval_input(user_input):
                     continue
 
                 self._run_user_turn(user_input)
@@ -159,12 +160,20 @@ class AgentRuntime:
     def _print_assistant_bubble(self, text: str) -> None:
         self.shell_ui.print_assistant_bubble(text)
 
-    def _run_user_turn(self, user_input: str) -> None:
+    def _run_user_turn(self, user_input: str | UserTurnInput) -> None:
         """执行一个普通 user turn：写入 session/history → 调用 LLM → 追加 assistant 响应。"""
-        self.sessions.append_message(self._session_id, {"role": "user", "content": user_input})
-        self.sessions.append_user_history(self._session_id, user_input)
-        self._print_user_bubble(user_input)
-        self._history.append({"role": "user", "content": user_input})
+        turn = coerce_user_turn_input(user_input)
+        message = {"role": "user", "content": turn.display_content}
+        metadata = dict(turn.metadata)
+        if turn.model_content != turn.display_content or metadata:
+            metadata["model_content"] = turn.model_content
+            if "skill_source_hash" in turn.metadata:
+                metadata["skill_source_hash"] = turn.metadata.get("skill_source_hash")
+            message["metadata"] = metadata
+        self.sessions.append_message(self._session_id, message)
+        self.sessions.append_user_history(self._session_id, turn.display_content)
+        self._print_user_bubble(turn.display_content)
+        self._history.append({"role": "user", "content": turn.model_content})
 
         if self.plan_mode.is_active:
             system_prompt = self.plan_mode.get_system_prompt()
@@ -200,9 +209,9 @@ class AgentRuntime:
         self.console.print("/memory | /memory auto on|off")
         self.console.print("/dashboard")
 
-    def _handle_slash_command(self, command: str) -> str | None:
+    def _handle_slash_command(self, command: str) -> UserTurnInput | None:
         result = self._dispatcher.dispatch(command)
-        return result.text if result.kind == "prompt" else None
+        return result.turn_input if result.kind == "prompt" else None
 
     def _handle_skill_command(self, parts: list[str]) -> None:
         self._skill_service.run(parts)

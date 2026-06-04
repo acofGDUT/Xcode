@@ -1,22 +1,30 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable
 
 from rich.console import Console
 
 from xcode_cli.core.commands.registry import CommandRegistry
+from xcode_cli.core.turn import UserTurnInput
+from xcode_cli.skills.prompt import ExpandedSkillPrompt
 
 
 @dataclass(frozen=True)
 class SlashDispatchResult:
     """斜杠命令分发结果。
 
-    kind="prompt": text 是展开后的 prompt，应作为普通 user input 继续处理。
+    kind="prompt": turn_input 是展开后的 user turn，应继续走普通 user turn。
     kind="handled": 命令已由 side-effect handler 处理完毕，应回到输入循环。
     """
     kind: str
-    text: str | None = None
+    turn_input: UserTurnInput | None = None
+
+    @property
+    def text(self) -> str | None:
+        if self.turn_input is None:
+            return None
+        return self.turn_input.model_content
 
 
 class SlashCommandDispatcher:
@@ -68,7 +76,22 @@ class SlashCommandDispatcher:
         prompt_cmd = self._registry.get(head)
         if prompt_cmd is not None and prompt_cmd.kind == "prompt":
             args = " ".join(parts[1:]) if len(parts) > 1 else ""
-            return SlashDispatchResult(kind="prompt", text=prompt_cmd.handler(args))
+            payload = prompt_cmd.handler(args)
+            metadata = dict(prompt_cmd.metadata)
+            if prompt_cmd.source == "skill":
+                metadata["args"] = args
+            if isinstance(payload, UserTurnInput):
+                turn_input = payload
+            elif isinstance(payload, ExpandedSkillPrompt):
+                turn_input = UserTurnInput(
+                    display_content=command,
+                    model_content=payload.prompt,
+                    metadata=metadata,
+                    allowed_tools=payload.allowed_tools,
+                )
+            else:
+                turn_input = UserTurnInput(display_content=command, model_content=str(payload), metadata=metadata)
+            return SlashDispatchResult(kind="prompt", turn_input=turn_input)
 
         # side-effect command → 调用 handler，返回 handled
         handler = self._handlers.get(head)

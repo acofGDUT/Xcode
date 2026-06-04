@@ -74,6 +74,26 @@ class TestRunUserTurn:
         assert agent._history[0] == {"role": "user", "content": INIT_PROMPT}
         assert agent._history[1] == {"role": "assistant", "content": "created XCODE.md"}
 
+    def test_user_turn_input_uses_model_content_for_llm_history(self, tmp_path: Path, monkeypatch) -> None:
+        from xcode_cli.core.turn import UserTurnInput
+
+        agent = _make_agent(tmp_path, monkeypatch)
+        agent._run_llm_loop = MagicMock(return_value="reviewed")
+
+        agent._run_user_turn(
+            UserTurnInput(
+                display_content="/review src/foo.py",
+                model_content="Review this: src/foo.py",
+                metadata={"kind": "skill_invocation", "skill": "review"},
+            )
+        )
+
+        assert agent._history[0] == {"role": "user", "content": "Review this: src/foo.py"}
+        saved = agent.sessions.load_history(agent._session_id)
+        assert saved[0]["content"] == "/review src/foo.py"
+        assert saved[0]["metadata"]["model_content"] == "Review this: src/foo.py"
+        assert saved[0]["metadata"]["skill"] == "review"
+
     def test_llm_error_does_not_append_assistant(self, tmp_path: Path, monkeypatch) -> None:
         """LLM 错误结果不追加 assistant 到 _history"""
         agent = _make_agent(tmp_path, monkeypatch)

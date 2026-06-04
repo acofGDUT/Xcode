@@ -9,6 +9,7 @@ from rich.console import Console
 
 from xcode_cli.core.commands.dispatcher import SlashCommandDispatcher, SlashDispatchResult
 from xcode_cli.core.commands.slash import SlashCommand
+from xcode_cli.core.turn import UserTurnInput
 
 
 def _make_console() -> Console:
@@ -169,6 +170,6 @@ class TestSlashDispatchResult:
         assert r.text is None
 
     def test_prompt_result_carries_text(self) -> None:
-        r = SlashDispatchResult(kind="prompt", text="hello")
+        r = SlashDispatchResult(kind="prompt", turn_input=UserTurnInput(display_content="/x", model_content="hello"))
         assert r.kind == "prompt"
         assert r.text == "hello"

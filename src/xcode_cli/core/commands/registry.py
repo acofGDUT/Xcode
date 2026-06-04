@@ -41,8 +41,8 @@ class CommandRegistry:
 def create_skill_slash_command(skill: Skill) -> SlashCommand:
     expander = SkillPromptExpander()
 
-    def handler(args: str) -> str:
-        return expander.expand(skill, args).prompt
+    def handler(args: str) -> object:
+        return expander.expand(skill, args)
 
     return SlashCommand(
         name=skill.name,
@@ -51,7 +51,7 @@ def create_skill_slash_command(skill: Skill) -> SlashCommand:
         handler=handler,
         source="skill",
         argument_hint=skill.argument_hint,
-        metadata={"skill": skill.name},
+        metadata={"kind": "skill_invocation", "skill": skill.name},
     )
 
 

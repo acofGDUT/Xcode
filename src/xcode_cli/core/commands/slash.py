@@ -11,7 +11,7 @@ class SlashCommand:
     name: str
     kind: str
     description: str
-    handler: Callable[[str], str]
+    handler: Callable[[str], object]
     source: str = "builtin"
     argument_hint: str | None = None
     metadata: dict[str, object] = field(default_factory=dict)
