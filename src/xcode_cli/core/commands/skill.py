@@ -53,15 +53,12 @@ class SkillCommandService:
 
     def list_installed(self) -> None:
         """列出已安装的 skill 及 enable/disable 状态。"""
-        cfg = self._config.load()
-        enabled = set(cfg.enabled_skills)
         skills = self._skills.list_installed()
         if not skills:
             self._console.print("No skills installed.")
             return
         for s in skills:
-            status = "enabled" if s.name in enabled else "disabled"
-            self._console.print(f"- {s.name} \\[{status}\\] - {s.description}")
+            self._console.print(f"- {s.name} - {s.description}")
 
     def install(self, path: str) -> None:
         """从本地路径安装 skill。"""
@@ -72,15 +69,12 @@ class SkillCommandService:
 
     def enable(self, name: str) -> None:
         """启用 skill（幂等）。"""
-        cfg = self._config.load()
-        if name not in cfg.enabled_skills:
-            cfg.enabled_skills.append(name)
-            self._config.save(cfg)
-        self._console.print(f"Enabled skill: {name}")
+        self._console.print(
+            "Skills are now loaded from .xcode/skills/<name>/SKILL.md."
+        )
 
     def disable(self, name: str) -> None:
         """禁用 skill（幂等）。"""
-        cfg = self._config.load()
-        cfg.enabled_skills = [s for s in cfg.enabled_skills if s != name]
-        self._config.save(cfg)
-        self._console.print(f"Disabled skill: {name}")
+        self._console.print(
+            "Skills are now loaded from .xcode/skills/<name>/SKILL.md."
+        )

@@ -13,7 +13,7 @@ from rich.console import Console
 
 def _make_console() -> Console:
     output = StringIO()
-    # force_terminal=True 阻止 Rich 把 [enabled]/[disabled] 当 markup 吞掉
+    # force_terminal=True keeps Rich output behavior close to the real terminal.
     return Console(file=output, force_terminal=True, width=120)
 
 
@@ -40,8 +40,8 @@ class TestSkillCommandServiceList:
         output = _captured(console)
         assert "No skills installed." in output
 
-    def test_list_shows_installed_skills_with_status(self) -> None:
-        """list() 展示已安装 skill 及其 enable/disable 状态"""
+    def test_list_shows_installed_skills(self) -> None:
+        """list() 展示已安装 skill"""
         from xcode_cli.core.commands.skill import SkillCommandService
         from xcode_cli.skills.manager import InstalledSkill
 
@@ -51,7 +51,6 @@ class TestSkillCommandServiceList:
             InstalledSkill(name="bar", path=Path("/tmp/bar"), description="A bar skill"),
         ]
         config_store = MagicMock()
-        config_store.load.return_value.enabled_skills = ["foo"]
         console = _make_console()
 
         svc = SkillCommandService(skill_manager, config_store, console)
@@ -60,8 +59,8 @@ class TestSkillCommandServiceList:
         output = _captured(console)
         assert "foo" in output
         assert "bar" in output
-        assert "enabled" in output
-        assert "disabled" in output
+        assert "A foo skill" in output
+        assert "A bar skill" in output
 
 
 class TestSkillCommandServiceInstall:
@@ -90,25 +89,22 @@ class TestSkillCommandServiceInstall:
 class TestSkillCommandServiceEnable:
     """SkillCommandService.enable() 行为测试"""
 
-    def test_enable_writes_to_config(self) -> None:
-        """enable(name) 将 name 写入 Config.enabled_skills"""
+    def test_enable_outputs_migration_notice(self) -> None:
+        """enable(name) 输出迁移提示，不写配置"""
         from xcode_cli.core.commands.skill import SkillCommandService
 
         skill_manager = MagicMock()
         config_store = MagicMock()
-        cfg_mock = MagicMock()
-        cfg_mock.enabled_skills = []
-        config_store.load.return_value = cfg_mock
         console = _make_console()
 
         svc = SkillCommandService(skill_manager, config_store, console)
         svc.enable("foo")
 
-        assert "foo" in cfg_mock.enabled_skills
-        config_store.save.assert_called_once_with(cfg_mock)
+        config_store.load.assert_not_called()
+        config_store.save.assert_not_called()
         output = _captured(console)
-        assert "Enabled skill" in output
-        assert "foo" in output
+        assert "Skills are now loaded" in output
+        assert "SKILL.md" in output
 
     def test_enable_duplicate_does_not_add_twice(self) -> None:
         """重复 enable 同一 skill 不会重复添加"""
@@ -116,39 +112,34 @@ class TestSkillCommandServiceEnable:
 
         skill_manager = MagicMock()
         config_store = MagicMock()
-        cfg_mock = MagicMock()
-        cfg_mock.enabled_skills = ["foo"]
-        config_store.load.return_value = cfg_mock
         console = _make_console()
 
         svc = SkillCommandService(skill_manager, config_store, console)
         svc.enable("foo")
 
-        assert cfg_mock.enabled_skills == ["foo"]
+        config_store.load.assert_not_called()
+        config_store.save.assert_not_called()
 
 
 class TestSkillCommandServiceDisable:
     """SkillCommandService.disable() 行为测试"""
 
-    def test_disable_removes_from_config(self) -> None:
-        """disable(name) 从 Config.enabled_skills 删除指定 skill"""
+    def test_disable_outputs_migration_notice(self) -> None:
+        """disable(name) 输出迁移提示，不写配置"""
         from xcode_cli.core.commands.skill import SkillCommandService
 
         skill_manager = MagicMock()
         config_store = MagicMock()
-        cfg_mock = MagicMock()
-        cfg_mock.enabled_skills = ["foo", "bar"]
-        config_store.load.return_value = cfg_mock
         console = _make_console()
 
         svc = SkillCommandService(skill_manager, config_store, console)
         svc.disable("foo")
 
-        assert cfg_mock.enabled_skills == ["bar"]
-        config_store.save.assert_called_once_with(cfg_mock)
+        config_store.load.assert_not_called()
+        config_store.save.assert_not_called()
         output = _captured(console)
-        assert "Disabled skill" in output
-        assert "foo" in output
+        assert "Skills are now loaded" in output
+        assert "SKILL.md" in output
 
     def test_disable_nonexistent_is_noop(self) -> None:
         """disable 不存在的 skill 不会崩溃"""
@@ -156,15 +147,13 @@ class TestSkillCommandServiceDisable:
 
         skill_manager = MagicMock()
         config_store = MagicMock()
-        cfg_mock = MagicMock()
-        cfg_mock.enabled_skills = ["foo"]
-        config_store.load.return_value = cfg_mock
         console = _make_console()
 
         svc = SkillCommandService(skill_manager, config_store, console)
         svc.disable("nonexistent")
 
-        assert cfg_mock.enabled_skills == ["foo"]
+        config_store.load.assert_not_called()
+        config_store.save.assert_not_called()
 
 
 class TestSkillCommandServiceRun:
@@ -191,7 +180,6 @@ class TestSkillCommandServiceRun:
         skill_manager = MagicMock()
         skill_manager.list_installed.return_value = []
         config_store = MagicMock()
-        config_store.load.return_value.enabled_skills = []
         console = _make_console()
 
         svc = SkillCommandService(skill_manager, config_store, console)
@@ -223,15 +211,14 @@ class TestSkillCommandServiceRun:
 
         skill_manager = MagicMock()
         config_store = MagicMock()
-        cfg_mock = MagicMock()
-        cfg_mock.enabled_skills = []
-        config_store.load.return_value = cfg_mock
         console = _make_console()
 
         svc = SkillCommandService(skill_manager, config_store, console)
         svc.run(["/skill", "enable", "foo"])
 
-        assert "foo" in cfg_mock.enabled_skills
+        output = _captured(console)
+        assert "Skills are now loaded" in output
+        assert "SKILL.md" in output
 
     def test_run_disable_delegates_to_disable(self) -> None:
         """/skill disable <name> 委托给 disable()"""
@@ -239,12 +226,11 @@ class TestSkillCommandServiceRun:
 
         skill_manager = MagicMock()
         config_store = MagicMock()
-        cfg_mock = MagicMock()
-        cfg_mock.enabled_skills = ["foo"]
-        config_store.load.return_value = cfg_mock
         console = _make_console()
 
         svc = SkillCommandService(skill_manager, config_store, console)
         svc.run(["/skill", "disable", "foo"])
 
-        assert "foo" not in cfg_mock.enabled_skills
+        output = _captured(console)
+        assert "Skills are now loaded" in output
+        assert "SKILL.md" in output

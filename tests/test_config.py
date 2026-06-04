@@ -58,6 +58,22 @@ def test_config_load_missing_max_tokens_uses_default(tmp_path: Path) -> None:
     assert loaded.model == "foo"
 
 
+def test_config_ignores_legacy_enabled_skills_key(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    store = ConfigStore()
+    store.path = config_path
+
+    config_path.write_text(
+        json.dumps({"enabled_skills": ["review"], "model": "foo"}),
+        encoding="utf-8",
+    )
+
+    loaded = store.load()
+
+    assert not hasattr(loaded, "enabled_skills")
+    assert loaded.model == "foo"
+
+
 def test_config_store_creates_new_config_when_missing() -> None:
     store = ConfigStore()
     store.path = Path("/nonexistent/path/config.json")

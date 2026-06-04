@@ -35,13 +35,12 @@ class ShellUI:
         ensure_ripgrep_installed()
 
         cfg = self.config_store.load()
-        enabled = ", ".join(cfg.enabled_skills) if cfg.enabled_skills else "none"
         has_key = bool(cfg.api_key or os.getenv("XCODE_API_KEY") or os.getenv("OPENAI_API_KEY"))
         key_state = "ready" if has_key else "missing-key"
 
         self.console.print("[bold]Xcode[/bold] v0.1.0  /\\_/\\")
         self.console.print("terminal-native AI agent  (•.•)")
-        self.console.print(f"[dim]Skills:[/dim] {enabled} | [dim]API:[/dim] {key_state} | [dim]Project:[/dim] {self.cwd}")
+        self.console.print(f"[dim]API:[/dim] {key_state} | [dim]Project:[/dim] {self.cwd}")
         self.console.print("[dim]Type normally to chat · / for commands · Tab to complete[/dim]")
 
     def show_command_suggestions(self) -> None:

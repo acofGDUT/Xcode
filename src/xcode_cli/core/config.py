@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 from xcode_cli.paths import ensure_xcode_home
@@ -10,7 +10,6 @@ from xcode_cli.paths import ensure_xcode_home
 
 @dataclass
 class Config:
-    enabled_skills: list[str] = field(default_factory=list)
     api_key: str = ""
     base_url: str = ""
     model: str = ""
@@ -31,6 +30,8 @@ class ConfigStore:
         if not self.path.exists():
             return Config()
         data = json.loads(self.path.read_text(encoding="utf-8"))
+        allowed_fields = {f.name for f in fields(Config)}
+        data = {k: v for k, v in data.items() if k in allowed_fields}
         response_render_mode = data.get("response_render_mode", "streaming_plus_final_render")
         if response_render_mode not in {"streaming_plus_final_render", "buffer_then_render"}:
             response_render_mode = "buffer_then_render"
@@ -48,7 +49,6 @@ class ConfigStore:
             max_summary_chars = 6000
 
         cfg = Config(
-            enabled_skills=data.get("enabled_skills", []),
             api_key=data.get("api_key", ""),
             base_url=data.get("base_url", ""),
             model=data.get("model", ""),
@@ -66,11 +66,7 @@ class ConfigStore:
             try:
                 project_data = json.loads(project_config_path.read_text(encoding="utf-8"))
                 if isinstance(project_data, dict):
-                    for field_name in [
-                        "enabled_skills", "api_key", "base_url", "model", "provider",
-                        "auto_memory", "max_tokens", "response_render_mode", "syntax_theme",
-                        "max_summary_chars",
-                    ]:
+                    for field_name in allowed_fields:
                         if field_name in project_data:
                             setattr(cfg, field_name, project_data[field_name])
             except (json.JSONDecodeError, OSError) as exc:
@@ -80,7 +76,6 @@ class ConfigStore:
 
     def save(self, config: Config) -> None:
         payload = {
-            "enabled_skills": config.enabled_skills,
             "api_key": config.api_key,
             "base_url": config.base_url,
             "model": config.model,

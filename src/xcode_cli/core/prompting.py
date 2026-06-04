@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from xcode_cli.core.config import Config
 from xcode_cli.core.memory import MemoryManager
-from xcode_cli.skills.manager import SkillManager
 
 BASE_SYSTEM_PROMPT = """You are Xcode, a local coding CLI agent. You help users with software engineering tasks.
 
@@ -204,7 +201,7 @@ When in doubt: if it needs to survive beyond the current task and isn't derivabl
 """
 
 
-def build_system_prompt(config: Config, skill_manager: SkillManager, cwd: str = "") -> str:
+def build_system_prompt(config: Config, cwd: str = "") -> str:
     sections: list[str] = [BASE_SYSTEM_PROMPT]
     memory_manager = MemoryManager(cwd=cwd or None)
 
@@ -219,18 +216,6 @@ def build_system_prompt(config: Config, skill_manager: SkillManager, cwd: str = 
             "- When writing memory, use these exact resolved paths. "
             "Do not invent %USERNAME% or replace <project> with the full working-directory path."
         )
-
-    if config.enabled_skills:
-        sections.append("\nEnabled skills:")
-        installed = {s.name: s for s in skill_manager.list_installed()}
-        for name in config.enabled_skills:
-            skill = installed.get(name)
-            if not skill:
-                continue
-            skill_md = (Path(skill.path) / "SKILL.md")
-            if skill_md.exists():
-                sections.append(f"\n## Skill: {name}\n")
-                sections.append(skill_md.read_text(encoding="utf-8"))
 
     memory_context = memory_manager.get_context_for_prompt(config)
     if memory_context:

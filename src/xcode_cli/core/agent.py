@@ -169,7 +169,7 @@ class AgentRuntime:
         if self.plan_mode.is_active:
             system_prompt = self.plan_mode.get_system_prompt()
         else:
-            system_prompt = build_system_prompt(self.config_store.load(), self.skills, self.cwd)
+            system_prompt = build_system_prompt(self.config_store.load(), self.cwd)
 
         self._runtime_status.update("busy")
         try:
@@ -351,7 +351,7 @@ class AgentRuntime:
     def _current_system_prompt(self) -> str:
         if self.plan_mode.is_active:
             return self.plan_mode.get_system_prompt()
-        return build_system_prompt(self.config_store.load(), self.skills, self.cwd)
+        return build_system_prompt(self.config_store.load(), self.cwd)
 
     def _handle_context_command(self) -> None:
         cfg = self.config_store.load()
