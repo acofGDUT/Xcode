@@ -65,6 +65,7 @@ class AgentRuntime:
         self._estimated_tokens = 0
         self._history: list[dict[str, Any]] = []
         self._session_id: str = ""
+        self._current_allowed_tools: list[str] | None = None
         self._session_auto_approve: dict[str, bool] = {"write": False, "shell": False}
         self.prompt = PromptSession(completer=SlashCompleter(), auto_suggest=AutoSuggestFromHistory())
         self.approval = ToolApprovalController(self.console, self._session_auto_approve)
@@ -163,6 +164,7 @@ class AgentRuntime:
     def _run_user_turn(self, user_input: str | UserTurnInput) -> None:
         """执行一个普通 user turn：写入 session/history → 调用 LLM → 追加 assistant 响应。"""
         turn = coerce_user_turn_input(user_input)
+        self._current_allowed_tools = turn.allowed_tools
         message = {"role": "user", "content": turn.display_content}
         metadata = dict(turn.metadata)
         if turn.model_content != turn.display_content or metadata:
@@ -527,7 +529,7 @@ class AgentRuntime:
                 response = self.llm.complete(
                     system_prompt=system_prompt,
                     messages=history,
-                    tool_schemas=self.tools.get_openai_schemas(),
+                    tool_schemas=self.tools.get_openai_schemas(allowed_tools=self._current_allowed_tools),
                     on_text_token=on_token,
                     on_reasoning_token=on_reasoning_token,
                 )
@@ -559,7 +561,7 @@ class AgentRuntime:
                     return "No response."
                 return final_text
 
-            tool_result = self.tool_executor.execute(response)
+            tool_result = self.tool_executor.execute(response, allowed_tools=self._current_allowed_tools)
             self._tool_call_count += tool_result.executed_count
             history.append(tool_result.assistant_message)
             history.extend(tool_result.tool_messages)

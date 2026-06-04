@@ -37,13 +37,19 @@ class ToolCallExecutor:
         self.auto_approve = auto_approve
         self.tool_display = tool_display or ToolCallDisplay(ToolDisplayState(expanded=True))
 
-    def execute(self, response: LLMResponse) -> ToolExecutionResult:
+    def execute(self, response: LLMResponse, allowed_tools: list[str] | None = None) -> ToolExecutionResult:
         executed_calls: list[tuple[Any, str]] = []
         executed_count = 0
+        allowed = set(allowed_tools) if allowed_tools is not None else None
 
         self._render_tool_calls(response.tool_calls)
 
         for tc in response.tool_calls:
+            if allowed is not None and tc.name not in allowed:
+                result = f"Tool error: tool '{tc.name}' is not allowed by the current skill."
+                self.console.print(f"  [bold red]{result}[/bold red]")
+                executed_calls.append((tc, result))
+                continue
 
             level = self.permissions.check(tc.name, is_read_only=self.tools.is_read_only(tc.name))
             if level == "deny":

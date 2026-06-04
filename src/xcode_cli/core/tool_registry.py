@@ -21,9 +21,12 @@ class ToolRegistry:
     def register(self, tool: ToolDef) -> None:
         self._tools[tool.name] = tool
 
-    def get_openai_schemas(self) -> list[dict]:
+    def get_openai_schemas(self, allowed_tools: list[str] | None = None) -> list[dict]:
+        allowed = set(allowed_tools) if allowed_tools is not None else None
         schemas: list[dict] = []
         for tool in self._tools.values():
+            if allowed is not None and tool.name not in allowed:
+                continue
             schemas.append(
                 {
                     "type": "function",
