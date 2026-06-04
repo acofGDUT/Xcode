@@ -16,7 +16,7 @@ from rich.table import Table
 from rich.text import Text
 
 from xcode_cli.core.permissions import PermissionManager
-from xcode_cli.core.commands.slash import SlashCompleter
+from xcode_cli.core.commands.slash import PROMPT_COMMANDS, SlashCompleter
 from xcode_cli.core.config import ConfigStore
 from xcode_cli.core.conversation.compaction import ConversationCompactor
 from xcode_cli.core.conversation.resume import ResumeCommandService
@@ -117,8 +117,10 @@ class AgentRuntime:
                     continue
 
                 if user_input.startswith("/"):
-                    self._handle_slash_command(user_input)
-                    continue
+                    prompt_command_text = self._handle_slash_command(user_input)
+                    if prompt_command_text is None:
+                        continue
+                    user_input = prompt_command_text
 
                 if self.plan_mode.pending_approval and self._handle_plan_approval_input(user_input):
                     continue
@@ -170,52 +172,59 @@ class AgentRuntime:
     def _print_assistant_bubble(self, text: str) -> None:
         self.shell_ui.print_assistant_bubble(text)
 
-    def _handle_slash_command(self, command: str) -> None:
+    def _handle_slash_command(self, command: str) -> str | None:
         parts = command.split()
         head = parts[0].lower()
+        args = " ".join(parts[1:]) if len(parts) > 1 else ""
+
+        prompt_command = PROMPT_COMMANDS.get(head)
+        if prompt_command is not None:
+            return prompt_command.handler(args)
 
         if head == "/help":
             self._show_command_suggestions()
+            self.console.print("/init")
             self.console.print("/skill list|install <path>|enable <name>|disable <name>")
             self.console.print("/env  (配置仪表盘)")
             self.console.print("/context")
             self.console.print("/memory | /memory auto on|off")
             self.console.print("/dashboard")
-            return
+            return None
 
         if head == "/context":
             self._handle_context_command()
-            return
+            return None
 
         if head == "/dashboard":
             Dashboard().run()
-            return
+            return None
 
         if head == "/skill":
             self._handle_skill_command(parts)
-            return
+            return None
 
         if head == "/env":
             self._handle_env_command(parts)
-            return
+            return None
 
         if head == "/plan":
             self._handle_plan_command(parts)
-            return
+            return None
 
         if head == "/memory":
             self._handle_memory_command(parts)
-            return
+            return None
 
         if head == "/resume":
             self._handle_resume_command()
-            return
+            return None
 
         if head == "/compact":
             self._handle_compact_command()
-            return
+            return None
 
         self.console.print(f"Unknown command: {command}. Try /help")
+        return None
 
     def _handle_skill_command(self, parts: list[str]) -> None:
         if len(parts) == 1:

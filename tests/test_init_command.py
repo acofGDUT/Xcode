@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from unittest.mock import MagicMock
+
 from prompt_toolkit.document import Document
 
 from xcode_cli.core.commands.slash import INIT_PROMPT, PROMPT_COMMANDS, SlashCompleter, init_handler
@@ -35,3 +39,59 @@ def test_slash_completer_includes_init() -> None:
 
     assert any(completion.text == "/init" for completion in completions)
     assert any("Initialize a new XCODE.md" in str(completion.display_text) for completion in completions)
+
+
+def _setup_tmp_xcode_home(tmp_path: Path, monkeypatch) -> Path:
+    import xcode_cli.paths
+
+    xcode_dir = tmp_path / ".xcode"
+    monkeypatch.setattr(xcode_cli.paths, "XCODE_DIR", xcode_dir, raising=True)
+    xcode_dir.mkdir(parents=True, exist_ok=True)
+    (xcode_dir / "config.json").write_text(
+        json.dumps({"model": "test-model", "api_key": "test-key"}),
+        encoding="utf-8",
+    )
+    for subdir in ("sessions", "skills", "bin"):
+        (xcode_dir / subdir).mkdir(parents=True, exist_ok=True)
+    return xcode_dir
+
+
+def _make_agent(tmp_path: Path, monkeypatch):
+    import xcode_cli.core.agent as agent_mod
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    monkeypatch.chdir(project_dir)
+    _setup_tmp_xcode_home(tmp_path, monkeypatch)
+    monkeypatch.setattr(agent_mod, "PromptSession", MagicMock(return_value=MagicMock()), raising=True)
+    monkeypatch.setattr(agent_mod, "AutoSuggestFromHistory", MagicMock(return_value=MagicMock()), raising=True)
+    monkeypatch.setattr(agent_mod, "resolve_project_root", MagicMock(return_value=str(project_dir)), raising=True)
+
+    from xcode_cli.core.agent import AgentRuntime
+
+    agent = AgentRuntime()
+    agent._session_id = "test-session"
+    agent._history = []
+    return agent
+
+
+def test_handle_slash_command_returns_init_prompt(tmp_path: Path, monkeypatch) -> None:
+    agent = _make_agent(tmp_path, monkeypatch)
+
+    result = agent._handle_slash_command("/init")
+
+    assert result == INIT_PROMPT
+    assert agent._history == []
+
+
+def test_run_chat_feeds_init_prompt_through_normal_user_turn(tmp_path: Path, monkeypatch) -> None:
+    agent = _make_agent(tmp_path, monkeypatch)
+    prompts = iter(["/init", "/exit"])
+    agent.prompt.prompt.side_effect = lambda *args, **kwargs: next(prompts)
+    agent._run_llm_loop = MagicMock(return_value="created XCODE.md")
+
+    agent.run_chat()
+
+    assert agent._run_llm_loop.call_count == 1
+    assert agent._history[0] == {"role": "user", "content": INIT_PROMPT}
+    assert agent._history[1] == {"role": "assistant", "content": "created XCODE.md"}
