@@ -16,7 +16,9 @@ from rich.table import Table
 from rich.text import Text
 
 from xcode_cli.core.permissions import PermissionManager
-from xcode_cli.core.commands.slash import PROMPT_COMMANDS, SlashCompleter
+from xcode_cli.core.commands.dispatcher import SlashCommandDispatcher
+from xcode_cli.core.commands.skill import SkillCommandService
+from xcode_cli.core.commands.slash import SlashCompleter
 from xcode_cli.core.config import ConfigStore
 from xcode_cli.core.conversation.compaction import ConversationCompactor
 from xcode_cli.core.conversation.resume import ResumeCommandService
@@ -49,6 +51,7 @@ class AgentRuntime:
         self._runtime_status = RuntimeStatusStore()
         self.skills = SkillManager()
         self.config_store = ConfigStore()
+        self._skill_service = SkillCommandService(self.skills, self.config_store, self.console)
         self.llm = LLMClient()
         cfg = self.config_store.load()
         self.context = ContextManager(max_tokens=cfg.max_tokens, max_summary_chars=cfg.max_summary_chars)
@@ -95,6 +98,18 @@ class AgentRuntime:
             self._session_auto_approve,
             tool_display=self.tool_display,
         )
+        self._dispatcher = SlashCommandDispatcher(
+            console=self.console,
+            help_handler=self._handle_help_command,
+            context_handler=self._handle_context_command,
+            dashboard_handler=lambda: Dashboard().run(),
+            skill_handler=self._handle_skill_command,
+            env_handler=self._handle_env_command,
+            plan_handler=self._handle_plan_command,
+            memory_handler=self._handle_memory_command,
+            resume_handler=self._handle_resume_command,
+            compact_handler=self._handle_compact_command,
+        )
 
     def run_chat(self) -> None:
         self._session_id = self.sessions.new_session_id()
@@ -125,35 +140,7 @@ class AgentRuntime:
                 if self.plan_mode.pending_approval and self._handle_plan_approval_input(user_input):
                     continue
 
-                self.sessions.append_message(self._session_id, {"role": "user", "content": user_input})
-                self.sessions.append_user_history(self._session_id, user_input)
-                self._print_user_bubble(user_input)
-                self._history.append({"role": "user", "content": user_input})
-
-                if self.plan_mode.is_active:
-                    system_prompt = self.plan_mode.get_system_prompt()
-                else:
-                    system_prompt = build_system_prompt(self.config_store.load(), self.skills, self.cwd)
-
-                self._runtime_status.update("busy")
-                try:
-                    final_text = self._run_llm_loop(history=self._history, system_prompt=system_prompt)
-                finally:
-                    self._runtime_status.update("idle")
-
-                is_llm_error = final_text.startswith("[v0] LLM request failed:")
-                is_missing_key = final_text.startswith("[v0] Missing API key")
-                is_missing_pkg = final_text.startswith("[v0] openai package not installed")
-
-                if is_llm_error or is_missing_key or is_missing_pkg:
-                    self.console.print(f"[bold red]{final_text}[/bold red]")
-                    continue
-
-                self.sessions.append_message(self._session_id, {"role": "assistant", "content": final_text})
-                self._history.append({"role": "assistant", "content": final_text})
-
-                if self.plan_mode.pending_approval:
-                    self._show_plan_and_ask_approval()
+                self._run_user_turn(user_input)
         finally:
             self._runtime_status.delete()
 
@@ -172,96 +159,53 @@ class AgentRuntime:
     def _print_assistant_bubble(self, text: str) -> None:
         self.shell_ui.print_assistant_bubble(text)
 
+    def _run_user_turn(self, user_input: str) -> None:
+        """执行一个普通 user turn：写入 session/history → 调用 LLM → 追加 assistant 响应。"""
+        self.sessions.append_message(self._session_id, {"role": "user", "content": user_input})
+        self.sessions.append_user_history(self._session_id, user_input)
+        self._print_user_bubble(user_input)
+        self._history.append({"role": "user", "content": user_input})
+
+        if self.plan_mode.is_active:
+            system_prompt = self.plan_mode.get_system_prompt()
+        else:
+            system_prompt = build_system_prompt(self.config_store.load(), self.skills, self.cwd)
+
+        self._runtime_status.update("busy")
+        try:
+            final_text = self._run_llm_loop(history=self._history, system_prompt=system_prompt)
+        finally:
+            self._runtime_status.update("idle")
+
+        is_llm_error = final_text.startswith("[v0] LLM request failed:")
+        is_missing_key = final_text.startswith("[v0] Missing API key")
+        is_missing_pkg = final_text.startswith("[v0] openai package not installed")
+
+        if is_llm_error or is_missing_key or is_missing_pkg:
+            self.console.print(f"[bold red]{final_text}[/bold red]")
+            return
+
+        self.sessions.append_message(self._session_id, {"role": "assistant", "content": final_text})
+        self._history.append({"role": "assistant", "content": final_text})
+
+        if self.plan_mode.pending_approval:
+            self._show_plan_and_ask_approval()
+
+    def _handle_help_command(self) -> None:
+        self._show_command_suggestions()
+        self.console.print("/init")
+        self.console.print("/skill list|install <path>|enable <name>|disable <name>")
+        self.console.print("/env  (配置仪表盘)")
+        self.console.print("/context")
+        self.console.print("/memory | /memory auto on|off")
+        self.console.print("/dashboard")
+
     def _handle_slash_command(self, command: str) -> str | None:
-        parts = command.split()
-        head = parts[0].lower()
-        args = " ".join(parts[1:]) if len(parts) > 1 else ""
-
-        prompt_command = PROMPT_COMMANDS.get(head)
-        if prompt_command is not None:
-            return prompt_command.handler(args)
-
-        if head == "/help":
-            self._show_command_suggestions()
-            self.console.print("/init")
-            self.console.print("/skill list|install <path>|enable <name>|disable <name>")
-            self.console.print("/env  (配置仪表盘)")
-            self.console.print("/context")
-            self.console.print("/memory | /memory auto on|off")
-            self.console.print("/dashboard")
-            return None
-
-        if head == "/context":
-            self._handle_context_command()
-            return None
-
-        if head == "/dashboard":
-            Dashboard().run()
-            return None
-
-        if head == "/skill":
-            self._handle_skill_command(parts)
-            return None
-
-        if head == "/env":
-            self._handle_env_command(parts)
-            return None
-
-        if head == "/plan":
-            self._handle_plan_command(parts)
-            return None
-
-        if head == "/memory":
-            self._handle_memory_command(parts)
-            return None
-
-        if head == "/resume":
-            self._handle_resume_command()
-            return None
-
-        if head == "/compact":
-            self._handle_compact_command()
-            return None
-
-        self.console.print(f"Unknown command: {command}. Try /help")
-        return None
+        result = self._dispatcher.dispatch(command)
+        return result.text if result.kind == "prompt" else None
 
     def _handle_skill_command(self, parts: list[str]) -> None:
-        if len(parts) == 1:
-            self.console.print("/skill list | /skill install <path> | /skill enable <name> | /skill disable <name>")
-            return
-        action = parts[1].lower()
-        if action == "list":
-            cfg = self.config_store.load()
-            enabled = set(cfg.enabled_skills)
-            skills = self.skills.list_installed()
-            if not skills:
-                self.console.print("No skills installed.")
-                return
-            for s in skills:
-                status = "enabled" if s.name in enabled else "disabled"
-                self.console.print(f"- {s.name} [{status}] - {s.description}")
-            return
-        if action == "install" and len(parts) >= 3:
-            installed = self.skills.install(" ".join(parts[2:]))
-            self.console.print(f"Installed skill: [bold]{installed.name}[/bold] -> {installed.path}")
-            return
-        if action == "enable" and len(parts) >= 3:
-            name = " ".join(parts[2:])
-            cfg = self.config_store.load()
-            if name not in cfg.enabled_skills:
-                cfg.enabled_skills.append(name)
-                self.config_store.save(cfg)
-            self.console.print(f"Enabled skill: {name}")
-            return
-        if action == "disable" and len(parts) >= 3:
-            name = " ".join(parts[2:])
-            cfg = self.config_store.load()
-            cfg.enabled_skills = [s for s in cfg.enabled_skills if s != name]
-            self.config_store.save(cfg)
-            self.console.print(f"Disabled skill: {name}")
-            return
-        self.console.print("Usage: /skill list|install <path>|enable <name>|disable <name>")
+        self._skill_service.run(parts)
 
     def _handle_env_command(self, parts: list[str]) -> None:
         from xcode_cli.core.ui.env_dashboard import EnvDashboard

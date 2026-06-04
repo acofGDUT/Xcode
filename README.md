@@ -80,6 +80,22 @@ Root-level `ARCHITECTURE.md`, `ROADMAP.md`, `PROGRESS.md`, `DEVNOTES.md`, and `�
 
 `日期计划.md` 现在是工作日志，当前副本位于 [docs/journal/2026-05-25-日期计划.md](docs/journal/2026-05-25-%E6%97%A5%E6%9C%9F%E8%AE%A1%E5%88%92.md)。
 
+## Development Workflow
+
+Xcode uses a **Spec-first + TDD-core + E2E-acceptance** workflow:
+
+- Spec-first: meaningful feature, architecture, permission, context, session, or tool-loop changes start from `docs/superpowers/specs/` and `docs/superpowers/plans/`.
+- TDD-core: high-risk behavior is protected by failing tests before implementation, especially permissions, tool errors, session recovery, memory paths, context accounting, and regression fixes.
+- E2E-acceptance: terminal-native behavior is validated in real cmd.exe/PowerShell when prompt_toolkit, Rich rendering, approval menus, hotkeys, or Windows paths are involved.
+
+Testing is risk-layered:
+
+| Layer | Scope | Expectation |
+|-------|-------|-------------|
+| P0 | Security, state, tool loop, session, memory, context, Windows compatibility | Automated regression tests required. |
+| P1 | User-visible commands, task/sub-agent behavior, config merge, rendering state | Focused behavior tests expected. |
+| P2 | Simple wrappers, wording, low-risk display details, docs | Smoke/manual validation is enough when tests would be noisy. |
+
 ## Requirements
 
 - Python >= 3.10

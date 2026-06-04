@@ -24,6 +24,16 @@ def test_init_handler_returns_repository_initialization_prompt() -> None:
     assert "which files you used as sources" in prompt
 
 
+def test_init_prompt_protects_existing_xcode_md_from_overwrite() -> None:
+    prompt = init_handler("")
+
+    assert "First use read_file to check whether XCODE.md already exists." in prompt
+    assert "If XCODE.md already exists, do not use write_file to overwrite it." in prompt
+    assert "Use edit_file to make incremental changes to an existing XCODE.md." in prompt
+    assert "If you cannot safely edit the existing XCODE.md, do not write the file." in prompt
+    assert "Only use write_file to create XCODE.md when read_file clearly reports that the file does not exist." in prompt
+
+
 def test_init_is_registered_as_prompt_command() -> None:
     command = PROMPT_COMMANDS["/init"]
 
@@ -86,6 +96,8 @@ def test_handle_slash_command_returns_init_prompt(tmp_path: Path, monkeypatch) -
 
 def test_run_chat_feeds_init_prompt_through_normal_user_turn(tmp_path: Path, monkeypatch) -> None:
     agent = _make_agent(tmp_path, monkeypatch)
+    # 隔离网络依赖：render_welcome → ensure_ripgrep_installed 会尝试从 GitHub 下载 rg
+    monkeypatch.setattr("xcode_cli.core.ui.shell.ensure_ripgrep_installed", lambda: None)
     prompts = iter(["/init", "/exit"])
     agent.prompt.prompt.side_effect = lambda *args, **kwargs: next(prompts)
     agent._run_llm_loop = MagicMock(return_value="created XCODE.md")

@@ -385,3 +385,65 @@ Review 注意：这次修复只覆盖 `run_shell`。其他使用 `subprocess.run
 
 - 可以考虑记录 session 的"简要摘要"或"第一条用户输入"作为不变标识，而非动态变化的最后一条消息。
 - 或者在 session 创建时让用户起名。
+
+## 22. 开发流程与测试分层规范
+
+**状态**：Resolved
+**关联**：项目协作流程 / review 标准 / 测试基线
+
+当前项目采用 **Spec-first + TDD-core + E2E-acceptance**。
+
+含义：
+
+- **Spec-first**：中等以上功能、架构调整、权限、上下文、session、tool loop、终端 UI 等改动，先写规格或任务说明，再进入实现。
+- **TDD-core**：核心行为和 bugfix 先写失败测试，再写最小实现，最后重构。测试的价值在于锁住行为，不是追求表面覆盖率。
+- **E2E-acceptance**：prompt_toolkit、Rich Live、审批菜单、方向键、Windows 路径、真实 PowerShell/cmd.exe 交互等场景，必须用手工验收记录补足自动化测试的盲区。
+
+测试按风险分层：
+
+| 层级 | 典型范围 | 验收口径 |
+|------|----------|----------|
+| P0 | 权限 allow/ask/deny、工具异常捕获、tool loop、session resume、compaction、memory path、context budget/cost、Windows 路径/编码 | 必须有自动化回归测试；bugfix 必须先补复现测试；review 时优先查缺口。 |
+| P1 | slash command 行为、command handler 重构、task tracker、sub-agent 边界、配置合并、render mode 状态、工具摘要折叠 | 应有聚焦行为测试，测试用户可见行为和模块契约。 |
+| P2 | 简单 wrapper、纯文案、低风险展示细节、文档更新、一次性说明 | 不强制补测试；可用 smoke test、手工验收或文档说明替代。 |
+
+测试噪音边界：
+
+- 不为了覆盖率机械测试每个私有 helper。
+- 不重复测试已经被上层行为覆盖的同一分支。
+- 不写脆弱的 Rich 文案/布局快照测试，除非该布局本身就是稳定契约。
+- 不用 mock-only 测试替代真实行为测试；mock 只能隔离昂贵、外部或不可控依赖。
+
+Review 注意：
+
+- Coding Agent 的任务说明应标明本轮改动属于 P0/P1/P2 哪一层。
+- P0/P1 改动如果没有测试，需要明确解释为什么只能用手工验收覆盖。
+- 终端交互类改动不能只靠 pytest 结论收口，必须记录原生 Windows 验收情况。
+
+## 23. AgentRuntime 第二轮重构边界
+
+**状态**：Resolved
+**关联**：AgentRuntime Refactor Round 2 / skills 功能前置解耦
+
+当前收口：第二轮重构已经完成，目标是为后续 skills 功能降耦合，而不是提前设计完整的 SkillRuntime。`agent.py` 仍是主编排入口，但 slash command 路由、skill 命令服务和普通 user turn 已从大块主循环里拆出。
+
+已完成的边界：
+
+- `SlashCommandDispatcher` 负责 slash command 解析和分发，明确区分 prompt command 与 side-effect command。
+- `SkillCommandService` 负责 `list/install/enable/disable`，让 CLI `xcode skill ...` 和 REPL `/skill ...` 共用同一份业务逻辑。
+- `_run_user_turn()` 负责普通 user turn：session 持久化、history 更新、system prompt 构建、LLM 调用、错误短路、assistant 响应追加和 plan approval 展示。
+- `_run_llm_loop()` 未做整体搬迁或重写，继续承载 streaming、Thinking Live、tool loop、task panel 和 session tool transcript 写入。
+
+保留的设计取舍：
+
+- 不为了降低行数而拆散稳定的 tool loop。
+- 不引入抽象基类、事件总线或异步模型。
+- 不改变 `/help`、`/init`、`/skill`、`/memory`、`/plan`、`/context`、`/resume`、`/compact` 的用户可见行为。
+- skills 后续能力必须优先复用 `SkillCommandService`，不要再在 `main.py` 和 `agent.py` 各写一份 list/install/enable/disable 逻辑。
+- 当前 `SkillCommandService` 只是薄命令服务，不代表最终 skill 机制已经定型；后续应单独设计 skill manifest、prompt 注入、启用策略、权限和加载边界。
+
+Review 结果：
+
+- 这轮是 P1 结构性重构，以行为回归测试为主。
+- Coding Agent 分三步完成 `SkillCommandService`、`SlashCommandDispatcher`、`_run_user_turn()`，每步均经过 Codex review。
+- 最终验证记录见 `PROGRESS.md` 的 AgentRuntime Refactor Round 2 章节。

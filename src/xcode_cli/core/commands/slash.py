@@ -21,7 +21,11 @@ What to add:
 2. High-level code architecture and structure so that future instances can be productive more quickly. Focus on the "big picture" architecture that requires reading multiple files to understand.
 
 Usage notes:
-- If there's already an XCODE.md, suggest improvements to it.
+- First use read_file to check whether XCODE.md already exists.
+- If XCODE.md already exists, do not use write_file to overwrite it.
+- Use edit_file to make incremental changes to an existing XCODE.md.
+- If you cannot safely edit the existing XCODE.md, do not write the file. Instead, briefly suggest the improvements you would make.
+- Only use write_file to create XCODE.md when read_file clearly reports that the file does not exist.
 - When you make the initial XCODE.md, do not repeat yourself and do not include obvious instructions like "Provide helpful error messages to users", "Write unit tests for all new utilities", "Never include sensitive information (API keys, tokens) in code or commits".
 - Avoid listing every component or file structure that can be easily discovered.
 - Don't include generic development practices.

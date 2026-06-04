@@ -24,9 +24,10 @@
 | Task 工具免审 + UI 面板 + is_read_only 权限收口 | task_create/update 免审、瞬时 task 面板、只读工具默认 allow | 完成并通过 review | `2026-05-28-task-auto-allow-and-ui-plan.md` |
 | 开发流程与测试分层规范 | Spec-first + TDD-core + E2E-acceptance、P0/P1/P2 测试分层 | 完成 | `AGENTS.md` / `DEVNOTES.md` |
 | `/init` prompt command | 旧版 Claude 风格 prompt command，生成或改进仓库级 `XCODE.md` | 完成并通过测试 | `2026-06-04-init-command-plan.md` |
+| AgentRuntime Refactor Round 2 | SlashCommandDispatcher、SkillCommandService、普通 user turn 抽离 | 完成并通过 review | `2026-06-04-agent-runtime-refactor-round2-plan.md` |
 | Phase 5 | 生态扩展 | 冻结 | 未开始 |
 
-当前重点不是进入 Phase 5，而是补齐费用估算、原生 Windows 验收，以及继续第二轮结构收口。
+当前重点不是进入 Phase 5，而是补齐费用估算、原生 Windows 验收，并在第二轮结构收口后设计更完整的 skills 功能。
 
 ## 2. Phase 1：协议与工具升级
 
@@ -274,18 +275,52 @@ Review 结论：通过。合并后 `pytest -q` 为 `221 passed`；已提交并�
 - 规格文档：`docs/superpowers/specs/2026-06-04-init-command-design.md`
 - 实施计划：`docs/superpowers/plans/2026-06-04-init-command-plan.md`
 
-## 16. 当前阻塞和遗留
+## 16. AgentRuntime Refactor Round 2 完成：2026-06-04
+
+背景：第一轮 AgentRuntime 模块化已经抽出 slash completion、shell UI、resume/compaction、approval、tool execution、streaming 状态等模块，但 `agent.py` 仍然保留 slash command 具体 handler、skill 命令逻辑、普通 user turn 流程和 `_run_llm_loop()` orchestration。下一步准备开发更完整的 skills 功能，如果继续在 `agent.py` 和 `main.py` 中各自扩展 skill 命令，会增加重复和耦合。
+
+本轮完成内容：
+
+- 新增 `src/xcode_cli/core/commands/skill.py`，提供 `SkillCommandService`，让 CLI `xcode skill ...` 和 REPL `/skill ...` 共用 list/install/enable/disable 行为。
+- 新增 `src/xcode_cli/core/commands/dispatcher.py`，提供 `SlashCommandDispatcher` 和 `SlashDispatchResult`，把 slash command 路由从 `AgentRuntime` 中移出。
+- 新增 `_run_user_turn(user_input: str)`，让普通用户消息和 `/init` prompt command 复用同一条 user turn 路径。
+- 保持 `_run_llm_loop()` 不做整体搬迁或重写，避免扩大 streaming、tool loop、Thinking Live、session tool transcript 等高风险回归面。
+
+协作分工：
+
+- Coding Agent 负责代码任务：dispatcher、SkillCommandService、`_run_user_turn()` 抽离和 focused tests。
+- Codex 负责文档收口、最终验证、架构 review 和是否进入下一阶段的判断。
+
+验收结果：
+
+- `agent.py` 行数下降，`run_chat()` 更接近 REPL 输入循环，普通 turn 由 `_run_user_turn()` 处理。
+- `/help`、`/init`、`/skill`、`/memory`、`/plan`、`/context`、`/resume`、`/compact` 行为在聚焦测试中保持不变。
+- `main.py` 和 `agent.py` 不再重复实现 skill 命令业务逻辑。
+- `_run_llm_loop()` 未做整体搬迁或重写。
+- 每个代码任务完成后均经过 Codex review；测试隔离问题已修复，避免 `/init` 测试触发 ripgrep 网络下载。
+- 最终验证通过：
+  - `python -m py_compile src/xcode_cli/core/agent.py src/xcode_cli/core/commands/dispatcher.py src/xcode_cli/core/commands/skill.py src/xcode_cli/main.py`
+  - `pytest -q`：272 passed
+  - `git diff --check -- docs/current/ARCHITECTURE.md docs/current/DEVNOTES.md docs/current/PROGRESS.md docs/current/ROADMAP.md src/xcode_cli/core/agent.py src/xcode_cli/core/commands/dispatcher.py src/xcode_cli/core/commands/skill.py src/xcode_cli/main.py tests/test_agent_user_turn.py tests/test_init_command.py tests/test_skill_command_service.py tests/test_slash_dispatcher.py`
+
+开发文档：
+
+- 规格文档：`docs/superpowers/specs/2026-06-04-agent-runtime-refactor-round2-design.md`
+- 实施计划：`docs/superpowers/plans/2026-06-04-agent-runtime-refactor-round2-plan.md`
+
+## 17. 当前阻塞和遗留
 
 | 项目 | 状态 | 说明 |
 |------|------|------|
 | CLI `--resume` / `--continue` | 延后 | 当前只做交互内 `/resume`，CLI 恢复入口后续如有明确需求再设计 |
 | `/context` cost | 未实现 | 当前只有 token 估算，没有价格估算 |
 | `/init` prompt command | 完成并通过测试 | 已实现 prompt command 注册、普通 user turn 复用、help/completion 和回归测试 |
+| AgentRuntime Refactor Round 2 | 完成并通过 review | 已完成 SlashCommandDispatcher、SkillCommandService、普通 user turn 抽离；后续 skills 功能应复用这些边界 |
 | 工具调用 UI 折叠 | 基础完成 | 默认已折叠为工具摘要；`Ctrl+O` 展开和原生 Windows 热键验收仍未做 |
 | 工具调用轮次不中断 | 完成并待真实终端补充验收 | 已改为 `while True` 多轮 tool loop，并补超过 10 轮、拒绝后继续、空响应 fallback 回归测试 |
 | memory 自管理权限 | 完成 | memory-scoped 写入已免用户审核，普通文件仍保持审批 |
 | 流式输出重复显示 | 基础收口完成 | 结构化内容已避免 raw + Rich 双重完整输出；可替换区域式 streaming 仍未实现 |
-| `agent.py` 重构 | 第一轮完成，第二轮待继续 | 已抽出 slash completer、shell UI、resume/compaction、approval、tool execution、tool display、streaming 状态；command handlers 仍待继续拆 |
+| `agent.py` 重构 | 第二轮完成 | 已抽出 slash completer、slash dispatcher、SkillCommandService、shell UI、resume/compaction、approval、tool execution、tool display、streaming 状态和普通 user turn；`_run_llm_loop()` 暂不大动 |
 | memory deny 回归测试 | 完成 | 已补 explicit `deny` + memory path 场景，防止未来误放行 |
 | `/compact` 进度反馈 | 完成 | 压缩期间通过 Rich Live 显示 "Compacting context... (Xs)" 动态进度，手动和自动压缩共用 |
 | `/resume` 方向键选择 | 完成 | 改为方向键 ↑/↓ 浏览 + Enter 确认 + Esc 取消，复用审批菜单的 ANSI 光标刷新模式，保留非 TTY 数字输入 fallback |
@@ -296,8 +331,8 @@ Review 结论：通过。合并后 `pytest -q` 为 `221 passed`；已提交并�
 | 原生 Windows E2E | 未完成 | 需要在 cmd.exe/PowerShell 验证完整交互 |
 | Phase 5 | 冻结 | 不作为近期默认开发目标 |
 
-## 17. 下一步
+## 18. 下一步
 
-1. ~~实现 `/init` prompt command~~ ✅ 已完成。
+1. 设计更完整的 skills 功能，优先明确 skill 是 prompt 片段、工具包、工作流，还是三者组合。
 2. 做原生 cmd.exe/PowerShell 交互验收，重点覆盖审批菜单、diff preview、工具摘要折叠、多轮 tool call、`/resume`、`/compact`。
-3. 继续第二轮结构收口：拆 `/memory`、`/context`、`/plan` 等 command handlers。（`/env` 已收口为 EnvDashboard）
+3. 为 `/context` 增加 cost 估算，补齐 token 之外的费用视角。

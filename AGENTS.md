@@ -40,6 +40,31 @@ Codex 给 Coding Agent 的任务说明应尽量包含：
 - 验收标准：必须运行的命令、预期行为、需要补充的测试。
 - 文档要求：哪些文档需要同步更新。
 
+## 开发流程与测试分层
+
+本项目默认采用 **Spec-first + TDD-core + E2E-acceptance** 流程：
+
+1. **Spec-first**：中等以上功能、架构调整、行为变更、权限/上下文/session/tool loop 相关改动，应先写 `docs/superpowers/specs/` 规格或任务说明，再拆到 `docs/superpowers/plans/`。
+2. **TDD-core**：进入实现后，关键行为应先写失败测试，再写最小实现，最后重构。bug 修复必须先补能复现问题的回归测试。
+3. **E2E-acceptance**：终端交互、prompt_toolkit、Rich Live、审批菜单、方向键、`Ctrl+O`、Windows 路径等无法只靠单元测试证明的能力，必须补手工验收记录。
+4. **Review-first closeout**：结论必须跟在证据之后。没有测试、py_compile、smoke test 或手工验收记录时，不应声称“完成”。
+
+测试按风险分层，不追求无差别堆数量：
+
+| 层级 | 范围 | 要求 |
+|------|------|------|
+| P0 核心安全与状态 | 权限 allow/ask/deny、工具异常、tool loop、session resume、compaction checkpoint、memory path、context budget/cost、Windows 路径/编码 | 必须有自动化回归测试；新行为和 bugfix 优先 TDD；review 时重点检查遗漏。 |
+| P1 用户可见行为 | slash command、command handler 重构、task tracker、sub-agent 边界、配置合并、render mode 状态、工具摘要折叠 | 应有聚焦行为测试；允许少量 mock，但不能只测试 mock 调用。 |
+| P2 低风险胶水与展示 | 简单 wrapper、纯文案、稳定性较低的 Rich 排版细节、文档更新、一次性迁移说明 | 不强制补测试；可用 smoke test、手工验收或文档说明替代。 |
+
+测试取舍规则：
+
+- 优先测试用户可见行为和跨模块契约，不优先测试私有实现细节。
+- 避免为了覆盖率重复测试同一分支；一个上层行为测试已经锁住的路径，不必在多个 helper 上机械重复。
+- 避免脆弱的文案/布局快照测试；终端 UI 以语义、状态和关键交互验收为主。
+- mock 只能隔离昂贵或不可控依赖；测试主体仍应是真实业务代码。
+- Coding Agent 的任务说明必须写明本轮属于 P0/P1/P2 哪一层，以及需要运行哪些验证命令。
+
 ## Review 标准
 
 Codex 做代码审查时优先关注：

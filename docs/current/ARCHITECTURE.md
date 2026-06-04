@@ -16,6 +16,7 @@ flowchart TD
     Main --> Dashboard["Dashboard<br/>core/dashboard.py"]
     Main --> ToolCLI["xcode tool run/grep/glob"]
     Main --> SkillCLI["xcode skill ..."]
+    SkillCLI --> SkillCmd["SkillCommandService<br/>core/commands/skill.py"]
 
     Runtime --> Prompt["PromptSession<br/>prompt_toolkit"]
     Runtime --> Config["ConfigStore<br/>core/config.py"]
@@ -32,6 +33,8 @@ flowchart TD
     Runtime --> ToolExec["ToolCallExecutor<br/>core/tooling/execution.py"]
     Runtime --> ShellUI["ShellUI<br/>core/ui/shell.py"]
     Runtime --> Slash["SlashCompleter<br/>core/commands/slash.py"]
+    Runtime --> SlashDispatch["SlashCommandDispatcher<br/>core/commands/dispatcher.py"]
+    Runtime --> SkillCmd
     Runtime --> Status["RuntimeStatusStore<br/>core/runtime_status.py"]
     Runtime --> Plan["PlanMode<br/>core/planning.py"]
     Runtime --> Tasks["TaskTracker<br/>core/task_tracker.py"]
@@ -44,6 +47,9 @@ flowchart TD
     ToolExec --> Permissions
     ToolExec --> Approval
     ToolExec --> Memory
+    SlashDispatch --> PromptCmds["PROMPT_COMMANDS<br/>core/commands/slash.py"]
+    SkillCmd --> Skills
+    SkillCmd --> Config
 
     Registry --> FileTools["read_file / write_file / edit_file"]
     Registry --> SearchTools["grep / glob"]
@@ -66,19 +72,22 @@ flowchart TD
 | `xcode tool grep` / `xcode tool glob` | PowerShell 友好的搜索子命令 |
 | `xcode skill install/list/enable/disable` | 管理本地 skill |
 
-`AgentRuntime.run_chat()` 是 REPL 主循环。它负责创建 UUID session id、写入 runtime status、读取用户输入、处理 slash command、构造 system prompt、调用 `_run_llm_loop()`，并把结构化 message event 追加到当前项目的 JSONL transcript。
+`AgentRuntime.run_chat()` 是 REPL 输入循环。它负责创建 UUID session id、写入 runtime status、读取用户输入、处理退出和 slash command 分发；一旦得到普通 user input，就统一交给 `_run_user_turn()`。
 
-经过第一轮模块化重构后，`AgentRuntime` 仍是 orchestration 入口，但不再直接承载所有细节：
+经过两轮模块化重构后，`AgentRuntime` 仍是 orchestration 入口，但不再直接承载所有细节：
 
 - slash completion 已移到 `core/commands/slash.py`。
+- slash command 解析和分发已移到 `core/commands/dispatcher.py`。
+- CLI / REPL skill 命令共享逻辑已移到 `core/commands/skill.py`。
 - 欢迎信息、状态栏、用户/助手基础输出已移到 `core/ui/shell.py`。
 - `/resume` 命令编排已移到 `core/conversation/resume.py`。
 - `/compact` 和自动 compression checkpoint 编排已移到 `core/conversation/compaction.py`。
 - 工具审批菜单已移到 `core/tooling/approval.py`。
 - tool call 执行、diff preview、memory auto-allow、工具结果摘要已移到 `core/tooling/execution.py`。
 - `/env` 仪表盘已移到 `core/ui/env_dashboard.py`（全屏 TUI，管理 5 项非 API 参数）。
+- 普通 user turn 已收口到 `_run_user_turn()`：session 持久化、history 更新、system prompt 构建、LLM 调用、错误短路、assistant 响应追加和 plan approval 展示都走同一条路径。
 
-当前仍留在 `agent.py` 内的主要职责是 REPL 主循环、slash command handler 具体实现、工具注册、plan/memory/env/context 命令 glue、以及 `_run_llm_loop()` 的 orchestration。也就是说，第一轮重构之后，核心服务已经抽离，streaming 状态与工具调用摘要也已有独立模块，但 command handlers 仍未完全模块化。
+当前仍留在 `agent.py` 内的主要职责是 REPL orchestration、工具注册、plan/memory/env/context 命令 glue，以及 `_run_llm_loop()` 的 LLM/tool loop orchestration。也就是说，第二轮重构之后，命令路由、skill 命令服务和普通 turn 路径已经收口；`_run_llm_loop()` 仍暂时保留在 `agent.py`，避免在 streaming、Thinking Live、tool loop、task panel 和 transcript 写入等高风险路径上做过大搬迁。
 
 ## 4. 普通对话数据流
 
@@ -93,6 +102,7 @@ sequenceDiagram
     participant S as SessionStore
 
     U->>R: 输入普通消息
+    R->>R: _run_user_turn(user_input)
     R->>S: append(user)
     R->>P: 构造 system prompt
     R->>C: should_compress(history)
@@ -111,21 +121,26 @@ sequenceDiagram
     R->>S: append(assistant / tool messages)
 ```
 
-当前真正参与 LLM 推理的对话状态是运行时内存里的 `self._history`。`SessionStore` 负责 append-only transcript，`SessionResumeBuilder` 负责从 transcript 构造可恢复 history。
+当前真正参与 LLM 推理的对话状态是运行时内存里的 `self._history`。`SessionStore` 负责 append-only transcript，`SessionResumeBuilder` 负责从 transcript 构造可恢复 history。普通输入、`/init` 展开的 prompt command、以及后续可能出现的外部入口都应复用 `_run_user_turn()`，避免出现第二条 user turn 路径。
 
 ## 5. Slash Command 流程
 
-用户输入以 `/` 开头时不会进入 LLM，而是由 `_handle_slash_command()` 分发。命令补全由 `core/commands/slash.py` 提供，具体 handler 目前仍在 `agent.py` 内。
+用户输入以 `/` 开头时会先交给 `SlashCommandDispatcher.dispatch()`。命令补全和 prompt command 注册表由 `core/commands/slash.py` 提供；dispatcher 只负责路由，不直接扫描项目、不调用 LLM、不写文件。
+
+Slash command 分两类：
+
+- prompt command：例如 `/init`，handler 返回固定 prompt，dispatcher 返回 `kind="prompt"`，`AgentRuntime` 将其作为普通 user input 交给 `_run_user_turn()`。
+- side-effect command：例如 `/help`、`/context`、`/skill`、`/resume`、`/compact`，dispatcher 调用本地 handler 后返回 `kind="handled"`，不会进入 LLM。
 
 其中 `/init` 是 prompt command：handler 返回固定初始化 prompt，`AgentRuntime` 将其展开为普通 user message 并复用现有 LLM/tool loop 路径，而不是在 handler 内扫描项目或写文件。
 
 | 命令 | 实现位置 | 当前能力 |
 |------|----------|----------|
-| `/help` | `agent.py` | 展示命令列表 |
-| `/init` | prompt command 注册表 + `AgentRuntime` 普通 turn 路径 | 展开为仓库初始化 prompt，作为普通用户任务运行，Agent 可自行创建或改进 `XCODE.md` |
+| `/help` | `SlashCommandDispatcher` + `agent.py` help handler | 展示命令列表 |
+| `/init` | `PROMPT_COMMANDS` + `SlashCommandDispatcher` + `_run_user_turn()` | 展开为仓库初始化 prompt，作为普通用户任务运行，Agent 可自行创建或改进 `XCODE.md` |
 | `/context` | `_handle_context_command()` | 展示 token 估算、预算、压缩阈值和消息数 |
 | `/dashboard` | `Dashboard().run()` | 打开 API 配置界面 |
-| `/skill` | `_handle_skill_command()` | list/install/enable/disable |
+| `/skill` | `SlashCommandDispatcher` + `SkillCommandService` | list/install/enable/disable，与 CLI `xcode skill ...` 共享业务逻辑 |
 | `/env` | `_handle_env_command()` → `EnvDashboard` | 全屏 TUI 仪表盘：管理 max_tokens、max_summary_chars、response_render_mode、syntax_theme、auto_memory |
 | `/plan` | `_handle_plan_command()` | enter/show/approve/reject |
 | `/memory` | `_handle_memory_command()` | 查看 memory 状态，开关 auto memory |
@@ -320,8 +335,10 @@ runtime status 写入：
 
 | 文件 | 职责 |
 |------|------|
-| `src/xcode_cli/core/agent.py` | REPL 主循环、slash command handler glue、工具注册、LLM/tool loop orchestration |
+| `src/xcode_cli/core/agent.py` | REPL 输入循环、普通 user turn orchestration、命令 handler glue、工具注册、LLM/tool loop orchestration |
+| `src/xcode_cli/core/commands/dispatcher.py` | slash command 路由；区分 prompt command 和 side-effect command |
 | `src/xcode_cli/core/commands/slash.py` | slash command 列表和 prompt_toolkit 补全 |
+| `src/xcode_cli/core/commands/skill.py` | CLI / REPL 共享的 skill list/install/enable/disable 命令服务 |
 | `src/xcode_cli/core/conversation/compaction.py` | `/compact` 和自动 compression checkpoint 编排 |
 | `src/xcode_cli/core/conversation/resume.py` | `/resume` 交互命令编排，调用 `SessionResumeBuilder` |
 | `src/xcode_cli/core/tooling/approval.py` | 工具审批 scope、方向键菜单、TTY / non-TTY fallback、`read_key()` 模块级键盘读取函数 |

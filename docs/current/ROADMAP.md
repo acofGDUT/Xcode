@@ -33,7 +33,7 @@ Phase 5 生态扩展当前冻结，不作为近期默认开发目标。
 | P1 | 工具调用轮次不中断 | 基础完成 | 已支持多轮 tool loop 和关键回归测试；后续补真实终端验收与可选 round 状态提示 |
 | P1 | memory 自管理权限 | 完成 | Xcode 管理 resolved memory 文件时不再频繁要求用户审核，普通文件仍保留审批 |
 | P1 | 流式输出去重 | 基础收口完成 | 已避免结构化内容 raw + Rich 双重完整输出；后续再评估可替换区域式 streaming |
-| P1 | AgentRuntime 重构 | 第一轮完成 | 已抽出 commands/slash、conversation、tooling、ui 基础模块；后续继续拆 command handlers |
+| P1 | AgentRuntime 重构 | 第二轮完成 | 已抽出 commands/slash、SlashCommandDispatcher、SkillCommandService、conversation、tooling、ui 基础模块和普通 user turn；`_run_llm_loop()` 暂不大动 |
 | P1 | Task 工具免审与 UI 展示 | 基础完成 | 免审 + 瞬时面板渲染已实现；`is_read_only` 消费已收口；持久化底部驻留展示（同 Claude Code 的 toolbar 模式）留待后续迭代 |
 | P1 | 对话回退/分叉设计 | 未实现 | 提供非破坏性的 fork-based rollback |
 | P2 | 项目级配置合并 | 完成 | `.xcode/config.json` 字段级覆盖全局，`max_summary_chars` 等参数已统一定义在 Config，`/env` TUI 仪表盘统一管理 |
@@ -432,6 +432,52 @@ This file provides guidance to xcode when working with code in this repository.
 - `/env`、`/memory`、`/context`、`/plan` 等具体 command handlers 仍在 `agent.py`，后续可以继续拆到 `core/commands/`。
 - `_run_llm_loop()` 的 streaming/render orchestration 仍在 `agent.py`，但状态判断已收口到 `core/ui/streaming.py`。
 - 工具调用 UI 折叠已完成，`Ctrl+O` 展开未纳入当前交付。
+
+### 第二轮结果：AgentRuntime Refactor Round 2
+
+第二轮不是大重构，目标是在开发更完整的 skills 功能前，先把最容易继续膨胀的命令层和普通 turn 路径收口。当前已完成并通过 review；后续 skills 设计应复用这些边界，而不是重新把命令逻辑写回 `agent.py` 或 `main.py`。
+
+已完成项：
+
+1. **抽 `SlashCommandDispatcher`**
+   - 把 slash command 的解析、prompt command 展开、side-effect command 分发从 `AgentRuntime._handle_slash_command()` 中移出。
+   - 保留 `/help`、`/init`、`/skill`、`/memory`、`/plan`、`/context`、`/resume`、`/compact` 的用户可见行为。
+   - dispatcher 返回值应能表达：命令已处理、未知命令、或需要作为普通 user prompt 继续执行。
+
+2. **抽 `SkillCommandService`**
+   - 消除 `main.py` 和 `agent.py` 中 skill list/install/enable/disable 的重复逻辑。
+   - CLI `xcode skill ...` 和交互式 `/skill ...` 共享同一服务。
+   - 为后续 skills 功能扩展预留单一入口，避免每加一个 skill 子命令都改两处。
+
+3. **抽 `_run_user_turn()`**
+   - 把普通用户输入的执行流程从 `run_chat()` 中抽出来：写 transcript、写 `_history`、构造 system prompt、设置 runtime status、调用 `_run_llm_loop()`、处理错误、写 assistant 结果。
+   - `/init` 这类 prompt command、未来外部入口或 session fork 都可以复用这个普通 turn 路径。
+
+4. **暂不大动 `_run_llm_loop()`**
+   - `_run_llm_loop()` 当前仍承担 streaming、Thinking Live、tool loop、task panel、session tool transcript 写入等复杂职责。
+   - 本轮只做必要的调用适配，没有把它整体迁移到新服务，避免引入高风险回归。
+
+### 第二轮实际修改文件
+
+| 文件 | 修改结果 |
+|------|----------|
+| `src/xcode_cli/core/commands/dispatcher.py` | 新增 slash command dispatcher，集中处理命令解析、prompt command、side-effect command 分发 |
+| `src/xcode_cli/core/commands/skill.py` | 新增 `SkillCommandService`，统一 list/install/enable/disable |
+| `src/xcode_cli/core/agent.py` | 注入 dispatcher/service，删除 skill handler 重复逻辑，抽出 `_run_user_turn()` |
+| `src/xcode_cli/main.py` | CLI skill 子命令改用 `SkillCommandService` |
+| `tests/test_slash_dispatcher.py` | 覆盖 dispatcher 返回 prompt command、side-effect command、未知命令 |
+| `tests/test_skill_command_service.py` | 覆盖 CLI/REPL 共享 skill 行为 |
+| `tests/test_agent_user_turn.py` | 覆盖 `_run_user_turn()` 普通消息和 `/init` 展开后的复用路径 |
+
+### 第二轮验收结果
+
+- `agent.py` 行数下降，且职责更接近 REPL orchestration。
+- `/help`、`/init`、`/skill`、`/memory`、`/plan`、`/context`、`/resume`、`/compact` 行为不变。
+- `main.py` 和 `agent.py` 不再各自实现一套 skill list/install/enable/disable。
+- `/init` 仍作为普通 user turn 进入 `_history` 和 transcript。
+- `_run_llm_loop()` 行为不变，不顺手重写 streaming/tool loop。
+- focused tests 和全量 `pytest` 通过。
+- 已同步更新 `ARCHITECTURE.md`、`DEVNOTES.md`、`PROGRESS.md`。
 
 ### 推荐拆分方向
 

@@ -8,6 +8,7 @@ import typer
 from rich.console import Console
 
 from xcode_cli.core.agent import AgentRuntime
+from xcode_cli.core.commands.skill import SkillCommandService
 from xcode_cli.core.config import ConfigStore
 from xcode_cli.core.dashboard import Dashboard
 from xcode_cli.core.tools.files import edit_file, read_file, write_file
@@ -113,46 +114,28 @@ def tool_glob(
     console.print(glob_files(pattern=chosen_pattern, path=path))
 
 
+def _make_skill_service() -> SkillCommandService:
+    return SkillCommandService(SkillManager(), ConfigStore(), console)
+
+
 @skill_app.command("install")
 def skill_install(path: str = typer.Argument(..., help="Local skill directory")) -> None:
-    manager = SkillManager()
-    installed = manager.install(path)
-    console.print(f"Installed skill: [bold]{installed.name}[/bold] -> {installed.path}")
+    _make_skill_service().install(path)
 
 
 @skill_app.command("list")
 def skill_list() -> None:
-    manager = SkillManager()
-    config = ConfigStore().load()
-    enabled = set(config.enabled_skills)
-
-    skills = manager.list_installed()
-    if not skills:
-        console.print("No skills installed.")
-        return
-
-    for s in skills:
-        status = "enabled" if s.name in enabled else "disabled"
-        console.print(f"- {s.name} [{status}] - {s.description}")
+    _make_skill_service().list_installed()
 
 
 @skill_app.command("enable")
 def skill_enable(name: str = typer.Argument(..., help="Skill name")) -> None:
-    store = ConfigStore()
-    cfg = store.load()
-    if name not in cfg.enabled_skills:
-        cfg.enabled_skills.append(name)
-        store.save(cfg)
-    console.print(f"Enabled skill: {name}")
+    _make_skill_service().enable(name)
 
 
 @skill_app.command("disable")
 def skill_disable(name: str = typer.Argument(..., help="Skill name")) -> None:
-    store = ConfigStore()
-    cfg = store.load()
-    cfg.enabled_skills = [s for s in cfg.enabled_skills if s != name]
-    store.save(cfg)
-    console.print(f"Disabled skill: {name}")
+    _make_skill_service().disable(name)
 
 
 if __name__ == "__main__":
