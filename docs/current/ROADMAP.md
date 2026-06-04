@@ -18,6 +18,7 @@ Xcode v0.1.0 已完成 Phase 1-4 和 Phase 4.5 Batch 1-2 的稳定化工作。
 - `/context`、`/env max-tokens`、syntax theme、工具结果语义化显示。
 - Phase 4.5 memory/path/context 测试基线。
 - 对话历史恢复基础能力：`/compact`、`/resume`、UUID transcript、checkpoint + recent tail 恢复。
+- Skills Phase 1：`.xcode/skills/<name>/SKILL.md` 加载为 prompt slash command。
 
 Phase 5 生态扩展当前冻结，不作为近期默认开发目标。
 
@@ -34,6 +35,7 @@ Phase 5 生态扩展当前冻结，不作为近期默认开发目标。
 | P1 | memory 自管理权限 | 完成 | Xcode 管理 resolved memory 文件时不再频繁要求用户审核，普通文件仍保留审批 |
 | P1 | 流式输出去重 | 基础收口完成 | 已避免结构化内容 raw + Rich 双重完整输出；后续再评估可替换区域式 streaming |
 | P1 | AgentRuntime 重构 | 第二轮完成 | 已抽出 commands/slash、SlashCommandDispatcher、SkillCommandService、conversation、tooling、ui 基础模块和普通 user turn；`_run_llm_loop()` 暂不大动 |
+| P1 | Skills As Prompt Commands | 完成 | 已将 `.xcode/skills/<name>/SKILL.md` 加载为手动调用的 prompt slash command；Phase 2 才做 `SkillTool` 和模型主动调用 |
 | P1 | Task 工具免审与 UI 展示 | 基础完成 | 免审 + 瞬时面板渲染已实现；`is_read_only` 消费已收口；持久化底部驻留展示（同 Claude Code 的 toolbar 模式）留待后续迭代 |
 | P1 | 对话回退/分叉设计 | 未实现 | 提供非破坏性的 fork-based rollback |
 | P2 | 项目级配置合并 | 完成 | `.xcode/config.json` 字段级覆盖全局，`max_summary_chars` 等参数已统一定义在 Config，`/env` TUI 仪表盘统一管理 |
@@ -248,6 +250,47 @@ This file provides guidance to xcode when working with code in this repository.
 - handler 本身不扫描项目、不读取文件、不写 `XCODE.md`。
 - 已有 `XCODE.md` 的处理策略只存在于 prompt 中，由 Agent 后续使用工具决定如何编辑。
 - 对缺少 API key 的场景保持普通 user turn 的现有错误展示行为，不因为 `/init` 走特殊路径崩溃。
+
+## 5.2 P1：Skills As Prompt Commands
+
+### 当前状态
+
+Phase 1 已完成。项目 skill 来源为：
+
+```text
+<project>/.xcode/skills/<skill-name>/SKILL.md
+```
+
+`SKILL.md` 负责 metadata 和入口 prompt；`references/`、`scripts/`、`templates/`、`assets/` 是 supporting files，只按需读取，不自动注入上下文。
+
+### 已完成能力
+
+- 移除旧 `skill.json` / `enabled_skills` / system prompt 全量注入。
+- `SkillLoader` 解析 `.xcode/skills/*/SKILL.md` 和 Claude-style frontmatter。
+- `SkillPromptExpander` 展开 `$ARGUMENTS` 和 `${XCODE_SKILL_DIR}`。
+- `CommandRegistry` 将 user-invocable skill 注册为 `/skill-name` prompt command，且不允许覆盖 built-in command。
+- `UserTurnInput` 区分 UI 展示文本和模型可见 prompt，skill prompt 不污染用户可见 transcript。
+- `allowed-tools` 作为当前 turn 临时工具白名单，同时限制 schemas 和 execution，但不提升权限。
+- session/resume 保存并恢复 `metadata.model_content`，恢复时不会只把 `/skill-name args` 交给模型。
+- `/skill` 与 CLI `xcode skill` 改为 list/show/validate 项目 skills；旧 install/enable/disable 只提示迁移。
+
+### 后续 Phase 2
+
+Phase 2 才设计 `SkillTool` 和模型主动调用 skills。需要单独处理：
+
+- model-invoked skill discovery。
+- fork/sub-agent skill execution。
+- hooks 安全边界和失败策略。
+- paths 条件自动激活。
+- `.claude/skills` 迁移或兼容策略。
+- supporting files 的按需读取协议和审计显示。
+
+### 当前边界
+
+- skill 是 prompt command，不是独立 runtime 分支。
+- `context: fork` 当前不 inline 执行，应明确报 unsupported。
+- `hooks` 当前只解析保存，不执行。
+- 不兼容 `${CLAUDE_SKILL_DIR}`；迁移 Claude skill 时应改为 `${XCODE_SKILL_DIR}`。
 
 ## 6. P1：memory 自管理权限
 

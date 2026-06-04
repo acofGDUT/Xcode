@@ -25,9 +25,10 @@
 | 开发流程与测试分层规范 | Spec-first + TDD-core + E2E-acceptance、P0/P1/P2 测试分层 | 完成 | `AGENTS.md` / `DEVNOTES.md` |
 | `/init` prompt command | 旧版 Claude 风格 prompt command，生成或改进仓库级 `XCODE.md` | 完成并通过测试 | `2026-06-04-init-command-plan.md` |
 | AgentRuntime Refactor Round 2 | SlashCommandDispatcher、SkillCommandService、普通 user turn 抽离 | 完成并通过 review | `2026-06-04-agent-runtime-refactor-round2-plan.md` |
+| Skills As Prompt Commands | `.xcode/skills/<name>/SKILL.md` 加载为 prompt slash command | 完成并通过逐 task review | `2026-06-04-skills-as-prompt-commands-plan.md` |
 | Phase 5 | 生态扩展 | 冻结 | 未开始 |
 
-当前重点不是进入 Phase 5，而是补齐费用估算、原生 Windows 验收，并在第二轮结构收口后设计更完整的 skills 功能。
+当前重点不是进入 Phase 5，而是补齐费用估算、原生 Windows 验收，并在 skills Phase 1 之后评估是否进入 Phase 2 `SkillTool`。
 
 ## 2. Phase 1：协议与工具升级
 
@@ -308,7 +309,34 @@ Review 结论：通过。合并后 `pytest -q` 为 `221 passed`；已提交并�
 - 规格文档：`docs/superpowers/specs/2026-06-04-agent-runtime-refactor-round2-design.md`
 - 实施计划：`docs/superpowers/plans/2026-06-04-agent-runtime-refactor-round2-plan.md`
 
-## 17. 当前阻塞和遗留
+## 17. Skills As Prompt Commands 实现：2026-06-04
+
+背景：在 `/init` prompt command 和 AgentRuntime 第二轮重构之后，skills 可以复用 `SlashCommandDispatcher`、`CommandRegistry` 和 `_run_user_turn()`，不需要另开一条 runtime 分支。本轮目标是实现 Phase 1：把项目内 `.xcode/skills/<skill-name>/SKILL.md` 加载为手动调用的 prompt slash command。
+
+本轮完成内容：
+
+- 移除旧 `skill.json` / `enabled_skills` / system prompt 全量注入壳子。
+- 新增 `Skill` model、`SkillLoader`、`SkillPromptExpander`、`SkillValidation` 和动态 `CommandRegistry`。
+- 支持 `.xcode/skills/*/SKILL.md` frontmatter 解析，supporting files 只作为按需读取资源，不自动注入上下文。
+- 将 user-invocable skill 注册为 `/skill-name` prompt command；skill 与 built-in slash command 冲突时 built-in 优先。
+- 新增 `UserTurnInput`，让 UI/session user history 显示 `/skill-name args`，LLM `_history` 使用展开后的 hidden/model prompt。
+- `allowed-tools` 作为当前 skill turn 临时工具白名单，同时限制 tool schemas 和执行层 tool call，但不提升权限。
+- `/skill` 与 CLI `xcode skill` 改为 list/show/validate 项目 skills；旧 install/enable/disable 仅提示迁移。
+- session transcript 保存 skill invocation metadata，`/resume` 恢复时优先使用 `metadata.model_content`。
+- `context: fork` 当前报 unsupported；`hooks` 只解析保存，不执行。
+
+Review 与验证：
+
+- Task 1-8 每个 task 完成后均做 Codex review，并分别提交。
+- 最终验证通过：
+  - `python -m py_compile src/xcode_cli/core/agent.py src/xcode_cli/core/commands/dispatcher.py src/xcode_cli/core/commands/registry.py src/xcode_cli/core/commands/skill.py src/xcode_cli/core/commands/slash.py src/xcode_cli/core/turn.py src/xcode_cli/skills/model.py src/xcode_cli/skills/loader.py src/xcode_cli/skills/prompt.py src/xcode_cli/skills/validation.py`
+  - `pytest tests/test_skill_loader.py tests/test_skill_prompt.py tests/test_skill_validation.py tests/test_skill_command_registry.py tests/test_skill_prompt_command_flow.py tests/test_skill_allowed_tools.py tests/test_init_command.py tests/test_slash_dispatcher.py tests/test_agent_user_turn.py -q`：50 passed
+  - `pytest -q`：291 passed
+  - `git diff --check`
+
+后续：Phase 2 才设计 `SkillTool` 和模型主动调用 skills；Phase 1 不做 fork skill runtime、hooks 执行、paths 自动激活或 `.claude/skills` 自动读取。
+
+## 18. 当前阻塞和遗留
 
 | 项目 | 状态 | 说明 |
 |------|------|------|
@@ -316,6 +344,7 @@ Review 结论：通过。合并后 `pytest -q` 为 `221 passed`；已提交并�
 | `/context` cost | 未实现 | 当前只有 token 估算，没有价格估算 |
 | `/init` prompt command | 完成并通过测试 | 已实现 prompt command 注册、普通 user turn 复用、help/completion 和回归测试 |
 | AgentRuntime Refactor Round 2 | 完成并通过 review | 已完成 SlashCommandDispatcher、SkillCommandService、普通 user turn 抽离；后续 skills 功能应复用这些边界 |
+| Skills As Prompt Commands | 完成并通过 review | `.xcode/skills/<name>/SKILL.md` 已作为 prompt slash command 加载；Phase 2 `SkillTool` 未实现 |
 | 工具调用 UI 折叠 | 基础完成 | 默认已折叠为工具摘要；`Ctrl+O` 展开和原生 Windows 热键验收仍未做 |
 | 工具调用轮次不中断 | 完成并待真实终端补充验收 | 已改为 `while True` 多轮 tool loop，并补超过 10 轮、拒绝后继续、空响应 fallback 回归测试 |
 | memory 自管理权限 | 完成 | memory-scoped 写入已免用户审核，普通文件仍保持审批 |
@@ -331,8 +360,8 @@ Review 结论：通过。合并后 `pytest -q` 为 `221 passed`；已提交并�
 | 原生 Windows E2E | 未完成 | 需要在 cmd.exe/PowerShell 验证完整交互 |
 | Phase 5 | 冻结 | 不作为近期默认开发目标 |
 
-## 18. 下一步
+## 19. 下一步
 
-1. 设计更完整的 skills 功能，优先明确 skill 是 prompt 片段、工具包、工作流，还是三者组合。
+1. 评估 skills Phase 2：`SkillTool`、模型主动调用、fork skill runtime、hooks 安全边界和 paths 自动激活。
 2. 做原生 cmd.exe/PowerShell 交互验收，重点覆盖审批菜单、diff preview、工具摘要折叠、多轮 tool call、`/resume`、`/compact`。
 3. 为 `/context` 增加 cost 估算，补齐 token 之外的费用视角。

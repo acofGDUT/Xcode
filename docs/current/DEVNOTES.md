@@ -430,7 +430,7 @@ Review 注意：
 已完成的边界：
 
 - `SlashCommandDispatcher` 负责 slash command 解析和分发，明确区分 prompt command 与 side-effect command。
-- `SkillCommandService` 负责 `list/install/enable/disable`，让 CLI `xcode skill ...` 和 REPL `/skill ...` 共用同一份业务逻辑。
+- `SkillCommandService` 在当时负责旧 `list/install/enable/disable` 薄命令服务；后续 Skills As Prompt Commands 已把它迁移为项目 skills 的 list/show/validate 入口。
 - `_run_user_turn()` 负责普通 user turn：session 持久化、history 更新、system prompt 构建、LLM 调用、错误短路、assistant 响应追加和 plan approval 展示。
 - `_run_llm_loop()` 未做整体搬迁或重写，继续承载 streaming、Thinking Live、tool loop、task panel 和 session tool transcript 写入。
 
@@ -439,11 +439,46 @@ Review 注意：
 - 不为了降低行数而拆散稳定的 tool loop。
 - 不引入抽象基类、事件总线或异步模型。
 - 不改变 `/help`、`/init`、`/skill`、`/memory`、`/plan`、`/context`、`/resume`、`/compact` 的用户可见行为。
-- skills 后续能力必须优先复用 `SkillCommandService`，不要再在 `main.py` 和 `agent.py` 各写一份 list/install/enable/disable 逻辑。
-- 当前 `SkillCommandService` 只是薄命令服务，不代表最终 skill 机制已经定型；后续应单独设计 skill manifest、prompt 注入、启用策略、权限和加载边界。
+- skills 后续能力必须优先复用 `SkillCommandService` 和 `CommandRegistry`，不要再在 `main.py` 和 `agent.py` 各写一份 skill 命令逻辑。
+- 第二轮重构只是解耦前置，不代表最终 skill 机制已定型；实际 Phase 1 设计已在后续 Skills As Prompt Commands 中收口。
 
 Review 结果：
 
 - 这轮是 P1 结构性重构，以行为回归测试为主。
 - Coding Agent 分三步完成 `SkillCommandService`、`SlashCommandDispatcher`、`_run_user_turn()`，每步均经过 Codex review。
 - 最终验证记录见 `PROGRESS.md` 的 AgentRuntime Refactor Round 2 章节。
+
+## 24. Skills As Prompt Commands 边界
+
+**状态**：Resolved
+**关联**：P1 Skills As Prompt Commands / skill package 设计
+
+当前收口：Phase 1 skills 已实现为项目内 prompt slash command。唯一自动加载来源是 `<project>/.xcode/skills/<skill-name>/SKILL.md`，`SKILL.md` 提供 metadata 和入口 prompt，supporting files 只按需读取，不自动注入上下文。
+
+已移除的旧壳子：
+
+- `skill.json` 安装模型。
+- `Config.enabled_skills`。
+- system prompt 中全量注入 enabled skills 的 `SKILL.md`。
+- `/skill enable` / `/skill disable` 的启用状态语义。
+
+当前设计边界：
+
+- skill 是 prompt command，不是独立 runtime 分支；必须复用 `_run_user_turn()`、session、tool loop 和权限系统。
+- `/skill-name args` 的 UI 展示文本和模型可见 prompt 必须分离：session user history 显示 slash command，LLM `_history` 使用展开后的 `model_content`。
+- transcript 必须保存 skill invocation metadata；`/resume` 恢复时优先用 `metadata.model_content`，不能只恢复 `/skill-name args`。
+- `allowed-tools` 是当前 turn 的临时工具白名单，只能收窄 tool schemas 和 execution，不能提升权限，不能绕过显式 `deny` 或 `ask`。
+- skill 与 built-in slash command 冲突时，built-in command 保持优先。
+- `context: fork` 当前不 inline 执行；`hooks` 当前只解析保存，不执行。
+
+Review 注意：
+
+- 不要把完整 project skills 再塞回 system prompt，否则会回到旧壳子的上下文膨胀问题。
+- 不要为了兼容旧 CLI 继续维护 `skill.json` 语义；旧 install/enable/disable 只保留迁移提示。
+- 不要自动读取 `.claude/skills`；迁移策略应单独设计，尤其是 `${CLAUDE_SKILL_DIR}` 到 `${XCODE_SKILL_DIR}`。
+- Phase 2 才设计 `SkillTool`、模型主动调用 skills、fork/sub-agent skill execution、hooks 安全策略和 paths 自动激活。
+
+Review 结果：
+
+- Task 1-8 均按 TDD/聚焦验证完成，并逐 task review。
+- 最终验证记录见 `PROGRESS.md` 的 Skills As Prompt Commands 章节。

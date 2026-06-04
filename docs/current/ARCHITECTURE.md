@@ -38,7 +38,8 @@ flowchart TD
     Runtime --> Status["RuntimeStatusStore<br/>core/runtime_status.py"]
     Runtime --> Plan["PlanMode<br/>core/planning.py"]
     Runtime --> Tasks["TaskTracker<br/>core/task_tracker.py"]
-    Runtime --> Skills["SkillManager<br/>skills/manager.py"]
+    Runtime --> SkillLoader["SkillLoader<br/>skills/loader.py"]
+    Runtime --> CommandRegistry["CommandRegistry<br/>core/commands/registry.py"]
     Runtime --> Renderer["OutputRenderer<br/>ui/renderer.py"]
 
     ResumeSvc --> Resume
@@ -48,8 +49,9 @@ flowchart TD
     ToolExec --> Approval
     ToolExec --> Memory
     SlashDispatch --> PromptCmds["PROMPT_COMMANDS<br/>core/commands/slash.py"]
-    SkillCmd --> Skills
-    SkillCmd --> Config
+    SlashDispatch --> CommandRegistry
+    CommandRegistry --> SkillLoader
+    SkillCmd --> SkillLoader
 
     Registry --> FileTools["read_file / write_file / edit_file"]
     Registry --> SearchTools["grep / glob"]
@@ -70,7 +72,7 @@ flowchart TD
 | `xcode dashboard` | 打开 API 配置 TUI |
 | `xcode tool run` | 直接运行 read/write/edit/shell/grep/glob |
 | `xcode tool grep` / `xcode tool glob` | PowerShell 友好的搜索子命令 |
-| `xcode skill install/list/enable/disable` | 管理本地 skill |
+| `xcode skill list/show/validate` | 查看和校验项目 `.xcode/skills` skill；旧 install/enable/disable 仅输出迁移提示 |
 
 `AgentRuntime.run_chat()` 是 REPL 输入循环。它负责创建 UUID session id、写入 runtime status、读取用户输入、处理退出和 slash command 分发；一旦得到普通 user input，就统一交给 `_run_user_turn()`。
 
@@ -121,7 +123,7 @@ sequenceDiagram
     R->>S: append(assistant / tool messages)
 ```
 
-当前真正参与 LLM 推理的对话状态是运行时内存里的 `self._history`。`SessionStore` 负责 append-only transcript，`SessionResumeBuilder` 负责从 transcript 构造可恢复 history。普通输入、`/init` 展开的 prompt command、以及后续可能出现的外部入口都应复用 `_run_user_turn()`，避免出现第二条 user turn 路径。
+当前真正参与 LLM 推理的对话状态是运行时内存里的 `self._history`。`SessionStore` 负责 append-only transcript，`SessionResumeBuilder` 负责从 transcript 构造可恢复 history。普通输入、`/init` 展开的 prompt command、project skill prompt command、以及后续可能出现的外部入口都应复用 `_run_user_turn()`，避免出现第二条 user turn 路径。
 
 ## 5. Slash Command 流程
 
@@ -129,10 +131,10 @@ sequenceDiagram
 
 Slash command 分两类：
 
-- prompt command：例如 `/init`，handler 返回固定 prompt，dispatcher 返回 `kind="prompt"`，`AgentRuntime` 将其作为普通 user input 交给 `_run_user_turn()`。
+- prompt command：例如 `/init` 和项目 skill `/skill-name`，handler 返回固定或展开后的 prompt，dispatcher 返回 `kind="prompt"`，`AgentRuntime` 将其作为普通 user input 交给 `_run_user_turn()`。
 - side-effect command：例如 `/help`、`/context`、`/skill`、`/resume`、`/compact`，dispatcher 调用本地 handler 后返回 `kind="handled"`，不会进入 LLM。
 
-其中 `/init` 是 prompt command：handler 返回固定初始化 prompt，`AgentRuntime` 将其展开为普通 user message 并复用现有 LLM/tool loop 路径，而不是在 handler 内扫描项目或写文件。
+其中 `/init` 是 built-in prompt command：handler 返回固定初始化 prompt，`AgentRuntime` 将其展开为普通 user message 并复用现有 LLM/tool loop 路径，而不是在 handler 内扫描项目或写文件。项目 skills 也是 prompt command：`CommandRegistry` 从 `.xcode/skills/<name>/SKILL.md` 注册 `/name`，UI transcript 显示原始 `/name args`，模型 history 使用展开后的 hidden/model prompt。
 
 | 命令 | 实现位置 | 当前能力 |
 |------|----------|----------|
@@ -140,7 +142,7 @@ Slash command 分两类：
 | `/init` | `PROMPT_COMMANDS` + `SlashCommandDispatcher` + `_run_user_turn()` | 展开为仓库初始化 prompt，作为普通用户任务运行，Agent 可自行创建或改进 `XCODE.md` |
 | `/context` | `_handle_context_command()` | 展示 token 估算、预算、压缩阈值和消息数 |
 | `/dashboard` | `Dashboard().run()` | 打开 API 配置界面 |
-| `/skill` | `SlashCommandDispatcher` + `SkillCommandService` | list/install/enable/disable，与 CLI `xcode skill ...` 共享业务逻辑 |
+| `/skill` | `SlashCommandDispatcher` + `SkillCommandService` | list/show/validate 项目 skills，与 CLI `xcode skill ...` 共享业务逻辑 |
 | `/env` | `_handle_env_command()` → `EnvDashboard` | 全屏 TUI 仪表盘：管理 max_tokens、max_summary_chars、response_render_mode、syntax_theme、auto_memory |
 | `/plan` | `_handle_plan_command()` | enter/show/approve/reject |
 | `/memory` | `_handle_memory_command()` | 查看 memory 状态，开关 auto memory |
@@ -148,7 +150,35 @@ Slash command 分两类：
 | `/resume` | `_handle_resume_command()` + `ResumeCommandService` | 列出当前项目 session，并恢复选中的 transcript |
 | `/exit` | `run_chat()` | 退出 |
 
-## 6. Tool 系统
+## 6. Skills As Prompt Commands
+
+Phase 1 skills 只从当前项目加载：
+
+```text
+<project>/.xcode/skills/<skill-name>/SKILL.md
+```
+
+一个 skill 是目录包，`SKILL.md` 是唯一入口；`references/`、`scripts/`、`templates/`、`assets/` 作为 supporting files 保留在目录内，由 skill prompt 或模型按需读取，不会被 loader 自动塞进上下文。当前不会自动读取 `.claude/skills`、用户目录、managed skills、bundled skills、plugin skills 或 MCP skills。
+
+加载链路：
+
+1. `SkillLoader` 扫描 `.xcode/skills/*/SKILL.md`，解析 Claude-style frontmatter 和正文。
+2. `SkillPromptExpander` 展开 `$ARGUMENTS` 和 `${XCODE_SKILL_DIR}`。
+3. `CommandRegistry` 合并 built-in prompt commands 和 user-invocable project skills。
+4. 用户输入 `/skill-name args` 后，dispatcher 返回 `UserTurnInput`。
+5. `_run_user_turn()` 对 UI/session user history 记录 `/skill-name args`，对 LLM `_history` 使用展开后的 model prompt。
+
+重要边界：
+
+- 旧 `skill.json`、`enabled_skills` 和 system prompt 全量 skill 注入已经移除。
+- skill 是 prompt command，不是独立 runtime 分支，不会绕过普通 user turn、session、tool loop 或 permission 流程。
+- skill 与 built-in slash command 冲突时，built-in command 保持优先。
+- `allowed-tools` 是当前 skill turn 的临时工具白名单，会同时限制 tool schemas 和执行层 tool call；它只收窄能力，不自动提升权限，也不覆盖 PermissionManager 的显式 `deny` 或 `ask`。
+- `context: fork` 当前不 inline 执行，会作为 unsupported invocation 报错。
+- `hooks` 只解析保存，不执行。
+- Phase 2 才设计模型主动调用 skills 的 `SkillTool`。
+
+## 7. Tool 系统
 
 工具定义由 `ToolDef` 表达，字段包括：
 
@@ -160,7 +190,7 @@ Slash command 分两类：
 | `execute` | 本地执行函数 |
 | `is_read_only` | 权限系统用于区分只读和危险操作 |
 
-`ToolRegistry.get_openai_schemas()` 把工具转换成 OpenAI-compatible tool schema。`ToolRegistry.execute()` 捕获所有工具异常并返回 `"Tool error: ..."`，避免单个工具异常打崩 Agent 主循环。
+`ToolRegistry.get_openai_schemas()` 把工具转换成 OpenAI-compatible tool schema，并支持按当前 turn 的 `allowed_tools` 过滤。`ToolRegistry.execute()` 捕获所有工具异常并返回 `"Tool error: ..."`，避免单个工具异常打崩 Agent 主循环。`ToolCallExecutor` 也会在执行层检查当前 turn 白名单，防止模型调用未暴露的工具。
 
 当前 13 个内置工具：
 
@@ -178,7 +208,7 @@ Slash command 分两类：
 - `core/tooling/display.py` 负责“折叠还是展开”，默认输出一行摘要，例如 `tools: 3 calls: read_file, grep, glob`；危险工具会追加 `[danger]` 标记。
 - `core/tooling/execution.py` 负责真正的执行期展示，包括 diff preview、command preview、审批菜单和工具结果摘要；这些内容不受折叠影响。
 
-## 7. 权限和审批模型
+## 8. 权限和审批模型
 
 权限优先级：
 
@@ -208,7 +238,7 @@ Yes, for this conversation
 
 Memory 自管理权限也在 tool execution 层处理：`write_file` / `edit_file` 命中 `MemoryManager.is_memory_write_target()` 的 resolved memory 路径时跳过用户审批，但显式 `deny` 仍优先生效，普通项目文件仍走原有审批流程。
 
-## 7.1 输出渲染模型
+## 8.1 输出渲染模型
 
 `LLMClient.complete(..., stream=True)` 通过 `on_text_token` / `on_reasoning_token` 回调把流式内容交给运行时。当前渲染链路是：
 
@@ -227,7 +257,7 @@ Memory 自管理权限也在 tool execution 层处理：`write_file` / `edit_fil
 
 当前实现已经避免“结构化内容先整段 raw、再整段 Rich”的双重输出，但还没有实现可替换区域式 streaming，也没有引入 `Ctrl+O` 之类的交互增强。
 
-## 8. Memory 模型
+## 9. Memory 模型
 
 当前 memory 是文件驱动模型，不提供专用 `memory_save/list/get/delete` 工具。
 
@@ -253,12 +283,11 @@ flowchart LR
 1. `BASE_SYSTEM_PROMPT`
 2. 当前 working directory
 3. 当前项目 resolved memory paths
-4. enabled skills 的 `SKILL.md`
-5. Project XCODE.md、User XCODE.md、Auto Memory Index
+4. Project XCODE.md、User XCODE.md、Auto Memory Index
 
 Auto memory 当前只自动注入 `MEMORY.md` 索引，详细内容需要 Agent 再用 `read_file` 读取具体 memory 文件。
 
-## 9. Context 和压缩模型
+## 10. Context 和压缩模型
 
 `ContextManager` 持有实例级 `max_tokens` 和 `max_summary_chars`，均从 `Config` 传入（`agent.py:54`）。`max_summary_chars` 设为 `0` 或 `None` 时关闭代码层摘要硬截断，同时 prompt 中不出现字符上限提示。压缩 prompt 中不再使用独立词数限制，统一为 `max_summary_chars` 字符上限。
 
@@ -276,7 +305,7 @@ Auto memory 当前只自动注入 `MEMORY.md` 索引，详细内容需要 Agent 
 
 当前 `/context` 还没有 cost 估算。
 
-## 10. Session 和恢复模型
+## 11. Session 和恢复模型
 
 `SessionStore` 会把当前项目的完整 transcript 追加到：
 
@@ -329,16 +358,18 @@ runtime status 写入：
 - 有 `compaction_checkpoint` 时，恢复最新 checkpoint summary + checkpoint 之后的 message events。
 - 无 checkpoint 时，只恢复 token budget 内的 recent tail。
 - 裁剪时保护 assistant `tool_calls` 和 tool result pair，避免恢复出非法 OpenAI-compatible message 顺序。
+- skill invocation 的 transcript user event 保留 `/skill-name args` 展示文本，`metadata.model_content` 保留展开后的 hidden/model prompt；恢复 `_history` 时优先使用 `metadata.model_content`。
 - 当前不实现 CLI `--resume` / `--continue`，也不实现 rollback/fork。
 
-## 11. 当前文件职责
+## 12. 当前文件职责
 
 | 文件 | 职责 |
 |------|------|
 | `src/xcode_cli/core/agent.py` | REPL 输入循环、普通 user turn orchestration、命令 handler glue、工具注册、LLM/tool loop orchestration |
 | `src/xcode_cli/core/commands/dispatcher.py` | slash command 路由；区分 prompt command 和 side-effect command |
 | `src/xcode_cli/core/commands/slash.py` | slash command 列表和 prompt_toolkit 补全 |
-| `src/xcode_cli/core/commands/skill.py` | CLI / REPL 共享的 skill list/install/enable/disable 命令服务 |
+| `src/xcode_cli/core/commands/registry.py` | 合并 built-in prompt commands 与 project skill prompt commands |
+| `src/xcode_cli/core/commands/skill.py` | CLI / REPL 共享的 project skill list/show/validate 命令服务 |
 | `src/xcode_cli/core/conversation/compaction.py` | `/compact` 和自动 compression checkpoint 编排 |
 | `src/xcode_cli/core/conversation/resume.py` | `/resume` 交互命令编排，调用 `SessionResumeBuilder` |
 | `src/xcode_cli/core/tooling/approval.py` | 工具审批 scope、方向键菜单、TTY / non-TTY fallback、`read_key()` 模块级键盘读取函数 |
@@ -358,13 +389,18 @@ runtime status 写入：
 | `src/xcode_cli/core/session_resume.py` | transcript 到可恢复 history 的构造 |
 | `src/xcode_cli/core/runtime_status.py` | 当前活跃进程状态文件 |
 | `src/xcode_cli/core/memory.py` | memory 路径、读取和 prompt context 注入 |
-| `src/xcode_cli/core/prompting.py` | base system prompt、memory 规则、skill 注入 |
+| `src/xcode_cli/core/turn.py` | `UserTurnInput`，区分 UI 展示内容、模型可见内容和当前 turn metadata |
+| `src/xcode_cli/core/prompting.py` | base system prompt 和 memory 规则 |
+| `src/xcode_cli/skills/loader.py` | 从 `.xcode/skills/*/SKILL.md` 加载项目 skill |
+| `src/xcode_cli/skills/model.py` | skill metadata 与 loader notice 数据结构 |
+| `src/xcode_cli/skills/prompt.py` | skill prompt 展开与 unsupported invocation 处理 |
+| `src/xcode_cli/skills/validation.py` | skill description、命令冲突、未知工具和 unsupported 字段校验 |
 | `src/xcode_cli/core/planning.py` | plan mode 状态机和 plan 文件写入 |
 | `src/xcode_cli/core/task_tracker.py` | task CRUD 和 task 工具工厂 |
 | `src/xcode_cli/core/sub_agent.py` | 子 Agent 执行 |
 | `src/xcode_cli/ui/renderer.py` | Rich Markdown / diff 渲染 |
 
-## 12. 当前架构边界
+## 13. 当前架构边界
 
 - 不引入 `asyncio`。
 - 不提供专用 memory CRUD 工具。
