@@ -115,11 +115,14 @@ sequenceDiagram
 
 ## 5. Slash Command 流程
 
-用户输入以 `/` 开头时不会进入 LLM，而是由 `_handle_slash_command()` 分发。命令补全由 `core/commands/slash.py` 提供，具体 handler 目前仍在 `agent.py` 内：
+用户输入以 `/` 开头时不会进入 LLM，而是由 `_handle_slash_command()` 分发。命令补全由 `core/commands/slash.py` 提供，具体 handler 目前仍在 `agent.py` 内。
+
+其中 `/init` 是 prompt command：handler 返回固定初始化 prompt，`AgentRuntime` 将其展开为普通 user message 并复用现有 LLM/tool loop 路径，而不是在 handler 内扫描项目或写文件。
 
 | 命令 | 实现位置 | 当前能力 |
 |------|----------|----------|
 | `/help` | `agent.py` | 展示命令列表 |
+| `/init` | prompt command 注册表 + `AgentRuntime` 普通 turn 路径 | 展开为仓库初始化 prompt，作为普通用户任务运行，Agent 可自行创建或改进 `XCODE.md` |
 | `/context` | `_handle_context_command()` | 展示 token 估算、预算、压缩阈值和消息数 |
 | `/dashboard` | `Dashboard().run()` | 打开 API 配置界面 |
 | `/skill` | `_handle_skill_command()` | list/install/enable/disable |

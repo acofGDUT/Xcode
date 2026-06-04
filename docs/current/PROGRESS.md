@@ -2,7 +2,7 @@
 
 > 本文档记录项目如何一步步走到现在。当前实现细节见 `ARCHITECTURE.md`，未来计划见 `ROADMAP.md`，已知问题和设计取舍见 `DEVNOTES.md`。
 
-最后更新：2026-05-28
+最后更新：2026-06-04
 
 ## 1. 当前状态总览
 
@@ -22,6 +22,8 @@
 | `/compact` + `/resume` 体验优化 | compaction Live 进度、resume 方向键菜单 | 完成并通过 review | `2026-05-28-compact-progress-and-resume-ux.md` |
 | 项目级配置合并 + /env 仪表盘 | .xcode/config.json merge、max_summary_chars 收口、/env TUI | 完成并通过 review | `2026-05-28-config-merge-plan.md` |
 | Task 工具免审 + UI 面板 + is_read_only 权限收口 | task_create/update 免审、瞬时 task 面板、只读工具默认 allow | 完成并通过 review | `2026-05-28-task-auto-allow-and-ui-plan.md` |
+| 开发流程与测试分层规范 | Spec-first + TDD-core + E2E-acceptance、P0/P1/P2 测试分层 | 完成 | `AGENTS.md` / `DEVNOTES.md` |
+| `/init` prompt command | 旧版 Claude 风格 prompt command，生成或改进仓库级 `XCODE.md` | 完成并通过测试 | `2026-06-04-init-command-plan.md` |
 | Phase 5 | 生态扩展 | 冻结 | 未开始 |
 
 当前重点不是进入 Phase 5，而是补齐费用估算、原生 Windows 验收，以及继续第二轮结构收口。
@@ -231,12 +233,54 @@ Review 结论：通过。`pytest -q` 为 `208 passed`；已提交并推送 `3f8c
 
 Review 结论：通过。合并后 `pytest -q` 为 `221 passed`；已提交并推送 `906e663 feat: add project-level config merge, unified params, and /env TUI dashboard`。Review 后发现三个问题（banner 文案暗示 API 配置、首次 banner 重绘、方向键全屏刷新），修复于 `03ffdbc docs: update project docs for config merge and /env dashboard`。
 
-## 14. 当前阻塞和遗留
+## 14. 开发流程与测试分层规范：2026-06-04
+
+背景：项目已经形成 `docs/superpowers/specs/` + `docs/superpowers/plans/` + pytest 回归 + acceptance 记录的开发习惯，但此前没有明确写成统一规格。为了让后续 Codex / Coding Agent 协作更稳定，也方便把项目包装成“AI Agent 项目经理”简历叙事，需要把流程和测试取舍文档化。
+
+当前收口：
+
+- 开发流程定为 **Spec-first + TDD-core + E2E-acceptance**。
+- `AGENTS.md` 明确 Codex 和 Coding Agent 在规格、任务说明、测试、验收、review 中的职责。
+- 测试按 P0/P1/P2 分层：
+  - P0 覆盖权限、安全、状态、session、memory、context、Windows 兼容等核心风险，必须有自动化回归测试。
+  - P1 覆盖 slash command、task/sub-agent、配置、render state 等用户可见行为，应有聚焦行为测试。
+  - P2 覆盖简单 wrapper、文案、低风险展示和文档，可用 smoke test、手工验收或说明替代。
+- `DEVNOTES.md` 记录测试噪音边界：不机械测试私有 helper、不重复测试同一分支、不用脆弱 UI 快照替代语义验收。
+
+结果：后续任务 brief 应显式说明本轮属于 P0/P1/P2 哪一层，以及需要运行哪些验证命令。Review 时优先检查 P0/P1 是否有足够测试或手工验收证据。
+
+## 15. `/init` prompt command 实现：2026-06-04
+
+背景：为了让 Xcode 更像一个能接手新仓库的 AI 项目经理，需要补一个旧版 Claude 风格的 `/init`。该命令不直接扫描项目，而是把固定初始化 prompt 当作普通用户任务交给 Agent，使 Agent 自己读取 README、AGENTS、CLAUDE、规则文件和代码结构，最后创建或改进 `XCODE.md`。
+
+设计决策：
+
+- `/init` 定位为 prompt command，不是本地项目扫描器。
+- 第一版只做薄命令注册和普通 agent turn 复用，不引入新的工具或后台流程。
+- 目标文件使用 `XCODE.md`，保持项目辨识度。
+- 如果已有 `XCODE.md`，prompt 要求 Agent 建议改进并优先 edit，不直接覆盖。
+- prompt 末尾要求 Agent 总结学到的项目信息和使用过的来源文件，方便 demo 展示。
+
+实现后验收：
+
+- `/init` 已注册到 help 和 slash completion。
+- prompt command handler 只返回固定 prompt，不扫描项目、不写文件。
+- `AgentRuntime` 将展开后的 prompt 作为普通 user message 写入 `_history` 和 transcript，并复用普通 LLM/tool loop。
+- 侧效命令（`/help`、`/context` 等）行为不变，仍返回 `None` 直接处理。
+- 测试：`pytest tests/test_init_command.py tests/test_agent_env.py tests/test_agent_memory_command.py tests/test_agent_resume_command.py -q` 通过（36 passed）。
+
+相关文档：
+
+- 规格文档：`docs/superpowers/specs/2026-06-04-init-command-design.md`
+- 实施计划：`docs/superpowers/plans/2026-06-04-init-command-plan.md`
+
+## 16. 当前阻塞和遗留
 
 | 项目 | 状态 | 说明 |
 |------|------|------|
 | CLI `--resume` / `--continue` | 延后 | 当前只做交互内 `/resume`，CLI 恢复入口后续如有明确需求再设计 |
 | `/context` cost | 未实现 | 当前只有 token 估算，没有价格估算 |
+| `/init` prompt command | 完成并通过测试 | 已实现 prompt command 注册、普通 user turn 复用、help/completion 和回归测试 |
 | 工具调用 UI 折叠 | 基础完成 | 默认已折叠为工具摘要；`Ctrl+O` 展开和原生 Windows 热键验收仍未做 |
 | 工具调用轮次不中断 | 完成并待真实终端补充验收 | 已改为 `while True` 多轮 tool loop，并补超过 10 轮、拒绝后继续、空响应 fallback 回归测试 |
 | memory 自管理权限 | 完成 | memory-scoped 写入已免用户审核，普通文件仍保持审批 |
@@ -252,7 +296,8 @@ Review 结论：通过。合并后 `pytest -q` 为 `221 passed`；已提交并�
 | 原生 Windows E2E | 未完成 | 需要在 cmd.exe/PowerShell 验证完整交互 |
 | Phase 5 | 冻结 | 不作为近期默认开发目标 |
 
-## 15. 下一步
+## 17. 下一步
 
-1. 做原生 cmd.exe/PowerShell 交互验收，重点覆盖审批菜单、diff preview、工具摘要折叠、多轮 tool call、`/resume`、`/compact`。
-2. 继续第二轮结构收口：拆 `/memory`、`/context`、`/plan` 等 command handlers。（`/env` 已收口为 EnvDashboard）
+1. ~~实现 `/init` prompt command~~ ✅ 已完成。
+2. 做原生 cmd.exe/PowerShell 交互验收，重点覆盖审批菜单、diff preview、工具摘要折叠、多轮 tool call、`/resume`、`/compact`。
+3. 继续第二轮结构收口：拆 `/memory`、`/context`、`/plan` 等 command handlers。（`/env` 已收口为 EnvDashboard）

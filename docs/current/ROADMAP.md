@@ -28,6 +28,7 @@ Phase 5 生态扩展当前冻结，不作为近期默认开发目标。
 | P0 | 对话历史恢复 | 完成 | 已支持 `/compact` + `/resume`，基于 checkpoint + recent tail 恢复可继续推理的 history；`/compact` 含 Live 进度，`/resume` 含方向键菜单；CLI 入口延后 |
 | P0 | 原生 Windows E2E 验收 | 未完成 | 在 cmd.exe/PowerShell 验证真实交互链路 |
 | P1 | `/context` cost 估算 | 未实现 | 在 token 统计外展示近似费用 |
+| P1 | `/init` prompt command | 完成 | 复刻旧版 Claude `/init`，把固定初始化 prompt 当作普通用户任务送入 agent turn，由 Agent 自己读取项目并创建或更新 `XCODE.md` |
 | P1 | 工具调用 UI 折叠 | 基础完成 | 默认已合并为工具摘要；后续补 `Ctrl+O` 展开和原生 Windows 热键验收 |
 | P1 | 工具调用轮次不中断 | 基础完成 | 已支持多轮 tool loop 和关键回归测试；后续补真实终端验收与可选 round 状态提示 |
 | P1 | memory 自管理权限 | 完成 | Xcode 管理 resolved memory 文件时不再频繁要求用户审核，普通文件仍保留审批 |
@@ -189,6 +190,64 @@ output_cost_per_1m: float | None = None
 - 未知模型不报错。
 - 已知模型显示 input/output/total 近似费用。
 - 文案明确是 estimate，避免被用户理解为账单。
+
+## 5.1 P1：`/init` prompt command
+
+### 目标
+
+实现旧版 Claude 风格的 `/init`：用户输入 `/init` 后，Xcode 不在命令 handler 里扫描项目，而是把一段固定初始化 prompt 当作普通用户任务送进当前 agent turn。随后 Agent 通过已有 read/grep/glob/write/edit 工具自行分析代码库，并创建或改进仓库级 `XCODE.md`。
+
+### 推荐设计
+
+第一版保持很薄：
+
+```text
+用户输入 /init
+  -> slash command parser 识别 init
+  -> init handler 返回 INIT_PROMPT
+  -> AgentRuntime 复用普通用户消息路径
+  -> LLM/tool loop 自行读取 README、AGENTS、CLAUDE、规则文件和代码结构
+  -> Agent 创建或编辑 XCODE.md
+```
+
+`/init` 属于 prompt command，而不是本地扫描命令。它不应该在 handler 中读取目录、解析 README 或直接写 `XCODE.md`。
+
+### Prompt 要求
+
+初始化 prompt 应要求 Agent：
+
+- 分析当前代码库并创建 `XCODE.md`，用于指导未来的 xcode 实例。
+- 写入常用开发命令，例如构建、lint、测试、运行单个测试。
+- 总结高层架构和跨文件才能理解的结构，不罗列容易发现的文件清单。
+- 如果已有 `XCODE.md`，提出改进并优先编辑，不直接覆盖。
+- 读取并吸收已有 AI coding instructions，例如 `AGENTS.md`、`CLAUDE.md`、`.cursor/rules/`、`.cursorrules`、`.github/copilot-instructions.md`、`.windsurfrules`、`.clinerules`。
+- 读取 README 并吸收重要内容。
+- 不编造未读到的信息，不加入泛泛开发实践或敏感信息提醒。
+- 文件开头固定为：
+
+```markdown
+# XCODE.md
+
+This file provides guidance to xcode when working with code in this repository.
+```
+
+推荐在 prompt 末尾要求：创建或更新后，简要总结学到的项目信息和使用过的来源文件，便于 demo 展示。
+
+### 建议修改文件
+
+| 文件 | 修改方向 |
+|------|----------|
+| `src/xcode_cli/core/commands/slash.py` | 增加 `/init` help/completion；可新增 prompt command 注册表和 `INIT_PROMPT` |
+| `src/xcode_cli/core/agent.py` | 识别 prompt command 后复用普通 user turn 路径，而不是只打印输出 |
+| `tests/test_init_command.py` | 覆盖 `/init` 返回固定 prompt、补全可见、普通 turn 路径会记录 user message 并进入 LLM loop |
+
+### 验收标准
+
+- `/help` 和 slash completion 能看到 `/init`。
+- 输入 `/init` 后，`INIT_PROMPT` 作为 user message 进入 `_history` 和 session transcript。
+- handler 本身不扫描项目、不读取文件、不写 `XCODE.md`。
+- 已有 `XCODE.md` 的处理策略只存在于 prompt 中，由 Agent 后续使用工具决定如何编辑。
+- 对缺少 API key 的场景保持普通 user turn 的现有错误展示行为，不因为 `/init` 走特殊路径崩溃。
 
 ## 6. P1：memory 自管理权限
 
