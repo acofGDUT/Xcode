@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 from prompt_toolkit.completion import Completer, Completion
@@ -12,6 +12,9 @@ class SlashCommand:
     kind: str
     description: str
     handler: Callable[[str], str]
+    source: str = "builtin"
+    argument_hint: str | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
 
 
 INIT_PROMPT = """Please analyze this codebase and create an XCODE.md file, which will be given to future instances of xcode to operate in this repository.

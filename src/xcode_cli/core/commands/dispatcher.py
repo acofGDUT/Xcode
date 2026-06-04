@@ -5,7 +5,7 @@ from typing import Callable, Optional
 
 from rich.console import Console
 
-from xcode_cli.core.commands.slash import PROMPT_COMMANDS
+from xcode_cli.core.commands.registry import CommandRegistry
 
 
 @dataclass(frozen=True)
@@ -37,8 +37,10 @@ class SlashCommandDispatcher:
         memory_handler: Callable[[list[str]], None],
         resume_handler: Callable[[], None],
         compact_handler: Callable[[], None],
+        registry: CommandRegistry | None = None,
     ) -> None:
         self._console = console
+        self._registry = registry or CommandRegistry.from_skills([])
         self._handlers: dict[str, Callable] = {
             "/help": lambda parts: help_handler(),
             "/context": lambda parts: context_handler(),
@@ -63,8 +65,8 @@ class SlashCommandDispatcher:
         head = parts[0].lower()
 
         # prompt command（如 /init）→ 展开为 prompt text，继续走普通 user turn
-        prompt_cmd = PROMPT_COMMANDS.get(head)
-        if prompt_cmd is not None:
+        prompt_cmd = self._registry.get(head)
+        if prompt_cmd is not None and prompt_cmd.kind == "prompt":
             args = " ".join(parts[1:]) if len(parts) > 1 else ""
             return SlashDispatchResult(kind="prompt", text=prompt_cmd.handler(args))
 
