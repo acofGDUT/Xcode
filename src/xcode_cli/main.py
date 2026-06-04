@@ -9,12 +9,12 @@ from rich.console import Console
 
 from xcode_cli.core.agent import AgentRuntime
 from xcode_cli.core.commands.skill import SkillCommandService
-from xcode_cli.core.config import ConfigStore
 from xcode_cli.core.dashboard import Dashboard
+from xcode_cli.core.project_root import resolve_project_root
 from xcode_cli.core.tools.files import edit_file, read_file, write_file
 from xcode_cli.core.tools.search import glob as glob_files, grep
 from xcode_cli.core.tools.shell import run_shell
-from xcode_cli.skills.manager import SkillManager
+from xcode_cli.skills.loader import SkillLoader
 
 app = typer.Typer(
     help="Xcode CLI agent",
@@ -115,7 +115,7 @@ def tool_glob(
 
 
 def _make_skill_service() -> SkillCommandService:
-    return SkillCommandService(SkillManager(), ConfigStore(), console)
+    return SkillCommandService(SkillLoader(resolve_project_root(".")), console)
 
 
 @skill_app.command("install")
@@ -125,7 +125,17 @@ def skill_install(path: str = typer.Argument(..., help="Local skill directory"))
 
 @skill_app.command("list")
 def skill_list() -> None:
-    _make_skill_service().list_installed()
+    _make_skill_service().list_project_skills()
+
+
+@skill_app.command("show")
+def skill_show(name: str = typer.Argument(..., help="Skill name")) -> None:
+    _make_skill_service().show_project_skill(name)
+
+
+@skill_app.command("validate")
+def skill_validate() -> None:
+    _make_skill_service().validate_project_skills()
 
 
 @skill_app.command("enable")

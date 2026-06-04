@@ -51,6 +51,14 @@ def test_slash_completer_includes_init() -> None:
     assert any("Initialize a new XCODE.md" in str(completion.display_text) for completion in completions)
 
 
+def test_slash_completer_includes_dynamic_skill_command() -> None:
+    completer = SlashCompleter(commands={"/review": "Review code [path]"})
+    completions = list(completer.get_completions(Document("/re"), None))
+
+    assert any(completion.text == "/review" for completion in completions)
+    assert any("Review code [path]" in str(completion.display_text) for completion in completions)
+
+
 def _setup_tmp_xcode_home(tmp_path: Path, monkeypatch) -> Path:
     import xcode_cli.paths
 
@@ -136,3 +144,30 @@ def test_shell_command_suggestions_include_init(tmp_path: Path, monkeypatch) -> 
     rendered = output.getvalue()
     assert "/init" in rendered
     assert "Initialize a new XCODE.md" in rendered
+
+
+def test_shell_command_suggestions_include_dynamic_skill_command(tmp_path: Path, monkeypatch) -> None:
+    from io import StringIO
+
+    from rich.console import Console
+
+    from xcode_cli.core.ui.shell import ShellUI
+
+    agent = _make_agent(tmp_path, monkeypatch)
+    output = StringIO()
+    console = Console(file=output, force_terminal=False, width=120)
+    shell = ShellUI(
+        console=console,
+        config_store=agent.config_store,
+        context=agent.context,
+        session_start_getter=lambda: 0.0,
+        tool_count_getter=lambda: 0,
+        token_getter=lambda: 0,
+        cwd=agent.cwd,
+    )
+
+    shell.show_command_suggestions(commands={"/review": "Review code [path]"})
+
+    rendered = output.getvalue()
+    assert "/review" in rendered
+    assert "Review code [path]" in rendered

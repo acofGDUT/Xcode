@@ -17,8 +17,9 @@ from rich.text import Text
 
 from xcode_cli.core.permissions import PermissionManager
 from xcode_cli.core.commands.dispatcher import SlashCommandDispatcher
+from xcode_cli.core.commands.registry import CommandRegistry
 from xcode_cli.core.commands.skill import SkillCommandService
-from xcode_cli.core.commands.slash import SlashCompleter
+from xcode_cli.core.commands.slash import COMMANDS, SlashCompleter
 from xcode_cli.core.config import ConfigStore
 from xcode_cli.core.conversation.compaction import ConversationCompactor
 from xcode_cli.core.conversation.resume import ResumeCommandService
@@ -41,7 +42,7 @@ from xcode_cli.core.tool_registry import ToolDef, ToolRegistry
 from xcode_cli.core.tools import ALL_TOOLS
 from xcode_cli.core.tools.agent_tool import create_dispatch_agent_tool
 from xcode_cli.core.turn import UserTurnInput, coerce_user_turn_input
-from xcode_cli.skills.manager import SkillManager
+from xcode_cli.skills.loader import SkillLoader
 
 
 class AgentRuntime:
@@ -50,9 +51,11 @@ class AgentRuntime:
         self.cwd = str(resolve_project_root(os.getcwd()))
         self.sessions = SessionStore(cwd=self.cwd)
         self._runtime_status = RuntimeStatusStore()
-        self.skills = SkillManager()
+        self.skill_loader = SkillLoader(self.cwd)
+        self._skill_load_result = self.skill_loader.load()
+        self._command_registry = CommandRegistry.from_skills(self._skill_load_result.skills)
         self.config_store = ConfigStore()
-        self._skill_service = SkillCommandService(self.skills, self.config_store, self.console)
+        self._skill_service = SkillCommandService(self.skill_loader, self.console, builtin_commands=set(COMMANDS))
         self.llm = LLMClient()
         cfg = self.config_store.load()
         self.context = ContextManager(max_tokens=cfg.max_tokens, max_summary_chars=cfg.max_summary_chars)
@@ -67,7 +70,10 @@ class AgentRuntime:
         self._session_id: str = ""
         self._current_allowed_tools: list[str] | None = None
         self._session_auto_approve: dict[str, bool] = {"write": False, "shell": False}
-        self.prompt = PromptSession(completer=SlashCompleter(), auto_suggest=AutoSuggestFromHistory())
+        self.prompt = PromptSession(
+            completer=SlashCompleter(commands=self._command_registry.visible_commands()),
+            auto_suggest=AutoSuggestFromHistory(),
+        )
         self.approval = ToolApprovalController(self.console, self._session_auto_approve)
         self.compactor = ConversationCompactor(self.context, self.llm, self.sessions, self.console)
         self.resume_service = ResumeCommandService(self.sessions, self.context, self.console, self.prompt)
@@ -79,6 +85,7 @@ class AgentRuntime:
             tool_count_getter=lambda: self._tool_call_count,
             token_getter=lambda: self._estimated_tokens,
             cwd=self.cwd,
+            command_getter=self._command_registry.visible_commands,
         )
         self.tools = ToolRegistry()
         for t in ALL_TOOLS:
@@ -111,6 +118,7 @@ class AgentRuntime:
             memory_handler=self._handle_memory_command,
             resume_handler=self._handle_resume_command,
             compact_handler=self._handle_compact_command,
+            registry=self._command_registry,
         )
 
     def run_chat(self) -> None:
@@ -204,12 +212,6 @@ class AgentRuntime:
 
     def _handle_help_command(self) -> None:
         self._show_command_suggestions()
-        self.console.print("/init")
-        self.console.print("/skill list|install <path>|enable <name>|disable <name>")
-        self.console.print("/env  (配置仪表盘)")
-        self.console.print("/context")
-        self.console.print("/memory | /memory auto on|off")
-        self.console.print("/dashboard")
 
     def _handle_slash_command(self, command: str) -> UserTurnInput | None:
         result = self._dispatcher.dispatch(command)

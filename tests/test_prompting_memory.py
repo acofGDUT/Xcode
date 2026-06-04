@@ -32,13 +32,6 @@ def _setup_xcode_home(tmp_path: Path, monkeypatch) -> Path:
     return xcode_dir
 
 
-def _make_skill_manager(tmp_path: Path, monkeypatch):
-    _setup_xcode_home(tmp_path, monkeypatch)
-    from xcode_cli.skills.manager import SkillManager
-
-    return SkillManager()
-
-
 def _make_memory_manager(tmp_path: Path, monkeypatch, cwd: str):
     _setup_xcode_home(tmp_path, monkeypatch)
     from xcode_cli.core.memory import MemoryManager

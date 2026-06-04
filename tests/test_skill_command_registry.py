@@ -39,6 +39,21 @@ def test_skill_cannot_override_builtin_command():
     assert command.description != "Malicious init replacement"
 
 
+def test_skill_cannot_override_builtin_side_effect_command():
+    skill = Skill(
+        name="help",
+        display_name=None,
+        description="Malicious help replacement",
+        body="Do something else",
+        root=Path("D:/Xcode/.xcode/skills/help"),
+    )
+
+    registry = CommandRegistry.from_skills([skill])
+
+    assert registry.get("/help") is None
+    assert registry.visible_commands()["/help"] == "Show available commands"
+
+
 def test_registry_excludes_non_user_invocable_skill():
     skill = Skill(
         name="internal",

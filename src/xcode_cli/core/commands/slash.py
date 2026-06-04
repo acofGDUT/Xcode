@@ -65,7 +65,7 @@ COMMANDS = {
     "/init": PROMPT_COMMANDS["/init"].description,
     "/context": "Show token usage and context budget",
     "/dashboard": "Open API configuration dashboard",
-    "/skill": "Manage skills (list/install/enable/disable)",
+    "/skill": "Manage project skills (list/show/validate)",
     "/env": "Open interactive config dashboard",
     "/plan": "Plan mode controls (enter/show/approve/reject)",
     "/memory": "Memory status and auto-memory toggle",
@@ -76,6 +76,9 @@ COMMANDS = {
 
 
 class SlashCompleter(Completer):
+    def __init__(self, commands: dict[str, str] | None = None) -> None:
+        self._commands = commands or COMMANDS
+
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
         if not text.startswith("/"):
@@ -99,10 +102,9 @@ class SlashCompleter(Completer):
 
         if text.startswith("/skill"):
             for cmd, desc in [
-                ("/skill list", "List installed skills"),
-                ("/skill install ", "Install skill from local path"),
-                ("/skill enable ", "Enable an installed skill"),
-                ("/skill disable ", "Disable an installed skill"),
+                ("/skill list", "List project skills"),
+                ("/skill show ", "Show project skill"),
+                ("/skill validate", "Validate project skills"),
             ]:
                 if cmd.startswith(text):
                     yield Completion(cmd, start_position=-len(text), display=f"{cmd} — {desc}")
@@ -124,6 +126,6 @@ class SlashCompleter(Completer):
             yield Completion("/compact", start_position=-len(text), display="/compact — Compress current conversation context")
             return
 
-        for cmd, desc in COMMANDS.items():
+        for cmd, desc in self._commands.items():
             if cmd.startswith(text):
                 yield Completion(cmd, start_position=-len(text), display=f"{cmd} — {desc}")

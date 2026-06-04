@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from xcode_cli.core.commands.slash import PROMPT_COMMANDS, SlashCommand
+from xcode_cli.core.commands.slash import COMMANDS, PROMPT_COMMANDS, SlashCommand
 from xcode_cli.skills.model import Skill
 from xcode_cli.skills.prompt import SkillPromptExpander
 
@@ -17,6 +17,8 @@ class CommandRegistry:
         registry.register_many(PROMPT_COMMANDS.values())
         for skill in skills:
             if not skill.user_invocable:
+                continue
+            if _command_name(skill.name) in COMMANDS:
                 continue
             registry.register(create_skill_slash_command(skill))
         return registry
@@ -35,7 +37,13 @@ class CommandRegistry:
         return self._commands.get(_command_name(command_name))
 
     def visible_commands(self) -> dict[str, str]:
-        return {name: cmd.description for name, cmd in sorted(self._commands.items())}
+        visible: dict[str, str] = dict(sorted(COMMANDS.items()))
+        for name, cmd in sorted(self._commands.items()):
+            description = cmd.description
+            if cmd.argument_hint:
+                description = f"{description} {cmd.argument_hint}"
+            visible[name] = description
+        return visible
 
 
 def create_skill_slash_command(skill: Skill) -> SlashCommand:

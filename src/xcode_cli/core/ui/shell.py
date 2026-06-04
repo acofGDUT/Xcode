@@ -7,8 +7,10 @@ from typing import Callable
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from xcode_cli.core.bootstrap import ensure_ripgrep_installed
+from xcode_cli.core.commands.slash import COMMANDS
 from xcode_cli.ui.renderer import OutputRenderer
 
 
@@ -22,6 +24,7 @@ class ShellUI:
         tool_count_getter: Callable[[], int],
         token_getter: Callable[[], int],
         cwd: str,
+        command_getter: Callable[[], dict[str, str]] | None = None,
     ) -> None:
         self.console = console
         self.config_store = config_store
@@ -30,6 +33,7 @@ class ShellUI:
         self._tool_count_getter = tool_count_getter
         self._token_getter = token_getter
         self.cwd = cwd
+        self._command_getter = command_getter
 
     def render_welcome(self) -> None:
         ensure_ripgrep_installed()
@@ -43,18 +47,18 @@ class ShellUI:
         self.console.print(f"[dim]API:[/dim] {key_state} | [dim]Project:[/dim] {self.cwd}")
         self.console.print("[dim]Type normally to chat · / for commands · Tab to complete[/dim]")
 
-    def show_command_suggestions(self) -> None:
+    def show_command_suggestions(self, commands: dict[str, str] | None = None) -> None:
+        visible_commands = commands
+        if visible_commands is None and self._command_getter is not None:
+            visible_commands = self._command_getter()
+        if visible_commands is None:
+            visible_commands = COMMANDS
+
         table = Table(show_header=True, header_style="bold cyan", box=None, pad_edge=False)
         table.add_column("Command", style="green")
         table.add_column("Description", style="white")
-        table.add_row("/help", "Show available commands")
-        table.add_row("/init", "Initialize a new XCODE.md file with codebase documentation")
-        table.add_row("/context", "Show token usage and context budget")
-        table.add_row("/dashboard", "Open API configuration dashboard")
-        table.add_row("/skill", "Manage skills")
-        table.add_row("/env", "Open interactive config dashboard")
-        table.add_row("/memory", "Show memory status and toggle auto-memory")
-        table.add_row("/exit", "Exit chat")
+        for command, description in visible_commands.items():
+            table.add_row(command, Text(description))
         self.console.print(Panel(table, title="Slash Commands", border_style="cyan"))
 
     def bottom_toolbar(self) -> str:
