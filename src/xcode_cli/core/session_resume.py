@@ -86,17 +86,15 @@ class SessionResumeBuilder:
         )
 
     def _build_tail_only(self, transcript_path: Path) -> ResumeResult:
-        all_messages: list[dict[str, Any]] = []
+        events: list[dict[str, Any]] = []
         with transcript_path.open("r", encoding="utf-8") as f:
             for line in f:
                 try:
-                    event = json.loads(line)
+                    events.append(json.loads(line))
                 except json.JSONDecodeError:
                     continue
-                if event.get("type") == "message":
-                    all_messages.append(_message_for_model_history(event))
 
-        history = self._trim_tail_to_budget(all_messages)
+        history = self._trim_tail_to_budget(build_model_history_from_events(events))
         estimated = self._context.estimate_tokens(history)
 
         return ResumeResult(
@@ -151,6 +149,14 @@ class SessionResumeBuilder:
                                 del m["tool_calls"]
                             break
         return history
+
+
+def build_model_history_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        _message_for_model_history(event)
+        for event in events
+        if event.get("type") == "message"
+    ]
 
 
 def _message_for_model_history(event: dict[str, Any]) -> dict[str, Any]:

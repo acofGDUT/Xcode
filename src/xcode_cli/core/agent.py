@@ -613,3 +613,8 @@ class AgentRuntime:
                 self.sessions.append_message(self._session_id, tool_result.assistant_message)
                 for tm in tool_result.tool_messages:
                     self.sessions.append_message(self._session_id, tm)
+                for invocation in tool_result.skill_invocations:
+                    self.sessions.append_event(
+                        self._session_id,
+                        {"type": "skill_invocation", **invocation},
+                    )

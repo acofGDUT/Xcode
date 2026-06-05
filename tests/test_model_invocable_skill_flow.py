@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 from unittest.mock import MagicMock
 
 from xcode_cli.core.llm import LLMResponse, ToolCall
@@ -32,6 +33,30 @@ def make_runtime_with_review_skill(tmp_path, monkeypatch, allowed_tools=None):
 
     runtime = AgentRuntime()
     return runtime
+
+
+def fake_skill_then_final_response():
+    calls = [0]
+
+    def fake_complete(system_prompt, messages, tool_schemas, on_text_token=None, on_reasoning_token=None):
+        calls[0] += 1
+        if calls[0] == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(id="call_1", name="skill", args={"skill": "review", "args": "src/foo.py"})],
+            )
+        return LLMResponse(content="review complete", tool_calls=[])
+
+    return fake_complete
+
+
+def read_session_events(runtime):
+    path = runtime.sessions.transcript_path(runtime._session_id)
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
 
 def test_skill_tool_loads_prompt_and_narrows_followup_tool_schemas(tmp_path, monkeypatch):
@@ -81,3 +106,22 @@ def test_skill_tool_is_removed_after_loading_even_without_allowed_tools(tmp_path
     assert "skill" in seen_schemas[0]
     assert "skill" not in seen_schemas[1]
     assert "read_file" in seen_schemas[1]
+
+
+def test_skill_tool_writes_invocation_metadata_without_user_visible_prompt(tmp_path, monkeypatch):
+    runtime = make_runtime_with_review_skill(tmp_path, monkeypatch, allowed_tools=["read"])
+    runtime._session_id = runtime.sessions.new_session_id()
+    runtime.llm.complete = fake_skill_then_final_response()
+
+    runtime._run_user_turn("please review src/foo.py")
+
+    events = read_session_events(runtime)
+    user_event = next(e for e in events if e.get("role") == "user")
+    skill_events = [e for e in events if e.get("type") == "skill_invocation"]
+    assert user_event["content"] == "please review src/foo.py"
+    assert "Review $ARGUMENTS" not in user_event["content"]
+    assert skill_events
+    assert skill_events[0]["skill"] == "review"
+    assert skill_events[0]["source"] == "model"
+    assert skill_events[0]["skill_source_hash"].startswith("sha256:")
+    assert "model_content" not in skill_events[0]

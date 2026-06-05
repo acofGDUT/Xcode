@@ -91,3 +91,32 @@ class TestCompactHistoryProgress:
             assert result is None
             mock_live.start.assert_called_once()
             mock_live.stop.assert_called_once()
+
+    def test_compaction_keeps_loaded_skill_marker_in_source_history(self, tmp_path):
+        captured = {}
+
+        class FakeContext:
+            def estimate_tokens(self, history):
+                return len(str(history))
+
+            def compress(self, history, llm, previous_summary):
+                captured["history"] = history
+                return MagicMock(
+                    messages=history,
+                    summary="summary",
+                    checkpoint_message={"role": "system", "content": "Conversation summary checkpoint:\nsummary"},
+                )
+
+        history = [
+            {"role": "user", "content": "please review src/foo.py"},
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": "<xcode_loaded_skill name=\"review\">Review src/foo.py</xcode_loaded_skill>",
+            },
+        ]
+        compactor = ConversationCompactor(FakeContext(), MagicMock(), MagicMock(), MagicMock())
+
+        compactor.compact_history(history)
+
+        assert any("<xcode_loaded_skill name=\"review\"" in str(message) for message in captured["history"])

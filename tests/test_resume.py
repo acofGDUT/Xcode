@@ -210,3 +210,36 @@ class TestResumeSkillInvocation:
 
         assert result.history[0] == {"role": "user", "content": "Review this: src/foo.py"}
         assert result.history[1] == {"role": "assistant", "content": "ok"}
+
+    def test_resume_preserves_skill_tool_message_for_model_history(self, tmp_path):
+        from xcode_cli.core.session_resume import build_model_history_from_events
+
+        events = [
+            {"type": "message", "role": "user", "content": "please review src/foo.py"},
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "skill", "arguments": "{\"skill\":\"review\"}"},
+                    }
+                ],
+            },
+            {
+                "type": "message",
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": (
+                    "<xcode_loaded_skill name=\"review\" source=\"model\">\n"
+                    "Review src/foo.py\n"
+                    "</xcode_loaded_skill>"
+                ),
+            },
+        ]
+
+        history = build_model_history_from_events(events)
+
+        assert any("<xcode_loaded_skill name=\"review\"" in str(message) for message in history)
