@@ -7,6 +7,7 @@ from rich.console import Console
 
 from xcode_cli.core.commands.registry import CommandRegistry
 from xcode_cli.core.turn import UserTurnInput
+from xcode_cli.skills.invocation import SkillInvocation
 from xcode_cli.skills.prompt import ExpandedSkillPrompt, UnsupportedSkillInvocation
 
 
@@ -86,6 +87,13 @@ class SlashCommandDispatcher:
                 metadata["args"] = args
             if isinstance(payload, UserTurnInput):
                 turn_input = payload
+            elif isinstance(payload, SkillInvocation):
+                turn_input = UserTurnInput(
+                    display_content=payload.display_content,
+                    model_content=payload.model_content,
+                    metadata=payload.model_metadata,
+                    allowed_tools=payload.allowed_tools,
+                )
             elif isinstance(payload, ExpandedSkillPrompt):
                 turn_input = UserTurnInput(
                     display_content=command,
@@ -94,6 +102,9 @@ class SlashCommandDispatcher:
                     allowed_tools=payload.allowed_tools,
                 )
             else:
+                if isinstance(payload, str) and payload.startswith("Error:"):
+                    self._console.print(payload, markup=False, highlight=False)
+                    return SlashDispatchResult(kind="handled")
                 turn_input = UserTurnInput(display_content=command, model_content=str(payload), metadata=metadata)
             return SlashDispatchResult(kind="prompt", turn_input=turn_input)
 
