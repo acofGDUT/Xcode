@@ -45,7 +45,6 @@ QQChatService
 如果真实 QQ 单聊和群聊验收都通过，写：
 
 ```text
-QQ `/QQchat` 第一版完成：支持 WebSocket、C2C_MESSAGE_CREATE、GROUP_AT_MESSAGE_CREATE、被动文本回复、只读工具白名单和审计。
 QQ `/QQchat` 第一版完成：支持 WebSocket、C2C_MESSAGE_CREATE、GROUP_AT_MESSAGE_CREATE、被动文本回复、入口级只读 ToolScope 和审计。
 ```
 
@@ -76,6 +75,7 @@ QQ `/QQchat` 代码已实现并通过自动化测试；真实 QQ 平台验收未
 
 - 不引入 `asyncio`。
 - 不允许 QQ 远程用户审批危险工具。
+- QQchat 使用入口级 `ToolScope`，不复用 skill `allowed-tools`。
 - 不保存 AppSecret、AccessToken、Authorization header。
 - group 默认按 member 隔离。
 - 被动回复受 `msg_id`、`msg_seq` 和时间窗口限制。

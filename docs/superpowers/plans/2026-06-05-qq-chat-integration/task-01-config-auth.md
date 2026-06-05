@@ -92,7 +92,7 @@ def test_safe_summary_masks_secret():
 
     summary = cfg.safe_summary()
 
-    assert "super-secret" not in summary
+    assert "super-secret" not in str(summary)
     assert summary["client_secret"] == "<set>"
 ```
 

@@ -55,6 +55,12 @@ Expected: PASS。
 
 在 `tests/test_external_turn.py` 中增加：
 
+确认文件顶部已导入：
+
+```python
+from xcode_cli.core.external_turn import ExternalTurnRunner, ToolScope
+```
+
 ```python
 def test_qq_turn_never_allows_dangerous_tools_even_if_config_attempts_to_add_them():
     sessions = FakeSessionStore()

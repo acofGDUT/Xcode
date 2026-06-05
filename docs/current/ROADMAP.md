@@ -643,7 +643,7 @@ Phase 6 仍不是当前默认实现目标，但 QQ 机器人接入已经完成�
 
 - 外部消息适配层：把 QQ 等 IM 消息转换为 Xcode 内部 user message。
 - 会话映射：每个外部用户或群聊映射到独立 session，避免上下文串线。
-- 权限边界：外部入口默认不能直接执行高风险工具，尤其是 `write_file`、`edit_file`、`run_shell`。
+- 权限边界：外部入口默认通过入口级 `ToolScope` 收窄工具可见性和执行能力，不能直接执行高风险工具，尤其是 `write_file`、`edit_file`、`run_shell`；不要复用 skill `allowed-tools` 语义。
 - 人类确认：危险操作仍需要本机 owner 确认，不能只由远程聊天用户批准。
 - 审计日志：记录外部用户、消息、工具调用、审批结果和 session id。
 - 部署边界：先明确是本地 bot、网关服务，还是插件化 connector。

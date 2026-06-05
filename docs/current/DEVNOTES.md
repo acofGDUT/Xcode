@@ -521,7 +521,8 @@ Review 注意：
 - 第一版推荐 WebSocket，而不是 Webhook。WebSocket 更适合本地 CLI，不要求公网 HTTPS 回调地址。
 - 第一版只支持 QQ 单聊 `C2C_MESSAGE_CREATE` 和群聊 @ 机器人 `GROUP_AT_MESSAGE_CREATE`。
 - 两类事件都使用 QQ 文档中的 `GROUP_AND_C2C_EVENT (1 << 25)` intents。
-- QQ 消息必须视为外部不可信输入，默认只暴露 `read_file`、`grep`、`glob`、`task_list` 等只读能力。
+- QQ 消息必须视为外部不可信输入，默认通过入口级 `ToolScope` 只暴露 `read_file`、`grep`、`glob`、`task_list` 等只读能力。
+- QQchat 的 `ToolScope` / `entry_tool_scope` 是外部入口安全边界，不复用 skill frontmatter 的 `allowed-tools`；后者只表示 skill 的工具需求/允许/可预授权 metadata，不是 turn 级严格白名单。
 - 远程 QQ 用户不能审批危险工具。`write_file`、`edit_file`、`run_shell` 这类工具即使未来开放，也必须由本机 owner 在终端内确认。
 - 不要让 QQ 线程直接复用当前 REPL 的 `_history`；每个 QQ conversation key 应有独立 session/history。
 - 需要先抽出可返回 assistant 文本的 headless external turn runner，否则当前 `_run_user_turn()` 只适合终端 REPL 展示，不适合 QQ 被动回复。

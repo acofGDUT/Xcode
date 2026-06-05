@@ -156,6 +156,8 @@ Expected: FAIL，提示 `QQChatService` 不存在或 dispatcher 不支持 `qqcha
 
 创建 `src/xcode_cli/qqchat/service.py`。
 
+实现时从 `xcode_cli.core.external_turn` 导入 `ToolScope`，不要在 QQ service 里重新定义另一个工具范围类型。
+
 接口要求：
 
 ```python
@@ -172,6 +174,7 @@ class QQChatService:
 - 调用 `QQEventNormalizer.normalize()`。
 - `None` 事件直接忽略。
 - `dedupe.reserve(message_id)` 返回 `None` 时忽略。
+- 将配置中的 `tool_scope` dict 或传入的 `ToolScope` 统一 normalize 为运行时 `ToolScope` 对象。
 - 构造 `UserTurnInput`：
   - `display_content`: `QQ(C2C user-openid): 你好` 或 `QQ(group group-openid/member member-openid): 你好`
   - `model_content`: 包含外部不可信输入提示和原始 content。

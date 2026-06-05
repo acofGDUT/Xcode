@@ -193,7 +193,7 @@ def __init__(
 
 ## Step 4: 实现 run 流程
 
-`run(conversation_key, turn)` 要求：
+`run(conversation_key, turn, *, tool_scope=None)` 要求：
 
 1. 获取或创建 `_ExternalConversationState`。
 2. 清洗 metadata，删除这些 key：

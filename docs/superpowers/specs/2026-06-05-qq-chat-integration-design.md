@@ -198,6 +198,7 @@ class QQIncomingMessage:
 需要抽出一个可返回 assistant 文本的同步 turn runner。它可以由 `AgentRuntime` 构造并注入现有 `LLMClient`、`ConfigStore`、`ToolRegistry`、`PermissionManager`、`ContextManager` 和 `SessionStore`，但必须为每个外部 conversation key 持有独立 runtime state。
 
 ```python
+from dataclasses import dataclass
 from typing import Literal
 
 
@@ -232,7 +233,7 @@ class ExternalTurnRunner:
 - 为每个 `conversation_key` 维护独立 session id 和 history。
 - 构造 `UserTurnInput`，display 内容带 QQ 来源，model 内容只暴露干净消息和安全边界。
 - 默认设置 `ToolScope(source="qqchat", visible_tools=("read_file", "grep", "glob", "task_list"), execution_allowlist=("read_file", "grep", "glob", "task_list"), remote_approval=False)`，后续 tool schema 和 execution 都必须遵守。
-- 如果当前 runtime 仍有 `UserTurnInput.allowed_tools` 兼容字段，只能由 `ToolScope.visible_tools` 映射而来；QQ 文档和配置不得把它与 skill `allowed-tools` 混用。
+- 不要为了 QQchat 在 `UserTurnInput` 上新增 QQ 专用 `allowed_tools` 字段；入口工具范围应通过 `ToolScope` / `entry_tool_scope` 传递，避免与 skill `allowed-tools` 混用。
 - 为 QQ turn 禁用 auto memory，或在 system prompt 中明确外部输入不可写 memory。
 - 复用现有 LLM/tool loop 和 PermissionManager。
 - 返回 final assistant text 给 QQMessageClient。
