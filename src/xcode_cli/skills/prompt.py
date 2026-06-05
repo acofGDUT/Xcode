@@ -12,7 +12,6 @@ class UnsupportedSkillInvocation(Exception):
 @dataclass(frozen=True)
 class ExpandedSkillPrompt:
     prompt: str
-    allowed_tools: list[str] | None
 
 
 _TOOL_ALIASES = {
@@ -46,5 +45,4 @@ class SkillPromptExpander:
 
         prompt = skill.body.replace("$ARGUMENTS", args)
         prompt = prompt.replace("${XCODE_SKILL_DIR}", str(skill.root))
-        allowed = [normalize_tool_name(t) for t in skill.allowed_tools]
-        return ExpandedSkillPrompt(prompt=prompt, allowed_tools=allowed or None)
+        return ExpandedSkillPrompt(prompt=prompt)

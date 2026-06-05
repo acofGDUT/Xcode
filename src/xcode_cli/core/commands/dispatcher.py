@@ -92,14 +92,12 @@ class SlashCommandDispatcher:
                     display_content=payload.display_content,
                     model_content=payload.model_content,
                     metadata=payload.model_metadata,
-                    allowed_tools=payload.allowed_tools,
                 )
             elif isinstance(payload, ExpandedSkillPrompt):
                 turn_input = UserTurnInput(
                     display_content=command,
                     model_content=payload.prompt,
                     metadata=metadata,
-                    allowed_tools=payload.allowed_tools,
                 )
             else:
                 if isinstance(payload, str) and payload.startswith("Error:"):

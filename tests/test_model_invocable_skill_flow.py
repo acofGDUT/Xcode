@@ -59,7 +59,7 @@ def read_session_events(runtime):
     ]
 
 
-def test_skill_tool_loads_prompt_and_narrows_followup_tool_schemas(tmp_path, monkeypatch):
+def test_skill_tool_loads_prompt_without_treating_allowed_tools_as_schema_whitelist(tmp_path, monkeypatch):
     runtime = make_runtime_with_review_skill(tmp_path, monkeypatch, allowed_tools=["read"])
     runtime._session_id = runtime.sessions.new_session_id()
 
@@ -81,7 +81,10 @@ def test_skill_tool_loads_prompt_and_narrows_followup_tool_schemas(tmp_path, mon
     runtime._run_user_turn("review src/foo.py")
 
     assert "skill" in seen_schemas[0]
-    assert seen_schemas[1] == ["read_file"]
+    assert "skill" not in seen_schemas[1]
+    assert "read_file" in seen_schemas[1]
+    assert "grep" in seen_schemas[1]
+    assert "write_file" in seen_schemas[1]
     assert any('<xcode_loaded_skill name="review"' in str(msg) for msg in seen_messages[1])
 
 
@@ -106,6 +109,91 @@ def test_skill_tool_is_removed_after_loading_even_without_allowed_tools(tmp_path
     assert "skill" in seen_schemas[0]
     assert "skill" not in seen_schemas[1]
     assert "read_file" in seen_schemas[1]
+
+
+def test_blocked_skill_tool_call_is_rejected_at_execution_layer(tmp_path, monkeypatch):
+    from xcode_cli.core.tool_registry import ToolOutput
+
+    runtime = make_runtime_with_review_skill(tmp_path, monkeypatch, allowed_tools=None)
+    runtime._session_id = runtime.sessions.new_session_id()
+    runtime._current_blocked_tools = {"skill"}
+    executed = []
+
+    runtime.tools._tools["skill"].execute = (
+        lambda **kwargs: executed.append(kwargs) or ToolOutput(content="loaded anyway")
+    )
+
+    calls = [0]
+
+    def fake_complete(system_prompt, messages, tool_schemas, on_text_token=None, on_reasoning_token=None):
+        calls[0] += 1
+        if calls[0] == 1:
+            assert "skill" not in [schema["function"]["name"] for schema in tool_schemas]
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(id="call_blocked", name="skill", args={"skill": "review"})],
+            )
+        assert any(
+            msg.get("role") == "tool" and "blocked for the current turn" in str(msg.get("content", ""))
+            for msg in messages
+        )
+        return LLMResponse(content="done", tool_calls=[])
+
+    runtime.llm.complete = fake_complete
+
+    result = runtime._run_llm_loop([], "system")
+
+    assert result == "done"
+    assert executed == []
+
+
+def test_skill_tool_is_barrier_for_sibling_tool_calls(tmp_path, monkeypatch):
+    runtime = make_runtime_with_review_skill(tmp_path, monkeypatch, allowed_tools=["read"])
+    runtime._session_id = runtime.sessions.new_session_id()
+    grep_calls = []
+    seen_schemas = []
+
+    runtime.tools._tools["grep"].execute = lambda **kwargs: grep_calls.append(kwargs) or "matched"
+
+    calls = [0]
+
+    def fake_complete(system_prompt, messages, tool_schemas, on_text_token=None, on_reasoning_token=None):
+        calls[0] += 1
+        seen_schemas.append([schema["function"]["name"] for schema in tool_schemas])
+        if calls[0] == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(id="call_skill", name="skill", args={"skill": "review", "args": "src/foo.py"}),
+                    ToolCall(id="call_grep", name="grep", args={"pattern": "x", "path": "."}),
+                ],
+            )
+        assert any("<xcode_loaded_skill" in str(msg.get("content", "")) for msg in messages)
+        assert any("after the loaded skill takes effect" in str(msg.get("content", "")) for msg in messages)
+        return LLMResponse(content="done", tool_calls=[])
+
+    runtime.llm.complete = fake_complete
+
+    result = runtime._run_llm_loop([], "system")
+
+    assert result == "done"
+    assert grep_calls == []
+    assert "skill" not in seen_schemas[1]
+    assert "grep" in seen_schemas[1]
+
+
+def test_plan_mode_system_prompt_includes_available_skill_listing(tmp_path, monkeypatch):
+    runtime = make_runtime_with_review_skill(tmp_path, monkeypatch, allowed_tools=None)
+    runtime._session_id = runtime.sessions.new_session_id()
+    runtime.plan_mode.enter()
+    runtime._run_llm_loop = MagicMock(return_value="plan ready")
+
+    runtime._run_user_turn("plan this work")
+
+    system_prompt = runtime._run_llm_loop.call_args.kwargs["system_prompt"]
+    assert "Available skills:" in system_prompt
+    assert "- review: Review code changes" in system_prompt
+    assert "call the skill tool" in system_prompt
 
 
 def test_skill_tool_writes_invocation_metadata_without_user_visible_prompt(tmp_path, monkeypatch):

@@ -28,7 +28,6 @@ def test_user_invocation_returns_display_and_model_metadata():
 
     assert invocation.display_content == "/review src/foo.py"
     assert "Review src/foo.py" in invocation.model_content
-    assert invocation.allowed_tools == ["read_file", "grep"]
     assert invocation.model_metadata["source"] == "user"
     assert invocation.model_metadata["skill"] == "review"
     assert invocation.model_metadata["model_content"] == invocation.model_content

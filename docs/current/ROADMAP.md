@@ -19,6 +19,7 @@ Xcode v0.1.0 已完成 Phase 1-4 和 Phase 4.5 Batch 1-2 的稳定化工作。
 - Phase 4.5 memory/path/context 测试基线。
 - 对话历史恢复基础能力：`/compact`、`/resume`、UUID transcript、checkpoint + recent tail 恢复。
 - Skills Phase 1：`.xcode/skills/<name>/SKILL.md` 加载为 prompt slash command。
+- Skills Phase 2：compact listing + `SkillTool` 模型主动调用已完成；fork/hooks/remote skills/skill search 未包含。
 
 Phase 5 生态扩展当前冻结，不作为近期默认开发目标。
 
@@ -35,7 +36,8 @@ Phase 5 生态扩展当前冻结，不作为近期默认开发目标。
 | P1 | memory 自管理权限 | 完成 | Xcode 管理 resolved memory 文件时不再频繁要求用户审核，普通文件仍保留审批 |
 | P1 | 流式输出去重 | 基础收口完成 | 已避免结构化内容 raw + Rich 双重完整输出；后续再评估可替换区域式 streaming |
 | P1 | AgentRuntime 重构 | 第二轮完成 | 已抽出 commands/slash、SlashCommandDispatcher、SkillCommandService、conversation、tooling、ui 基础模块和普通 user turn；`_run_llm_loop()` 暂不大动 |
-| P1 | Skills As Prompt Commands | 完成 | 已将 `.xcode/skills/<name>/SKILL.md` 加载为手动调用的 prompt slash command；Phase 2 才做 `SkillTool` 和模型主动调用 |
+| P1 | Skills As Prompt Commands | 完成 | 已将 `.xcode/skills/<name>/SKILL.md` 加载为手动调用的 prompt slash command |
+| P1 | Model-Invocable Skills | 完成 | 已通过 compact listing 暴露可用 skills，并用 read-only `SkillTool` 支持模型主动加载；不包含 fork、hooks、remote skills、skill search |
 | P1 | Task 工具免审与 UI 展示 | 基础完成 | 免审 + 瞬时面板渲染已实现；`is_read_only` 消费已收口；持久化底部驻留展示（同 Claude Code 的 toolbar 模式）留待后续迭代 |
 | P1 | 对话回退/分叉设计 | 未实现 | 提供非破坏性的 fork-based rollback |
 | P2 | 项目级配置合并 | 完成 | `.xcode/config.json` 字段级覆盖全局，`max_summary_chars` 等参数已统一定义在 Config，`/env` TUI 仪表盘统一管理 |
@@ -270,20 +272,30 @@ Phase 1 已完成。项目 skill 来源为：
 - `SkillPromptExpander` 展开 `$ARGUMENTS` 和 `${XCODE_SKILL_DIR}`。
 - `CommandRegistry` 将 user-invocable skill 注册为 `/skill-name` prompt command，且不允许覆盖 built-in command。
 - `UserTurnInput` 区分 UI 展示文本和模型可见 prompt，skill prompt 不污染用户可见 transcript。
-- `allowed-tools` 作为当前 turn 临时工具白名单，同时限制 schemas 和 execution，但不提升权限。
+- `allowed-tools` 采用 Claude-compatible 语义，作为 skill 的工具需求/允许/可预授权声明；当前不作为 schemas 或 execution 白名单。
 - session/resume 保存并恢复 `metadata.model_content`，恢复时不会只把 `/skill-name args` 交给模型。
 - `/skill` 与 CLI `xcode skill` 改为 list/show/validate 项目 skills；旧 install/enable/disable 只提示迁移。
 
-### 后续 Phase 2
+### Phase 2：Model-Invocable Skills
 
-Phase 2 才设计 `SkillTool` 和模型主动调用 skills。需要单独处理：
+Phase 2 已完成核心模型主动调用链路：
 
-- model-invoked skill discovery。
+- `SkillCatalog` 区分 user-invocable 和 model-invocable skills，并拒绝 built-in 冲突、`disable-model-invocation=true` 与 `context: fork`。
+- `SkillListingFormatter` 将 name、description、when_to_use 以 compact listing 注入 system prompt，不注入完整 body。
+- `SkillInvocationService` 作为用户 slash skill 和模型 `SkillTool` 的共享展开入口。
+- `SkillTool` 支持 `skill` 和 `args` 参数；成功加载后通过 blocked-tools 移除后续 `skill` 工具，避免递归。
+- `allowed-tools` 在 SkillTool 路径中作为 permission/audit metadata 保留，不收窄工具集合，也不绕过 `PermissionManager`。
+- SkillTool 成功加载后作为 tool batch barrier，同批后续 sibling tool calls 会被拒绝，要求模型下一步再继续。
+- session/resume/compact 依赖 tool message 保留 loaded skill marker，并写入不含完整 prompt 的 `skill_invocation` audit event。
+
+Phase 2 不包含：
+
 - fork/sub-agent skill execution。
-- hooks 安全边界和失败策略。
+- hooks 执行。
+- remote skills。
+- skill search。
 - paths 条件自动激活。
-- `.claude/skills` 迁移或兼容策略。
-- supporting files 的按需读取协议和审计显示。
+- `.claude/skills` 自动读取或迁移。
 
 ### 当前边界
 
@@ -617,7 +629,13 @@ Phase 5 当前冻结。后续如果解冻，建议逐项设计和验收，不一
 
 ## 15. Phase 6：外部聊天入口候选
 
-Phase 6 只是远期方向记录，当前不进入设计和实现。
+Phase 6 仍不是当前默认实现目标，但 QQ 机器人接入已经完成一次官方文档调研和架构方案整理。当前状态是：已有教程、设计文档和 Coding Agent 任务拆解，尚未获得实现授权，也没有 `/QQchat` 代码。
+
+相关文档：
+
+- `docs/reference/qq-bot-integration-guide.md`
+- `docs/superpowers/specs/2026-06-05-qq-chat-integration-design.md`
+- `docs/superpowers/plans/2026-06-05-qq-chat-integration-plan.md`
 
 可能方向：Xcode 后续可以向类似 OpenClaw 的外部聊天 Agent 形态发展，让 Xcode 不只运行在 CLI 内，也能接入外部 IM 用户进行对话，例如 QQ 用户入口。
 

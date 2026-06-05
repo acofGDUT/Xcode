@@ -15,7 +15,6 @@ class ToolExecutionResult:
     assistant_message: dict[str, Any]
     tool_messages: list[dict[str, Any]]
     executed_count: int
-    activated_allowed_tools: list[str] | None = None
     blocked_tools: list[str] = field(default_factory=list)
     skill_invocations: list[dict[str, object]] = field(default_factory=list)
 
@@ -41,19 +40,32 @@ class ToolCallExecutor:
         self.auto_approve = auto_approve
         self.tool_display = tool_display or ToolCallDisplay(ToolDisplayState(expanded=True))
 
-    def execute(self, response: LLMResponse, allowed_tools: list[str] | None = None) -> ToolExecutionResult:
+    def execute(
+        self,
+        response: LLMResponse,
+        blocked_tools: set[str] | list[str] | None = None,
+    ) -> ToolExecutionResult:
         executed_calls: list[tuple[Any, ToolOutput]] = []
         executed_count = 0
-        allowed = set(allowed_tools) if allowed_tools is not None else None
-        activated_allowed_tools: list[str] | None = None
-        blocked_tools: list[str] = []
+        blocked = set(blocked_tools or [])
+        newly_blocked_tools: list[str] = []
         skill_invocations: list[dict[str, object]] = []
+        skill_barrier_active = False
 
         self._render_tool_calls(response.tool_calls)
 
         for tc in response.tool_calls:
-            if allowed is not None and tc.name not in allowed:
-                result = f"Tool error: tool '{tc.name}' is not allowed by the current skill."
+            if skill_barrier_active:
+                result = (
+                    f"Tool error: tool '{tc.name}' must be called in the next assistant step "
+                    "after the loaded skill takes effect."
+                )
+                self.console.print(f"  [bold red]{result}[/bold red]")
+                executed_calls.append((tc, ToolOutput(content=result)))
+                continue
+
+            if tc.name in blocked:
+                result = f"Tool error: tool '{tc.name}' is blocked for the current turn."
                 self.console.print(f"  [bold red]{result}[/bold red]")
                 executed_calls.append((tc, ToolOutput(content=result)))
                 continue
@@ -131,11 +143,10 @@ class ToolCallExecutor:
 
             if output.audit_metadata.get("kind") == "skill_invocation":
                 skill_invocations.append(dict(output.audit_metadata))
-            if output.allowed_tools is not None:
-                activated_allowed_tools = output.allowed_tools
+                skill_barrier_active = True
             for tool_name in output.blocked_tools:
-                if tool_name not in blocked_tools:
-                    blocked_tools.append(tool_name)
+                if tool_name not in newly_blocked_tools:
+                    newly_blocked_tools.append(tool_name)
 
             executed_calls.append((tc, output))
 
@@ -162,8 +173,7 @@ class ToolCallExecutor:
             assistant_message=assistant_msg,
             tool_messages=tool_messages,
             executed_count=executed_count,
-            activated_allowed_tools=activated_allowed_tools,
-            blocked_tools=blocked_tools,
+            blocked_tools=newly_blocked_tools,
             skill_invocations=skill_invocations,
         )
 
@@ -171,14 +181,6 @@ class ToolCallExecutor:
         lines = self.tool_display.render_calls(tool_calls)
         for line in lines:
             self.console.print(f"  {line}")
-
-    def _render_tool_call(self, tool_name: str, args: dict[str, Any]) -> None:
-        self.console.print(f"  [bold cyan]## tool.{tool_name}[/bold cyan]")
-        for key, value in args.items():
-            val_str = str(value)
-            if len(val_str) > 120:
-                val_str = val_str[:120] + "..."
-            self.console.print(f"    [dim]{key}:[/dim] {val_str}")
 
     def _is_memory_write_tool_call(self, tool_name: str, args: dict[str, Any]) -> bool:
         if tool_name not in {"write_file", "edit_file"}:

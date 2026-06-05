@@ -105,7 +105,7 @@ Phase 1 立即消费：
 | 字段 | 行为 |
 |------|------|
 | `description` | `/help`、命令补全、`/skill list` 展示 |
-| `allowed-tools` | 当前 skill turn 的工具白名单 |
+| `allowed-tools` | Claude-compatible 工具需求/允许/可预授权声明；不是 exhaustive whitelist |
 | `argument-hint` | 命令补全展示 |
 | `arguments` | 解析保存；第一版不做具名参数替换 |
 | `when_to_use` | 解析保存；Phase 2 SkillTool 使用 |
@@ -246,10 +246,11 @@ UI 和轻量 user history 使用 `content`。恢复 `_history` 时，如果存�
 
 ## allowed-tools 权限边界
 
-`allowed-tools` 是当前 skill turn 的临时工具白名单。Phase 1 至少要做到两层保护：
+`allowed-tools` 采用 Claude-compatible 语义：它表示该 skill 声明需要/允许/可预授权的工具集合，不是当前 skill turn 的临时工具白名单。Phase 1 至少要做到：
 
-1. 传给 LLM 的 tool schemas 只包含白名单工具。
-2. tool execution 层再次校验，防止模型或历史状态调用未允许工具。
+1. 正确解析并保存 Claude-style 工具名。
+2. `/skill show`、session metadata 和后续 SkillTool audit 能看到归一化后的工具声明。
+3. 不把 `allowed-tools` 用作 tool schemas 或 execution 白名单，避免迁移 Claude skills 时把默认工具误隐藏。
 
 字段值可以使用 xcode 内部工具名，也可以使用 Claude-style 工具名。解析时应大小写不敏感，并支持逗号分隔、inline list 和 YAML 多行 list。
 
@@ -263,11 +264,11 @@ UI 和轻量 user history 使用 `content`。恢复 `_history` 时，如果存�
 | `shell` / `bash` / `Bash` / `run_shell` | `run_shell` |
 | `task` / `Task` / `dispatch_agent` | `dispatch_agent` |
 
-未知工具名不应导致加载失败，但执行时不会放行。`allowed-tools` 为空或缺失时，表示沿用当前默认工具集合。
+未知工具名不应导致加载失败；它只会作为 metadata 保留，不会因为出现在 `allowed-tools` 中就放行。`allowed-tools` 为空或缺失时，表示该 skill 没有声明额外工具需求。
 
-xcode 采用保守权限模型：`allowed-tools` 只收窄当前 turn 的可用工具集合，不自动提升权限。即使某个 skill 声明了 `write_file`、`edit_file` 或 `run_shell`，仍必须服从现有 `PermissionManager` 的 session/project/global allow/ask/deny 规则。显式 `deny` 永远优先。
+xcode 采用保守权限模型：`allowed-tools` 不自动提升权限。即使某个 skill 声明了 `write_file`、`edit_file` 或 `run_shell`，仍必须服从现有 `PermissionManager` 的 session/project/global allow/ask/deny 规则。显式 `deny` 永远优先。
 
-这与 Claude Code 的“skill 激活后可按 allowed-tools 放行”的体验不同，但更符合 xcode 当前安全架构。后续如果要支持“信任某个 skill 后免审”，应单独设计 skill trust policy，而不是把它隐含在 `allowed-tools` 中。
+后续如果要支持“信任某个 skill 后免审”或“严格限制某个 skill 的工具范围”，应分别设计 skill trust policy 或 `tool-scope` / `restricted-tools` 字段，而不是把这些语义混进 Claude-compatible `allowed-tools`。
 
 ## 错误处理
 
@@ -295,8 +296,8 @@ xcode 采用保守权限模型：`allowed-tools` 只收窄当前 turn 的可用�
 | `src/xcode_cli/core/commands/dispatcher.py` | 只负责分发 registry 中的 command |
 | `src/xcode_cli/core/turn.py` | `UserTurnInput` 与 turn metadata |
 | `src/xcode_cli/core/agent.py` | 注入 registry，复用 `_run_user_turn()` |
-| `src/xcode_cli/core/tool_registry.py` | 支持按 allowed tool names 返回 schemas |
-| `src/xcode_cli/core/tooling/execution.py` | 执行层支持当前 turn allowed-tools 兜底 |
+| `src/xcode_cli/core/tool_registry.py` | 保留显式 runtime scope 过滤能力；不由 `SKILL.md allowed-tools` 驱动 |
+| `src/xcode_cli/core/tooling/execution.py` | 执行层支持显式 runtime scope 和 blocked-tools 兜底 |
 
 ## 验收标准
 
@@ -311,8 +312,8 @@ xcode 采用保守权限模型：`allowed-tools` 只收窄当前 turn 的可用�
 - `user-invocable: false` 不出现在 `/help` 或 completion 中，也不能被用户直接执行。
 - `/skill-name args` 能展开 prompt。
 - `$ARGUMENTS` / `${XCODE_SKILL_DIR}` 能正确替换。
-- `allowed-tools` 能限制当前 agent turn 的 tool schemas 和 tool execution。
-- `allowed-tools` 不绕过现有 allow/ask/deny 权限规则。
+- `allowed-tools` 能被解析、归一化、展示并记录为 skill metadata。
+- `allowed-tools` 不限制当前 agent turn 的 tool schemas / tool execution，也不绕过现有 allow/ask/deny 权限规则。
 - skill prompt 不直接污染 UI transcript。
 - session/resume 后能知道这个 turn 使用过哪个 skill，并能恢复该 turn 的 hidden/model prompt。
 - `context: fork` / `hooks` 等未实现字段不会被静默错误执行。

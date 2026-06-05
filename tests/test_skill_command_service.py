@@ -40,7 +40,7 @@ def test_skill_show_prints_project_skill_details(tmp_path: Path) -> None:
     from xcode_cli.core.commands.skill import SkillCommandService
     from xcode_cli.skills.loader import SkillLoader
 
-    _write_skill(tmp_path, frontmatter='description: Review code\nargument-hint: "[path]"\nallowed-tools: Read, Grep')
+    _write_skill(tmp_path, frontmatter='description: Review code\nargument-hint: "[path]"')
     console = _make_console()
 
     svc = SkillCommandService(SkillLoader(tmp_path), console)
@@ -50,7 +50,6 @@ def test_skill_show_prints_project_skill_details(tmp_path: Path) -> None:
     assert "Skill: review" in output
     assert "Review code" in output
     assert "[path]" in output
-    assert "Read" in output
 
 
 def test_skill_validate_combines_loader_and_validation_notices(tmp_path: Path) -> None:

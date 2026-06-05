@@ -12,7 +12,6 @@ def create_skill_tool(service: SkillInvocationService) -> ToolDef:
         return ToolOutput(
             content=_loaded_skill_content(result),
             audit_metadata=result.audit_metadata,
-            allowed_tools=result.allowed_tools,
             blocked_tools=["skill"],
         )
 

@@ -26,9 +26,10 @@
 | `/init` prompt command | 旧版 Claude 风格 prompt command，生成或改进仓库级 `XCODE.md` | 完成并通过测试 | `2026-06-04-init-command-plan.md` |
 | AgentRuntime Refactor Round 2 | SlashCommandDispatcher、SkillCommandService、普通 user turn 抽离 | 完成并通过 review | `2026-06-04-agent-runtime-refactor-round2-plan.md` |
 | Skills As Prompt Commands | `.xcode/skills/<name>/SKILL.md` 加载为 prompt slash command | 完成并通过逐 task review | `2026-06-04-skills-as-prompt-commands-plan.md` |
+| Model-Invocable Skills | compact listing + `SkillTool` 模型主动调用 skills | 完成并通过逐 task review | `2026-06-05-model-invocable-skills-plan.md` |
 | Phase 5 | 生态扩展 | 冻结 | 未开始 |
 
-当前重点不是进入 Phase 5，而是补齐费用估算、原生 Windows 验收，并在 skills Phase 1 之后评估是否进入 Phase 2 `SkillTool`。
+当前重点不是进入 Phase 5，而是补齐费用估算、原生 Windows 验收，并评估 skills 后续 fork/hooks/remote/search 等 Phase 3 能力是否值得进入设计。
 
 ## 2. Phase 1：协议与工具升级
 
@@ -320,7 +321,7 @@ Review 结论：通过。合并后 `pytest -q` 为 `221 passed`；已提交并�
 - 支持 `.xcode/skills/*/SKILL.md` frontmatter 解析，supporting files 只作为按需读取资源，不自动注入上下文。
 - 将 user-invocable skill 注册为 `/skill-name` prompt command；skill 与 built-in slash command 冲突时 built-in 优先。
 - 新增 `UserTurnInput`，让 UI/session user history 显示 `/skill-name args`，LLM `_history` 使用展开后的 hidden/model prompt。
-- `allowed-tools` 作为当前 skill turn 临时工具白名单，同时限制 tool schemas 和执行层 tool call，但不提升权限。
+- `allowed-tools` 采用 Claude-compatible 语义，作为 skill 的工具需求/允许/可预授权声明；当前解析、归一化并记录，不作为 tool schemas 或 execution 白名单。
 - `/skill` 与 CLI `xcode skill` 改为 list/show/validate 项目 skills；旧 install/enable/disable 仅提示迁移。
 - session transcript 保存 skill invocation metadata，`/resume` 恢复时优先使用 `metadata.model_content`。
 - `context: fork` 当前报 unsupported；`hooks` 只解析保存，不执行。
@@ -334,9 +335,45 @@ Review 与验证：
   - `pytest -q`：291 passed
   - `git diff --check`
 
-后续：Phase 2 才设计 `SkillTool` 和模型主动调用 skills；Phase 1 不做 fork skill runtime、hooks 执行、paths 自动激活或 `.claude/skills` 自动读取。
+后续：Phase 2 已在下一轮实现 `SkillTool` 和模型主动调用 skills；Phase 1 不做 fork skill runtime、hooks 执行、paths 自动激活或 `.claude/skills` 自动读取。
 
-## 18. 当前阻塞和遗留
+## 18. Model-Invocable Skills Phase 2 实现：2026-06-05
+
+背景：Skills As Prompt Commands 完成后，项目 skills 只能由用户手动输入 `/skill-name args` 调用。Phase 2 目标是让模型基于 compact skill listing 主动调用 project skills，同时复用 Phase 1 的 skill prompt expansion、metadata、allowed-tools 和 session/resume 机制。
+
+本轮完成内容：
+
+- 新增 `SkillCatalog` 管理 user/model invocation eligibility，并处理 built-in 冲突。
+- 新增 `SkillListingFormatter`，在 system prompt 中注入预算内 compact skill listing。
+- 新增 `SkillInvocationService`，作为用户 slash skill 和模型 SkillTool 的共享展开入口。
+- 新增 read-only `skill` tool，支持 `skill` 和 `args` 参数。
+- SkillTool 成功加载后，当前 user turn 后续 tool schemas 不再包含 `skill`，避免递归调用。
+- `user-invocable=false` 但未禁用 model invocation 的 skill 可由模型调用。
+- `disable-model-invocation=true` 和 `context=fork` 会被拒绝。
+- `allowed-tools` 不再作为 SkillTool 后续工具白名单；SkillTool 只记录这些声明，并通过 blocked-tools 防止递归调用。
+- SkillTool 成功加载后作为 tool batch barrier，同一 assistant response 中排在它后面的 sibling tool calls 会被拒绝，要求模型下一步再继续。
+- session/resume/compact 保留 loaded skill marker 和 invocation audit metadata。
+- `skill_invocation` audit event 不包含完整 `model_content`。
+
+Review 与验证：
+
+- Task 1-6 每个 task 完成后均做 Codex review，并分别提交；Task 7 完成文档和最终验证。
+- 编译检查通过：
+  - `python -m py_compile src/xcode_cli/skills/catalog.py src/xcode_cli/skills/listing.py src/xcode_cli/skills/invocation.py src/xcode_cli/core/tools/skill_tool.py src/xcode_cli/core/tool_registry.py src/xcode_cli/core/tooling/execution.py src/xcode_cli/core/commands/registry.py src/xcode_cli/core/commands/dispatcher.py src/xcode_cli/core/prompting.py src/xcode_cli/core/agent.py`
+- 聚焦测试通过：
+  - `pytest tests/test_skill_catalog.py tests/test_skill_listing.py tests/test_skill_invocation_service.py tests/test_skill_tool.py tests/test_model_invocable_skill_flow.py tests/test_prompting_skills.py tests/test_skill_prompt_command_flow.py tests/test_skill_allowed_tools.py tests/test_resume.py tests/test_compaction.py -q`：38 passed
+- 全量测试通过：
+  - `pytest -q`：315 passed
+
+不包含范围：
+
+- fork skill runtime。
+- hooks 执行。
+- remote skills。
+- skill search。
+- paths 条件自动激活。
+
+## 19. 当前阻塞和遗留
 
 | 项目 | 状态 | 说明 |
 |------|------|------|
@@ -344,7 +381,8 @@ Review 与验证：
 | `/context` cost | 未实现 | 当前只有 token 估算，没有价格估算 |
 | `/init` prompt command | 完成并通过测试 | 已实现 prompt command 注册、普通 user turn 复用、help/completion 和回归测试 |
 | AgentRuntime Refactor Round 2 | 完成并通过 review | 已完成 SlashCommandDispatcher、SkillCommandService、普通 user turn 抽离；后续 skills 功能应复用这些边界 |
-| Skills As Prompt Commands | 完成并通过 review | `.xcode/skills/<name>/SKILL.md` 已作为 prompt slash command 加载；Phase 2 `SkillTool` 未实现 |
+| Skills As Prompt Commands | 完成并通过 review | `.xcode/skills/<name>/SKILL.md` 已作为 prompt slash command 加载 |
+| Model-Invocable Skills | 完成并通过 review | compact listing + read-only `SkillTool` 已支持模型主动调用 project skills；fork/hooks/remote/search 未实现 |
 | 工具调用 UI 折叠 | 基础完成 | 默认已折叠为工具摘要；`Ctrl+O` 展开和原生 Windows 热键验收仍未做 |
 | 工具调用轮次不中断 | 完成并待真实终端补充验收 | 已改为 `while True` 多轮 tool loop，并补超过 10 轮、拒绝后继续、空响应 fallback 回归测试 |
 | memory 自管理权限 | 完成 | memory-scoped 写入已免用户审核，普通文件仍保持审批 |
@@ -360,8 +398,9 @@ Review 与验证：
 | 原生 Windows E2E | 未完成 | 需要在 cmd.exe/PowerShell 验证完整交互 |
 | Phase 5 | 冻结 | 不作为近期默认开发目标 |
 
-## 19. 下一步
+## 20. 下一步
 
-1. 评估 skills Phase 2：`SkillTool`、模型主动调用、fork skill runtime、hooks 安全边界和 paths 自动激活。
+1. 评估 skills 后续能力：fork skill runtime、hooks 安全边界、paths 自动激活、remote skills 和 skill search。
 2. 做原生 cmd.exe/PowerShell 交互验收，重点覆盖审批菜单、diff preview、工具摘要折叠、多轮 tool call、`/resume`、`/compact`。
 3. 为 `/context` 增加 cost 估算，补齐 token 之外的费用视角。
+4. 如用户明确授权进入 Phase 6，可按 `docs/superpowers/plans/2026-06-05-qq-chat-integration-plan.md` 开始实现 `/QQchat`。当前仅完成 QQ 官方文档调研、接入教程和开发方案，没有实现代码。

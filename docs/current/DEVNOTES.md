@@ -467,7 +467,7 @@ Review 结果：
 - skill 是 prompt command，不是独立 runtime 分支；必须复用 `_run_user_turn()`、session、tool loop 和权限系统。
 - `/skill-name args` 的 UI 展示文本和模型可见 prompt 必须分离：session user history 显示 slash command，LLM `_history` 使用展开后的 `model_content`。
 - transcript 必须保存 skill invocation metadata；`/resume` 恢复时优先用 `metadata.model_content`，不能只恢复 `/skill-name args`。
-- `allowed-tools` 是当前 turn 的临时工具白名单，只能收窄 tool schemas 和 execution，不能提升权限，不能绕过显式 `deny` 或 `ask`。
+- `allowed-tools` 采用 Claude-compatible 语义：它是 skill 声明的工具需求/允许/可预授权信息，不是当前 turn 的 exhaustive whitelist。当前 Xcode 只解析、归一化、展示和审计记录，不用它收窄 tool schemas 或 execution。
 - skill 与 built-in slash command 冲突时，built-in command 保持优先。
 - `context: fork` 当前不 inline 执行；`hooks` 当前只解析保存，不执行。
 
@@ -482,3 +482,60 @@ Review 结果：
 
 - Task 1-8 均按 TDD/聚焦验证完成，并逐 task review。
 - 最终验证记录见 `PROGRESS.md` 的 Skills As Prompt Commands 章节。
+
+## 25. Model-Invocable Skills / SkillTool 边界
+
+**状态**：Resolved
+**关联**：P1 Model-Invocable Skills / `SkillTool`
+
+Phase 2 已实现模型主动调用项目 skills 的核心链路。当前模型不会看到完整 skill body 列表，只会在 system prompt 看到 compact listing；当 listing 明确匹配当前任务时，模型应先调用 read-only `skill` 工具加载完整 prompt。
+
+开发约束：
+
+- 新 skill 入口必须走 `SkillInvocationService`，不要在 slash command、模型工具或其他入口各自实现 prompt expansion、metadata、allowed-tools。
+- `SkillTool` 成功加载 skill 后必须通过 blocked-tools 机制禁用当前 user turn 后续 `SkillTool` 递归调用。
+- `SkillTool` 的 audit metadata 不能包含完整 skill prompt；完整 prompt 只放在模型可见 tool message 中。
+- 不要让模型工具调用 `SlashCommandDispatcher`，也不要把模型工具调用拼成 `/skill-name args` 再走 slash command registry。
+- `allowed-tools` 不能被当作严格白名单使用；如未来需要限制工具可见性，应设计独立字段，而不是复用 Claude skill 的 `allowed-tools`。
+- `SkillTool` 是 tool batch barrier。成功加载 skill 后，同一 assistant response 中排在它后面的 sibling tool calls 应返回错误，要求模型在 loaded skill prompt 生效后的下一步再调用。
+- 新增 SkillTool 相关测试时，优先测真实 loader/catalog/service/tool 链路；mock 只用于隔离 LLM response 或终端 UI。
+- listing 测试必须证明完整 body、allowed-tools、paths、hooks 不进入 system prompt。
+
+Review 注意：
+
+- `user-invocable=false` 与 `disable-model-invocation=true` 是独立语义，review 时不要把两者混为一个 enable 开关。
+- `context: fork` 当前仍应拒绝，不能悄悄 inline 执行或派发子 agent。
+- `skill_invocation` audit event 只记录 source、skill、args、source_path、skill_source_hash 等审计字段，不记录 `model_content`。
+- resume/compact 不需要重新展开 skill；只要 history 中保留 SkillTool 的 tool message loaded marker 即可。
+
+## 26. QQ 外部聊天入口边界
+
+**状态**：Open
+**关联**：ROADMAP Phase 6 / `/QQchat`
+
+2026-06-05 已完成 QQ 机器人 API v2 文档调研和 Xcode 接入方案设计。当前没有实现 `/QQchat`，只保留教程、设计文档和开发计划。
+
+设计结论：
+
+- `/QQchat` 应是 side-effect slash command，用于启动、停止和查看 QQ bot 连接状态，不是 prompt command。
+- 第一版推荐 WebSocket，而不是 Webhook。WebSocket 更适合本地 CLI，不要求公网 HTTPS 回调地址。
+- 第一版只支持 QQ 单聊 `C2C_MESSAGE_CREATE` 和群聊 @ 机器人 `GROUP_AT_MESSAGE_CREATE`。
+- 两类事件都使用 QQ 文档中的 `GROUP_AND_C2C_EVENT (1 << 25)` intents。
+- QQ 消息必须视为外部不可信输入，默认只暴露 `read_file`、`grep`、`glob`、`task_list` 等只读能力。
+- 远程 QQ 用户不能审批危险工具。`write_file`、`edit_file`、`run_shell` 这类工具即使未来开放，也必须由本机 owner 在终端内确认。
+- 不要让 QQ 线程直接复用当前 REPL 的 `_history`；每个 QQ conversation key 应有独立 session/history。
+- 需要先抽出可返回 assistant 文本的 headless external turn runner，否则当前 `_run_user_turn()` 只适合终端 REPL 展示，不适合 QQ 被动回复。
+
+文档：
+
+- `docs/reference/qq-bot-integration-guide.md`
+- `docs/superpowers/specs/2026-06-05-qq-chat-integration-design.md`
+- `docs/superpowers/plans/2026-06-05-qq-chat-integration-plan.md`
+
+Review 注意：
+
+- 不要使用会把主调用链拖入 `asyncio` 的 QQ SDK。
+- 不要把 AppSecret 或 AccessToken 写入项目级配置、session transcript、错误日志或测试快照。
+- 群聊默认按 `group_openid + member_openid` 隔离上下文，避免多人上下文污染。
+- 被动回复要按 `msg_id + msg_seq` 去重，防止 QQ 重复投递导致重复回复。
+- 群聊被动回复窗口只有 5 分钟，长时间 coding 任务不适合直接在 QQ 群里跑。

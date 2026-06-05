@@ -23,18 +23,8 @@ def test_expands_arguments_and_skill_dir():
 
     assert "Use args: src/foo.py" in result.prompt
     assert "D:/Xcode/.xcode/skills/review" in result.prompt.replace("\\", "/")
-    assert result.allowed_tools is None
 
 
 def test_context_fork_is_not_executed_inline():
     with pytest.raises(UnsupportedSkillInvocation):
         SkillPromptExpander().expand(_skill(context="fork"), "")
-
-
-def test_allowed_tools_are_normalized():
-    result = SkillPromptExpander().expand(
-        _skill(allowed_tools=["Read", "Grep", "Bash", "unknown_tool"]),
-        "src",
-    )
-
-    assert result.allowed_tools == ["read_file", "grep", "run_shell", "unknown_tool"]

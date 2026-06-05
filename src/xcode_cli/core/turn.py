@@ -9,7 +9,6 @@ class UserTurnInput:
     display_content: str
     model_content: str
     metadata: dict[str, Any] = field(default_factory=dict)
-    allowed_tools: list[str] | None = None
 
 
 def coerce_user_turn_input(value: str | UserTurnInput) -> UserTurnInput:

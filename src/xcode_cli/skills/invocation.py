@@ -13,7 +13,6 @@ class SkillInvocation:
     model_content: str
     model_metadata: dict[str, object]
     audit_metadata: dict[str, object]
-    allowed_tools: list[str] | None
 
 
 class SkillInvocationService:
@@ -55,7 +54,6 @@ class SkillInvocationService:
             audit_metadata["source_path"] = str(skill.source_path)
         if skill.source_hash is not None:
             audit_metadata["skill_source_hash"] = skill.source_hash
-
         model_metadata = dict(audit_metadata)
         model_metadata["model_content"] = expanded.prompt
 
@@ -65,5 +63,4 @@ class SkillInvocationService:
             model_content=expanded.prompt,
             model_metadata=model_metadata,
             audit_metadata=audit_metadata,
-            allowed_tools=expanded.allowed_tools,
         )

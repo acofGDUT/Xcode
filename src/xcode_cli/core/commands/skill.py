@@ -62,8 +62,6 @@ class SkillCommandService:
         self._console.print(f"Description: {skill.description}", markup=False, highlight=False)
         if skill.argument_hint:
             self._console.print(f"Arguments: {skill.argument_hint}", markup=False, highlight=False)
-        if skill.allowed_tools:
-            self._console.print(f"Allowed tools: {', '.join(skill.allowed_tools)}", markup=False, highlight=False)
         self._console.print(f"Path: {skill.root}", markup=False, highlight=False)
         self._console.print(skill.body, markup=False, highlight=False)
 

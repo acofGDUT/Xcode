@@ -10,7 +10,7 @@ from rich.text import Text
 from rich.prompt import Prompt
 from rich import box
 
-from xcode_cli.core.config import Config, ConfigStore
+from xcode_cli.core.config import ConfigStore
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-4o-mini"

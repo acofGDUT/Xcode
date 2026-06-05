@@ -173,10 +173,32 @@ Phase 1 skills 只从当前项目加载：
 - 旧 `skill.json`、`enabled_skills` 和 system prompt 全量 skill 注入已经移除。
 - skill 是 prompt command，不是独立 runtime 分支，不会绕过普通 user turn、session、tool loop 或 permission 流程。
 - skill 与 built-in slash command 冲突时，built-in command 保持优先。
-- `allowed-tools` 是当前 skill turn 的临时工具白名单，会同时限制 tool schemas 和执行层 tool call；它只收窄能力，不自动提升权限，也不覆盖 PermissionManager 的显式 `deny` 或 `ask`。
+- `allowed-tools` 采用 Claude-compatible 语义：表示该 skill 声明需要/允许/可预授权的工具集合，不是 exhaustive whitelist。当前 Xcode 会解析、归一化并记录这些工具，但不会用它收窄 tool schemas 或 execution；严格工具白名单如后续需要，应另起 `tool-scope` / `restricted-tools` 之类字段设计。
 - `context: fork` 当前不 inline 执行，会作为 unsupported invocation 报错。
 - `hooks` 只解析保存，不执行。
-- Phase 2 才设计模型主动调用 skills 的 `SkillTool`。
+
+### Model-Invocable Skills
+
+Phase 2 已支持模型按需主动加载项目 skills，数据流为：
+
+```text
+SkillLoader
+  -> SkillCatalog
+  -> SkillListingFormatter -> system prompt Available Skills
+  -> SkillInvocationService
+       -> SlashCommandDispatcher for user invocation
+       -> SkillTool for model invocation
+```
+
+关键边界：
+
+- `SkillTool` 不依赖 slash command registry，也不会把模型工具调用拼成 `/skill-name args` 再交给 `SlashCommandDispatcher`。
+- `user-invocable` 和 `disable-model-invocation` 是独立开关；一个 skill 可以不注册为用户 slash command，但仍允许模型主动调用。
+- system prompt 中的 compact listing 只包含 name、description 和 when_to_use，不包含完整 body、allowed-tools、paths 或 hooks。
+- `allowed-tools` 不再作为后续 tool schemas / execution 白名单；它是 skill 的权限声明与审计信息，不自动提权，危险工具仍必须经过 `PermissionManager`。
+- `SkillTool` 成功加载后会通过 blocked-tools 在当前 user turn 后续 LLM 请求中移除 `skill` 工具，避免递归调用。
+- `SkillTool` 是当前 tool batch 的 barrier：加载成功后，同一 assistant response 里的后续 sibling tool calls 会被拒绝，要求模型在 loaded skill prompt 生效后的下一步再调用工具。
+- 模型可见 tool message 保存 `<xcode_loaded_skill ...>` marker 和完整展开 prompt；额外 `skill_invocation` audit event 不保存完整 `model_content`。
 
 ## 7. Tool 系统
 
@@ -190,7 +212,7 @@ Phase 1 skills 只从当前项目加载：
 | `execute` | 本地执行函数 |
 | `is_read_only` | 权限系统用于区分只读和危险操作 |
 
-`ToolRegistry.get_openai_schemas()` 把工具转换成 OpenAI-compatible tool schema，并支持按当前 turn 的 `allowed_tools` 过滤。`ToolRegistry.execute()` 捕获所有工具异常并返回 `"Tool error: ..."`，避免单个工具异常打崩 Agent 主循环。`ToolCallExecutor` 也会在执行层检查当前 turn 白名单，防止模型调用未暴露的工具。
+`ToolRegistry.get_openai_schemas()` 把工具转换成 OpenAI-compatible tool schema，并支持按 blocked-tools 过滤。`ToolRegistry.execute()` 捕获所有工具异常并返回 `"Tool error: ..."`，避免单个工具异常打崩 Agent 主循环。`ToolCallExecutor` 也会在执行层检查 blocked-tools，防止模型调用当前 turn 禁用的工具。
 
 当前 13 个内置工具：
 

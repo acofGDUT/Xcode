@@ -42,7 +42,6 @@ def test_skill_tool_returns_loaded_marker_audit_metadata_and_blocks_recursion():
     assert "Review src/foo.py" in result.content
     assert result.audit_metadata["kind"] == "skill_invocation"
     assert result.audit_metadata["skill"] == "review"
-    assert result.allowed_tools == ["read_file"]
     assert result.blocked_tools == ["skill"]
     assert "model_content" not in result.audit_metadata
 

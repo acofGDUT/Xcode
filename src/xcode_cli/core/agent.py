@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from prompt_toolkit import PromptSession
@@ -33,7 +32,7 @@ from xcode_cli.core.dashboard import Dashboard
 from xcode_cli.core.llm import LLMClient
 from xcode_cli.core.memory import MemoryManager
 from xcode_cli.core.planning import PlanMode, write_plan_file
-from xcode_cli.core.prompting import build_system_prompt
+from xcode_cli.core.prompting import build_skill_listing_section, build_system_prompt
 from xcode_cli.core.project_root import resolve_project_root
 from xcode_cli.core.runtime_status import RuntimeStatusStore
 from xcode_cli.core.session import SessionStore
@@ -78,7 +77,6 @@ class AgentRuntime:
         self._estimated_tokens = 0
         self._history: list[dict[str, Any]] = []
         self._session_id: str = ""
-        self._current_allowed_tools: list[str] | None = None
         self._current_blocked_tools: set[str] = set()
         self._session_auto_approve: dict[str, bool] = {"write": False, "shell": False}
         self.prompt = PromptSession(
@@ -185,7 +183,6 @@ class AgentRuntime:
     def _run_user_turn(self, user_input: str | UserTurnInput) -> None:
         """执行一个普通 user turn：写入 session/history → 调用 LLM → 追加 assistant 响应。"""
         turn = coerce_user_turn_input(user_input)
-        self._current_allowed_tools = turn.allowed_tools
         self._current_blocked_tools = set()
         message = {"role": "user", "content": turn.display_content}
         metadata = dict(turn.metadata)
@@ -200,7 +197,11 @@ class AgentRuntime:
         self._history.append({"role": "user", "content": turn.model_content})
 
         if self.plan_mode.is_active:
-            system_prompt = self.plan_mode.get_system_prompt()
+            cfg = self.config_store.load()
+            system_prompt = self._append_skill_listing_to_prompt(
+                self.plan_mode.get_system_prompt(),
+                cfg.max_tokens,
+            )
         else:
             cfg = self.config_store.load()
             system_prompt = build_system_prompt(
@@ -382,7 +383,11 @@ class AgentRuntime:
 
     def _current_system_prompt(self) -> str:
         if self.plan_mode.is_active:
-            return self.plan_mode.get_system_prompt()
+            cfg = self.config_store.load()
+            return self._append_skill_listing_to_prompt(
+                self.plan_mode.get_system_prompt(),
+                cfg.max_tokens,
+            )
         cfg = self.config_store.load()
         return build_system_prompt(
             cfg,
@@ -398,6 +403,12 @@ class AgentRuntime:
             model_skills,
             context_window_tokens=context_window_tokens,
         )
+
+    def _append_skill_listing_to_prompt(self, system_prompt: str, context_window_tokens: int | None) -> str:
+        skill_section = build_skill_listing_section(self._available_skill_listing(context_window_tokens))
+        if not skill_section:
+            return system_prompt
+        return "\n".join([system_prompt, skill_section])
 
     def _handle_context_command(self) -> None:
         cfg = self.config_store.load()
@@ -565,7 +576,6 @@ class AgentRuntime:
                     system_prompt=system_prompt,
                     messages=history,
                     tool_schemas=self.tools.get_openai_schemas(
-                        allowed_tools=self._current_allowed_tools,
                         blocked_tools=self._current_blocked_tools,
                     ),
                     on_text_token=on_token,
@@ -599,9 +609,10 @@ class AgentRuntime:
                     return "No response."
                 return final_text
 
-            tool_result = self.tool_executor.execute(response, allowed_tools=self._current_allowed_tools)
-            if tool_result.activated_allowed_tools is not None:
-                self._current_allowed_tools = tool_result.activated_allowed_tools
+            tool_result = self.tool_executor.execute(
+                response,
+                blocked_tools=self._current_blocked_tools,
+            )
             if tool_result.blocked_tools:
                 self._current_blocked_tools.update(tool_result.blocked_tools)
             self._tool_call_count += tool_result.executed_count

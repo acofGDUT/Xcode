@@ -58,6 +58,10 @@ Root-level `ARCHITECTURE.md`, `ROADMAP.md`, `PROGRESS.md`, `DEVNOTES.md`, and `�
 
 `日期计划.md` is now a journal rather than a primary project document. The current journal copy is `docs/journal/2026-05-25-日期计划.md`.
 
+Current reference notes:
+
+- [docs/reference/qq-bot-integration-guide.md](docs/reference/qq-bot-integration-guide.md): QQ bot API v2 investigation and target `/QQchat` usage guide.
+
 ## 中文文档导航
 
 根目录 `README.md` 是当前唯一的文档索引，核心项目文档都在 `docs/current/`：
@@ -79,6 +83,10 @@ Root-level `ARCHITECTURE.md`, `ROADMAP.md`, `PROGRESS.md`, `DEVNOTES.md`, and `�
 根目录的 `ARCHITECTURE.md`、`ROADMAP.md`、`PROGRESS.md`、`DEVNOTES.md`、`日期计划.md` 现在主要作为兼容入口。旧版主文档归档在 [docs/old/2026-05-25-before-docs-restructure](docs/old/2026-05-25-before-docs-restructure)。
 
 `日期计划.md` 现在是工作日志，当前副本位于 [docs/journal/2026-05-25-日期计划.md](docs/journal/2026-05-25-%E6%97%A5%E6%9C%9F%E8%AE%A1%E5%88%92.md)。
+
+当前参考文档：
+
+- [docs/reference/qq-bot-integration-guide.md](docs/reference/qq-bot-integration-guide.md)：QQ 机器人 API v2 调研与 `/QQchat` 目标接入教程。
 
 ## Development Workflow
 

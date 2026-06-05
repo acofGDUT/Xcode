@@ -9,7 +9,6 @@ class ToolOutput:
     content: str
     metadata: dict[str, object] = field(default_factory=dict)
     audit_metadata: dict[str, object] = field(default_factory=dict)
-    allowed_tools: list[str] | None = None
     blocked_tools: list[str] = field(default_factory=list)
 
 
@@ -32,15 +31,11 @@ class ToolRegistry:
 
     def get_openai_schemas(
         self,
-        allowed_tools: list[str] | None = None,
         blocked_tools: set[str] | list[str] | None = None,
     ) -> list[dict]:
-        allowed = set(allowed_tools) if allowed_tools is not None else None
         blocked = set(blocked_tools or [])
         schemas: list[dict] = []
         for tool in self._tools.values():
-            if allowed is not None and tool.name not in allowed:
-                continue
             if tool.name in blocked:
                 continue
             schemas.append(

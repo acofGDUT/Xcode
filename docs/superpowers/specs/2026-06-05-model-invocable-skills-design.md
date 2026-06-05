@@ -26,7 +26,7 @@ Claude Code 和 Codex skills 的共同设计方向是 progressive disclosure：
 3. 完整 `SKILL.md` body 只在 skill 被触发时加载。
 4. `user-invocable` 控制用户能否通过 slash command 手动调用。
 5. `disable-model-invocation` 控制模型能否通过 SkillTool 主动调用。
-6. `allowed-tools` 在 skill 激活后影响工具可见性，但不应绕过 xcode 的 PermissionManager。
+6. `allowed-tools` 采用 Claude-compatible 语义：表示 skill 声明需要/允许/可预授权的工具集合，不是 exhaustive whitelist；当前 Xcode 解析、归一化并记录它，但不靠它收窄工具可见性。
 
 Phase 2 必须保留这些语义，尤其不能把“存在于 slash command registry”当成模型可调用的前置条件。
 
@@ -158,9 +158,10 @@ Schema：
 1. 通过 `SkillInvocationService.invoke_for_model()` 展开 skill。
 2. 返回模型可见 tool result，包含 loaded skill marker 和完整 skill prompt。
 3. tool result 不直接渲染完整 prompt 到 UI，只显示摘要，例如 `loaded skill review`。
-4. 将 skill 的 `allowed_tools` 应用到当前 turn 后续 LLM/tool loop。
+4. 将 skill 的 `allowed_tools` 作为 permission/audit metadata 保存，不作为 tool schemas 或 execution 白名单。
 5. 成功加载 skill 后，本 user turn 剩余 LLM loop 不再暴露 `skill` 工具，避免递归调用 SkillTool；即使该 skill 没有声明 `allowed-tools` 也必须禁用 `skill` 工具。
-6. 写入 session skill invocation audit metadata，支持 resume/compact。
+6. SkillTool 是 tool batch barrier；同一 assistant response 中排在 SkillTool 后面的 sibling tool calls 必须被拒绝，要求模型在 loaded skill prompt 生效后的下一步再调用。
+7. 写入 session skill invocation audit metadata，支持 resume/compact。
 
 ### Loaded Skill Marker
 
@@ -178,7 +179,7 @@ system guidance 必须告诉模型：
 - 只有当 available skill clearly matches 用户任务时才调用。
 - 弱匹配或猜测匹配不要调用。
 
-实现层也必须兜底：SkillTool 成功返回 loaded skill marker 后，后续 tool schema 过滤必须排除 `skill` 工具，不能只依赖 prompt guidance。
+实现层也必须兜底：SkillTool 成功返回 loaded skill marker 后，后续 tool schema 过滤和 execution 层都必须排除 `skill` 工具，不能只依赖 prompt guidance；同批 sibling tools 也必须经过 barrier，不得在 skill prompt 生效前继续执行。
 
 ## Skill Listing 预算
 
@@ -233,13 +234,13 @@ system prompt 新增一个 skills reminder section，仅当存在 model-invocabl
 
 ## allowed-tools 语义
 
-xcode 的 `allowed-tools` 是收窄工具集，不是提权：
+xcode 的 `allowed-tools` 与 Claude Code 对齐：它是 skill 声明的工具需求/允许/可预授权集合，不是收窄工具集的白名单：
 
-- SkillTool 加载 skill 后，当前 turn 后续 LLM request 只暴露 skill 允许的 tool schemas。
-- 如果 skill 没有声明 `allowed-tools`，当前 turn 后续 LLM request 沿用默认工具集合，但必须排除 `skill` 工具，防止递归调用。
-- execution 层仍必须校验白名单。
+- SkillTool 加载 skill 后，当前 turn 后续 LLM request 沿用默认工具集合，但必须排除 `skill` 工具，防止递归调用。
+- `allowed-tools` 只用于 permission hint / audit metadata / 未来 trust policy，不用于当前 tool schemas 或 execution 白名单。
+- 如果后续需要严格限制工具可见性，应设计独立字段，例如 `tool-scope`、`visible-tools` 或 `restricted-tools`，不要复用 Claude skill 的 `allowed-tools`。
 - PermissionManager 的 deny/ask/allow 仍然生效。
-- 即使 skill 声明 `write_file`、`edit_file`、`run_shell`，也不能绕过现有审批。
+- 即使 skill 声明 `write_file`、`edit_file`、`run_shell`，也不能自动绕过现有审批；是否预授权必须由独立 trust policy 明确设计。
 
 ## Session / Resume / Compact
 
@@ -263,6 +264,7 @@ Phase 2 采用直接保存模型可见内容的策略：
 - SkillTool 复用 Phase 1 prompt expansion，支持 `$ARGUMENTS` 和 `${XCODE_SKILL_DIR}`。
 - SkillTool 成功加载 skill 后，本 user turn 后续 tool schemas 不再包含 `skill`。
 - SkillTool 调用后完整 prompt 不作为用户消息显示。
-- SkillTool 调用后 allowed-tools 作用于当前 turn 后续工具 schemas 和执行层。
+- SkillTool 调用后 allowed-tools 不收窄当前 turn 后续工具 schemas 和执行层，只作为 permission/audit metadata 保留。
+- SkillTool 是 barrier，同批后续 sibling tool calls 不会执行。
 - `skill_invocation` audit event 不包含完整 `model_content`。
 - session/resume/compact 保留 skill invocation 上下文。
