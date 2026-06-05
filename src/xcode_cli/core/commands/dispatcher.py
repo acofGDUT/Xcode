@@ -7,7 +7,7 @@ from rich.console import Console
 
 from xcode_cli.core.commands.registry import CommandRegistry
 from xcode_cli.core.turn import UserTurnInput
-from xcode_cli.skills.prompt import ExpandedSkillPrompt
+from xcode_cli.skills.prompt import ExpandedSkillPrompt, UnsupportedSkillInvocation
 
 
 @dataclass(frozen=True)
@@ -76,7 +76,11 @@ class SlashCommandDispatcher:
         prompt_cmd = self._registry.get(head)
         if prompt_cmd is not None and prompt_cmd.kind == "prompt":
             args = " ".join(parts[1:]) if len(parts) > 1 else ""
-            payload = prompt_cmd.handler(args)
+            try:
+                payload = prompt_cmd.handler(args)
+            except UnsupportedSkillInvocation as exc:
+                self._console.print(str(exc), markup=False, highlight=False)
+                return SlashDispatchResult(kind="handled")
             metadata = dict(prompt_cmd.metadata)
             if prompt_cmd.source == "skill":
                 metadata["args"] = args

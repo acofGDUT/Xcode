@@ -52,6 +52,12 @@ def create_skill_slash_command(skill: Skill) -> SlashCommand:
     def handler(args: str) -> object:
         return expander.expand(skill, args)
 
+    metadata: dict[str, object] = {"kind": "skill_invocation", "skill": skill.name}
+    if skill.source_path is not None:
+        metadata["source_path"] = str(skill.source_path)
+    if skill.source_hash is not None:
+        metadata["skill_source_hash"] = skill.source_hash
+
     return SlashCommand(
         name=skill.name,
         kind="prompt",
@@ -59,7 +65,7 @@ def create_skill_slash_command(skill: Skill) -> SlashCommand:
         handler=handler,
         source="skill",
         argument_hint=skill.argument_hint,
-        metadata={"kind": "skill_invocation", "skill": skill.name},
+        metadata=metadata,
     )
 
 

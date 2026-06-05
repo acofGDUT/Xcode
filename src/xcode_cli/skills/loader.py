@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +29,9 @@ class SkillLoader:
         return SkillLoadResult(skills=skills, notices=notices)
 
     def _load_skill(self, skill_dir: Path, skill_md: Path) -> Skill:
-        frontmatter, body = _split_frontmatter(skill_md.read_text(encoding="utf-8"))
+        raw = skill_md.read_bytes()
+        text = raw.decode("utf-8")
+        frontmatter, body = _split_frontmatter(text)
         description = str(frontmatter.get("description") or _first_body_line(body))
         return Skill(
             name=skill_dir.name,
@@ -36,8 +39,10 @@ class SkillLoader:
             description=description,
             body=body,
             root=skill_dir,
+            source_path=skill_md,
+            source_hash=f"sha256:{hashlib.sha256(raw).hexdigest()}",
             allowed_tools=_string_list(frontmatter.get("allowed-tools")),
-            argument_hint=_optional_string(frontmatter.get("argument-hint")),
+            argument_hint=_argument_hint(frontmatter.get("argument-hint")),
             argument_names=_string_list(frontmatter.get("arguments")),
             when_to_use=_optional_string(frontmatter.get("when_to_use")),
             model=_optional_string(frontmatter.get("model")),
@@ -163,6 +168,12 @@ def _optional_string(value: Any) -> str | None:
     if isinstance(value, str):
         return value
     return str(value)
+
+
+def _argument_hint(value: Any) -> str | None:
+    if isinstance(value, list):
+        return f"[{', '.join(str(item) for item in value)}]"
+    return _optional_string(value)
 
 
 def _string_list(value: Any) -> list[str]:

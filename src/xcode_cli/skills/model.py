@@ -12,6 +12,8 @@ class Skill:
     description: str
     body: str
     root: Path
+    source_path: Path | None = None
+    source_hash: str | None = None
     allowed_tools: list[str] = field(default_factory=list)
     argument_hint: str | None = None
     argument_names: list[str] = field(default_factory=list)
