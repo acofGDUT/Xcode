@@ -41,7 +41,11 @@ from xcode_cli.core.task_tracker import TaskTracker, create_task_tools
 from xcode_cli.core.tool_registry import ToolDef, ToolRegistry
 from xcode_cli.core.tools import ALL_TOOLS
 from xcode_cli.core.tools.agent_tool import create_dispatch_agent_tool
+from xcode_cli.core.tools.skill_tool import create_skill_tool
 from xcode_cli.core.turn import UserTurnInput, coerce_user_turn_input
+from xcode_cli.skills.catalog import SkillCatalog
+from xcode_cli.skills.invocation import SkillInvocationService
+from xcode_cli.skills.listing import SkillListingFormatter
 from xcode_cli.skills.loader import SkillLoader
 
 
@@ -53,7 +57,13 @@ class AgentRuntime:
         self._runtime_status = RuntimeStatusStore()
         self.skill_loader = SkillLoader(self.cwd)
         self._skill_load_result = self.skill_loader.load()
-        self._command_registry = CommandRegistry.from_skills(self._skill_load_result.skills)
+        self._skill_catalog = SkillCatalog(self._skill_load_result.skills, builtin_commands=set(COMMANDS))
+        self._skill_invocation = SkillInvocationService(self._skill_catalog)
+        self._skill_listing_formatter = SkillListingFormatter()
+        self._command_registry = CommandRegistry.from_skills(
+            self._skill_catalog.user_invocable_skills(),
+            invocation_service=self._skill_invocation,
+        )
         self.config_store = ConfigStore()
         self._skill_service = SkillCommandService(self.skill_loader, self.console, builtin_commands=set(COMMANDS))
         self.llm = LLMClient()
@@ -69,6 +79,7 @@ class AgentRuntime:
         self._history: list[dict[str, Any]] = []
         self._session_id: str = ""
         self._current_allowed_tools: list[str] | None = None
+        self._current_blocked_tools: set[str] = set()
         self._session_auto_approve: dict[str, bool] = {"write": False, "shell": False}
         self.prompt = PromptSession(
             completer=SlashCompleter(commands=self._command_registry.visible_commands()),
@@ -95,6 +106,8 @@ class AgentRuntime:
             self.tools.register(task_tool)
         for extra_tool in self._create_plan_memory_tools():
             self.tools.register(extra_tool)
+        if self._skill_catalog.model_invocable_skills():
+            self.tools.register(create_skill_tool(self._skill_invocation))
         self.tool_display_state = ToolDisplayState(expanded=False)
         self.tool_display = ToolCallDisplay(self.tool_display_state)
         self.tool_executor = ToolCallExecutor(
@@ -173,6 +186,7 @@ class AgentRuntime:
         """执行一个普通 user turn：写入 session/history → 调用 LLM → 追加 assistant 响应。"""
         turn = coerce_user_turn_input(user_input)
         self._current_allowed_tools = turn.allowed_tools
+        self._current_blocked_tools = set()
         message = {"role": "user", "content": turn.display_content}
         metadata = dict(turn.metadata)
         if turn.model_content != turn.display_content or metadata:
@@ -188,7 +202,12 @@ class AgentRuntime:
         if self.plan_mode.is_active:
             system_prompt = self.plan_mode.get_system_prompt()
         else:
-            system_prompt = build_system_prompt(self.config_store.load(), self.cwd)
+            cfg = self.config_store.load()
+            system_prompt = build_system_prompt(
+                cfg,
+                self.cwd,
+                skill_listing=self._available_skill_listing(cfg.max_tokens),
+            )
 
         self._runtime_status.update("busy")
         try:
@@ -364,7 +383,21 @@ class AgentRuntime:
     def _current_system_prompt(self) -> str:
         if self.plan_mode.is_active:
             return self.plan_mode.get_system_prompt()
-        return build_system_prompt(self.config_store.load(), self.cwd)
+        cfg = self.config_store.load()
+        return build_system_prompt(
+            cfg,
+            self.cwd,
+            skill_listing=self._available_skill_listing(cfg.max_tokens),
+        )
+
+    def _available_skill_listing(self, context_window_tokens: int | None) -> str:
+        model_skills = self._skill_catalog.model_invocable_skills()
+        if not model_skills:
+            return ""
+        return self._skill_listing_formatter.format(
+            model_skills,
+            context_window_tokens=context_window_tokens,
+        )
 
     def _handle_context_command(self) -> None:
         cfg = self.config_store.load()
@@ -531,7 +564,10 @@ class AgentRuntime:
                 response = self.llm.complete(
                     system_prompt=system_prompt,
                     messages=history,
-                    tool_schemas=self.tools.get_openai_schemas(allowed_tools=self._current_allowed_tools),
+                    tool_schemas=self.tools.get_openai_schemas(
+                        allowed_tools=self._current_allowed_tools,
+                        blocked_tools=self._current_blocked_tools,
+                    ),
                     on_text_token=on_token,
                     on_reasoning_token=on_reasoning_token,
                 )
@@ -564,6 +600,10 @@ class AgentRuntime:
                 return final_text
 
             tool_result = self.tool_executor.execute(response, allowed_tools=self._current_allowed_tools)
+            if tool_result.activated_allowed_tools is not None:
+                self._current_allowed_tools = tool_result.activated_allowed_tools
+            if tool_result.blocked_tools:
+                self._current_blocked_tools.update(tool_result.blocked_tools)
             self._tool_call_count += tool_result.executed_count
             history.append(tool_result.assistant_message)
             history.extend(tool_result.tool_messages)

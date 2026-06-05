@@ -201,7 +201,7 @@ When in doubt: if it needs to survive beyond the current task and isn't derivabl
 """
 
 
-def build_system_prompt(config: Config, cwd: str = "") -> str:
+def build_system_prompt(config: Config, cwd: str = "", skill_listing: str = "") -> str:
     sections: list[str] = [BASE_SYSTEM_PROMPT]
     memory_manager = MemoryManager(cwd=cwd or None)
 
@@ -220,5 +220,18 @@ def build_system_prompt(config: Config, cwd: str = "") -> str:
     memory_context = memory_manager.get_context_for_prompt(config)
     if memory_context:
         sections.append("\n" + memory_context)
+
+    if skill_listing:
+        sections.append(
+            "\n## Available Skills\n"
+            f"{skill_listing}\n\n"
+            "Skill usage rules:\n"
+            "- When an available skill clearly matches the user's current task, call the skill tool before doing the task.\n"
+            "- Do not call the skill tool for weak or speculative matches.\n"
+            "- Do not mention a skill unless you actually invoke it.\n"
+            "- Do not guess skill names.\n"
+            "- Do not use the skill tool for built-in CLI commands.\n"
+            "- If the current turn already contains an <xcode_loaded_skill> marker, follow that skill instead of invoking the skill tool again."
+        )
 
     return "\n".join(sections)
