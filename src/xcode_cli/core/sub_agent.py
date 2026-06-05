@@ -70,7 +70,7 @@ class SubAgentExecutor:
             )
 
             for tc in response.tool_calls:
-                result = self.tools.execute(tc.name, tc.args)
+                result = self.tools.execute(tc.name, tc.args).content
                 history.append(
                     {
                         "role": "tool",

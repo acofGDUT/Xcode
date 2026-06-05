@@ -1,7 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
+
+
+@dataclass(frozen=True)
+class ToolOutput:
+    content: str
+    metadata: dict[str, object] = field(default_factory=dict)
+    audit_metadata: dict[str, object] = field(default_factory=dict)
+    allowed_tools: list[str] | None = None
+    blocked_tools: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -10,7 +19,7 @@ class ToolDef:
     description: str
     parameters: dict
     required: list[str]
-    execute: Callable[..., str]
+    execute: Callable[..., str | ToolOutput]
     is_read_only: bool = True
 
 
@@ -43,14 +52,17 @@ class ToolRegistry:
             )
         return schemas
 
-    def execute(self, name: str, args: dict) -> str:
+    def execute(self, name: str, args: dict) -> ToolOutput:
         tool = self._tools.get(name)
         if not tool:
-            return f"Error: unknown tool '{name}'"
+            return ToolOutput(content=f"Error: unknown tool '{name}'")
         try:
-            return tool.execute(**args)
+            result = tool.execute(**args)
+            if isinstance(result, ToolOutput):
+                return result
+            return ToolOutput(content=str(result))
         except Exception as exc:
-            return f"Tool error: {exc}"
+            return ToolOutput(content=f"Tool error: {exc}")
 
     def is_read_only(self, name: str) -> bool:
         tool = self._tools.get(name)

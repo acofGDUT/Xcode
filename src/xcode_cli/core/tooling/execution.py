@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from xcode_cli.core.llm import LLMResponse
+from xcode_cli.core.tool_registry import ToolOutput
 from xcode_cli.core.tooling.display import ToolCallDisplay, ToolDisplayState
 from xcode_cli.ui.renderer import OutputRenderer
 
@@ -14,6 +15,9 @@ class ToolExecutionResult:
     assistant_message: dict[str, Any]
     tool_messages: list[dict[str, Any]]
     executed_count: int
+    activated_allowed_tools: list[str] | None = None
+    blocked_tools: list[str] = field(default_factory=list)
+    skill_invocations: list[dict[str, object]] = field(default_factory=list)
 
 
 class ToolCallExecutor:
@@ -38,9 +42,12 @@ class ToolCallExecutor:
         self.tool_display = tool_display or ToolCallDisplay(ToolDisplayState(expanded=True))
 
     def execute(self, response: LLMResponse, allowed_tools: list[str] | None = None) -> ToolExecutionResult:
-        executed_calls: list[tuple[Any, str]] = []
+        executed_calls: list[tuple[Any, ToolOutput]] = []
         executed_count = 0
         allowed = set(allowed_tools) if allowed_tools is not None else None
+        activated_allowed_tools: list[str] | None = None
+        blocked_tools: list[str] = []
+        skill_invocations: list[dict[str, object]] = []
 
         self._render_tool_calls(response.tool_calls)
 
@@ -48,14 +55,14 @@ class ToolCallExecutor:
             if allowed is not None and tc.name not in allowed:
                 result = f"Tool error: tool '{tc.name}' is not allowed by the current skill."
                 self.console.print(f"  [bold red]{result}[/bold red]")
-                executed_calls.append((tc, result))
+                executed_calls.append((tc, ToolOutput(content=result)))
                 continue
 
             level = self.permissions.check(tc.name, is_read_only=self.tools.is_read_only(tc.name))
             if level == "deny":
                 result = f"Permission denied for tool: {tc.name}"
                 self.console.print(f"  [bold red]{result}[/bold red]")
-                executed_calls.append((tc, result))
+                executed_calls.append((tc, ToolOutput(content=result)))
                 continue
 
             scope = self.approval.scope_for_tool(tc.name)
@@ -104,26 +111,33 @@ class ToolCallExecutor:
                 if approval_result == "no":
                     result = f"User denied tool: {tc.name}"
                     self.console.print(f"  [dim]{result}[/dim]")
-                    executed_calls.append((tc, result))
+                    executed_calls.append((tc, ToolOutput(content=result)))
                     continue
                 if approval_result == "yes_all" and scope:
                     self.auto_approve[scope] = True
 
             try:
-                result = self.tools.execute(tc.name, tc.args)
+                output = self.tools.execute(tc.name, tc.args)
             except KeyboardInterrupt:
                 self.console.print("  [dim]Interrupted.[/dim]")
-                result = "Error: user interrupted the operation"
+                output = ToolOutput(content="Error: user interrupted the operation")
 
-            result_str = str(result)
             executed_count += 1
-            if result_str.startswith("Error:"):
-                self.console.print(f"  [bold red]{result_str}[/bold red]")
+            if output.content.startswith("Error:"):
+                self.console.print(f"  [bold red]{output.content}[/bold red]")
             else:
-                summary = self._summarize_tool_result(tc.name, tc.args, result_str)
+                summary = self._summarize_tool_result(tc.name, tc.args, output.content)
                 self.console.print(f"  [dim]→ {summary}[/dim]")
 
-            executed_calls.append((tc, result_str))
+            if output.audit_metadata.get("kind") == "skill_invocation":
+                skill_invocations.append(dict(output.audit_metadata))
+            if output.allowed_tools is not None:
+                activated_allowed_tools = output.allowed_tools
+            for tool_name in output.blocked_tools:
+                if tool_name not in blocked_tools:
+                    blocked_tools.append(tool_name)
+
+            executed_calls.append((tc, output))
 
         assistant_msg: dict[str, Any] = {
             "role": "assistant",
@@ -141,13 +155,16 @@ class ToolCallExecutor:
             assistant_msg["reasoning_content"] = response.reasoning_content
 
         tool_messages: list[dict[str, Any]] = []
-        for tc, result in executed_calls:
-            tool_messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+        for tc, output in executed_calls:
+            tool_messages.append({"role": "tool", "tool_call_id": tc.id, "content": output.content})
 
         return ToolExecutionResult(
             assistant_message=assistant_msg,
             tool_messages=tool_messages,
             executed_count=executed_count,
+            activated_allowed_tools=activated_allowed_tools,
+            blocked_tools=blocked_tools,
+            skill_invocations=skill_invocations,
         )
 
     def _render_tool_calls(self, tool_calls: list[Any]) -> None:
@@ -189,6 +206,9 @@ class ToolCallExecutor:
         if tool_name == "run_shell":
             exit_line = next((line for line in reversed(result.splitlines()) if line.startswith("exit_code=")), "")
             return exit_line or "command finished"
+        if tool_name == "skill":
+            name = str(args.get("skill", "")).strip().lstrip("/")
+            return f"loaded skill {name}" if name else "loaded skill"
         if tool_name == "edit_file":
             return result
         if tool_name == "write_file":
