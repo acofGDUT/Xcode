@@ -94,7 +94,6 @@ SkillInvocation(
     model_content: str,
     model_metadata: dict[str, object],
     audit_metadata: dict[str, object],
-    allowed_tools: list[str] | None,
 )
 ```
 
@@ -113,6 +112,7 @@ metadata 分成两类，避免 session event 重复保存完整 prompt：
   "args": "src/foo.py",
   "source_path": "D:/Xcode/.xcode/skills/review/SKILL.md",
   "skill_source_hash": "sha256:...",
+  "allowed_tools": ["read_file", "grep"],
   "model_content": "展开后的 skill prompt"
 }
 ```
@@ -126,9 +126,12 @@ metadata 分成两类，避免 session event 重复保存完整 prompt：
   "skill": "review",
   "args": "src/foo.py",
   "source_path": "D:/Xcode/.xcode/skills/review/SKILL.md",
-  "skill_source_hash": "sha256:..."
+  "skill_source_hash": "sha256:...",
+  "allowed_tools": ["read_file", "grep"]
 }
 ```
+
+`allowed_tools` 只有在 skill 声明 `allowed-tools` 时才出现，值为归一化后的工具名列表。它是 metadata，不是运行时工具白名单。
 
 ### SkillTool
 
@@ -247,7 +250,7 @@ xcode 的 `allowed-tools` 与 Claude Code 对齐：它是 skill 声明的工具�
 Phase 2 采用直接保存模型可见内容的策略：
 
 - tool message 保存 loaded skill marker + expanded prompt，用于 resume 后恢复模型上下文。
-- 额外写入 `skill_invocation` event，保存 audit metadata、allowed_tools、tool_call_id，不保存完整 prompt，不需要用户 UI 展示完整 prompt。
+- 额外写入 `skill_invocation` event，保存 audit metadata 和 allowed_tools，不保存完整 prompt，不需要用户 UI 展示完整 prompt。
 - `/compact` 使用当前 `_history`，其中已经包含 tool message，因此 compact 能保留 skill 指令上下文。
 
 ## 验收标准

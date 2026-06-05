@@ -150,55 +150,183 @@ Slash command 分两类：
 | `/resume` | `_handle_resume_command()` + `ResumeCommandService` | 列出当前项目 session，并恢复选中的 transcript |
 | `/exit` | `run_chat()` | 退出 |
 
-## 6. Skills As Prompt Commands
+## 6. Skills 架构
 
-Phase 1 skills 只从当前项目加载：
+当前 skills 已完成两个阶段：
+
+- Phase 1：项目内 `.xcode/skills/<skill-name>/SKILL.md` 可作为用户手动调用的 prompt slash command，例如 `/review src/foo.py`。
+- Phase 2：模型可以根据轻量 skill listing 主动调用 `skill` 工具，在合适任务中按需加载完整 skill prompt。
+
+这两个阶段共享同一套 loader、catalog、prompt expansion 和 invocation metadata，不存在旧 `skill.json` / `enabled_skills` / system prompt 全量注入的第二套语义。
+
+### 6.1 Skill 目录包
+
+当前只从项目目录加载 skills：
 
 ```text
 <project>/.xcode/skills/<skill-name>/SKILL.md
 ```
 
-一个 skill 是目录包，`SKILL.md` 是唯一入口；`references/`、`scripts/`、`templates/`、`assets/` 作为 supporting files 保留在目录内，由 skill prompt 或模型按需读取，不会被 loader 自动塞进上下文。当前不会自动读取 `.claude/skills`、用户目录、managed skills、bundled skills、plugin skills 或 MCP skills。
-
-加载链路：
-
-1. `SkillLoader` 扫描 `.xcode/skills/*/SKILL.md`，解析 Claude-style frontmatter 和正文。
-2. `SkillPromptExpander` 展开 `$ARGUMENTS` 和 `${XCODE_SKILL_DIR}`。
-3. `CommandRegistry` 合并 built-in prompt commands 和 user-invocable project skills。
-4. 用户输入 `/skill-name args` 后，dispatcher 返回 `UserTurnInput`。
-5. `_run_user_turn()` 对 UI/session user history 记录 `/skill-name args`，对 LLM `_history` 使用展开后的 model prompt。
-
-重要边界：
-
-- 旧 `skill.json`、`enabled_skills` 和 system prompt 全量 skill 注入已经移除。
-- skill 是 prompt command，不是独立 runtime 分支，不会绕过普通 user turn、session、tool loop 或 permission 流程。
-- skill 与 built-in slash command 冲突时，built-in command 保持优先。
-- `allowed-tools` 采用 Claude-compatible 语义：表示该 skill 声明需要/允许/可预授权的工具集合，不是 exhaustive whitelist。当前 Xcode 会解析、归一化并记录这些工具，但不会用它收窄 tool schemas 或 execution；严格工具白名单如后续需要，应另起 `tool-scope` / `restricted-tools` 之类字段设计。
-- `context: fork` 当前不 inline 执行，会作为 unsupported invocation 报错。
-- `hooks` 只解析保存，不执行。
-
-### Model-Invocable Skills
-
-Phase 2 已支持模型按需主动加载项目 skills，数据流为：
+一个 skill 是目录包，而不是单个裸 markdown 文件：
 
 ```text
-SkillLoader
-  -> SkillCatalog
-  -> SkillListingFormatter -> system prompt Available Skills
-  -> SkillInvocationService
-       -> SlashCommandDispatcher for user invocation
-       -> SkillTool for model invocation
+.xcode/skills/review/
+  SKILL.md
+  references/
+  scripts/
+  templates/
+  assets/
 ```
 
-关键边界：
+`SKILL.md` 是唯一自动读取入口。`references/`、`scripts/`、`templates/`、`assets/` 等 supporting files 只作为可被 skill prompt 引用的资源保留在目录内，不会在加载阶段自动塞进上下文。当前不会自动读取 `.claude/skills`、用户目录、managed skills、bundled skills、plugin skills 或 MCP skills。
 
-- `SkillTool` 不依赖 slash command registry，也不会把模型工具调用拼成 `/skill-name args` 再交给 `SlashCommandDispatcher`。
-- `user-invocable` 和 `disable-model-invocation` 是独立开关；一个 skill 可以不注册为用户 slash command，但仍允许模型主动调用。
-- system prompt 中的 compact listing 只包含 name、description 和 when_to_use，不包含完整 body、allowed-tools、paths 或 hooks。
-- `allowed-tools` 不再作为后续 tool schemas / execution 白名单；它是 skill 的权限声明与审计信息，不自动提权，危险工具仍必须经过 `PermissionManager`。
-- `SkillTool` 成功加载后会通过 blocked-tools 在当前 user turn 后续 LLM 请求中移除 `skill` 工具，避免递归调用。
-- `SkillTool` 是当前 tool batch 的 barrier：加载成功后，同一 assistant response 里的后续 sibling tool calls 会被拒绝，要求模型在 loaded skill prompt 生效后的下一步再调用工具。
-- 模型可见 tool message 保存 `<xcode_loaded_skill ...>` marker 和完整展开 prompt；额外 `skill_invocation` audit event 不保存完整 `model_content`。
+`SkillLoader` 解析 Claude-style frontmatter 和正文，并保存：
+
+| 字段 | 当前行为 |
+|------|----------|
+| `description` | slash help、completion、`/skill list` 和模型 listing 的核心摘要；缺失时 fallback 到正文第一行 |
+| `allowed-tools` | 解析保存并归一化到 audit/model metadata；不作为 tool schema 或 execution 白名单 |
+| `argument-hint` / `arguments` | 保存；`argument-hint` 用于命令补全展示，`arguments` 暂不做具名替换 |
+| `when_to_use` | 保存；Phase 2 compact listing 会暴露给模型 |
+| `disable-model-invocation` | 控制模型是否能通过 SkillTool 调用 |
+| `user-invocable` | 控制是否注册为用户 slash command |
+| `context: fork` | 保存；当前不支持 fork，调用时返回 unsupported |
+| `model` / `effort` / `agent` / `paths` / `hooks` | 解析保存；当前不切模型、不调 effort、不按 path 自动激活、不启动专用 agent、不执行 hooks |
+
+`source_path` 和 `skill_source_hash` 来自真实 `SKILL.md` 文件。它们会进入 invocation metadata，方便 session/resume/compact 和审计判断“本次调用使用的是哪个版本的 skill”。
+
+### 6.2 核心对象分工
+
+```mermaid
+flowchart TD
+    Loader["SkillLoader<br/>读取 .xcode/skills/*/SKILL.md"] --> Catalog["SkillCatalog<br/>查询和校验 skill"]
+    Catalog --> Listing["SkillListingFormatter<br/>生成 compact listing"]
+    Catalog --> Invocation["SkillInvocationService<br/>统一展开 prompt 和 metadata"]
+    Invocation --> UserCmd["CommandRegistry<br/>user-invocable -> /skill-name"]
+    Invocation --> Tool["SkillTool<br/>model-invocable skill"]
+    UserCmd --> Dispatcher["SlashCommandDispatcher"]
+    Dispatcher --> Turn["_run_user_turn(UserTurnInput)"]
+    Tool --> Executor["ToolCallExecutor"]
+    Executor --> Loop["_run_llm_loop"]
+```
+
+- `SkillLoader`：只负责磁盘扫描、frontmatter 解析、source hash 计算和 load notice 收集。
+- `SkillCatalog`：负责 `find()`、`user_invocable_skills()`、`model_invocable_skills()` 和模型调用校验；它会排除 built-in command 冲突、`disable-model-invocation: true` 和 `context: fork`。
+- `SkillListingFormatter`：把 model-invocable skills 格式化成轻量 listing，并控制长度预算。
+- `SkillInvocationService`：唯一的 skill 调用服务。用户 slash command 和模型 SkillTool 都通过它展开 `$ARGUMENTS`、`${XCODE_SKILL_DIR}`，并生成 display/model/audit metadata。
+- `CommandRegistry`：把 built-in prompt commands 和 user-invocable skills 合并成 slash command registry；built-in command 冲突时 built-in 优先。
+- `SkillTool`：模型入口。它不依赖 slash command registry，也不会把工具调用拼成 `/skill-name args` 再交给 dispatcher。
+- `ToolCallExecutor`：执行 SkillTool 后负责 barrier、防递归 blocked-tools、session audit event 收集。
+
+### 6.3 Phase 1：用户手动调用
+
+用户输入 `/review src/foo.py` 的路径：
+
+```text
+PromptSession
+  -> SlashCommandDispatcher.dispatch("/review src/foo.py")
+  -> CommandRegistry 找到 skill prompt command
+  -> SkillInvocationService.invoke_for_user("review", "src/foo.py")
+  -> UserTurnInput(
+       display_content="/review src/foo.py",
+       model_content="展开后的 skill prompt",
+       metadata={kind, source, skill, args, source_path, skill_source_hash, allowed_tools, model_content}
+     )
+  -> AgentRuntime._run_user_turn()
+```
+
+UI 和轻量 user history 只显示 `/review src/foo.py`，不会把完整 `SKILL.md` 正文刷到用户 transcript。LLM `_history` 使用展开后的 `model_content`。session transcript 的 user event 会保存 `metadata.model_content`，因此 `/resume` 构建 `_history` 时可以恢复隐藏的 skill prompt，而不是只恢复 UI 展示文本。
+
+`context: fork` 的 skill 当前不能 inline 执行。用户手动调用时会得到友好 unsupported 提示，不会打断 REPL 主循环。
+
+### 6.4 Phase 2：模型主动调用
+
+模型主动调用 skills 的路径：
+
+```text
+SkillCatalog.model_invocable_skills()
+  -> SkillListingFormatter.format()
+  -> build_system_prompt(... skill_listing=...)
+  -> LLM 看到 Available Skills
+  -> LLM 调用 tool: skill(skill="review", args="src/foo.py")
+  -> SkillInvocationService.invoke_for_model()
+  -> ToolOutput(
+       content="<xcode_loaded_skill ...>完整展开 prompt</xcode_loaded_skill>",
+       audit_metadata={kind, source, skill, args, source_path, skill_source_hash, allowed_tools},
+       blocked_tools=["skill"]
+     )
+  -> ToolCallExecutor 写入 tool message + skill_invocation audit event
+  -> 下一轮 LLM request 继续执行已加载 skill
+```
+
+system prompt 只在存在 model-invocable skills 时注入 skill guidance。Plan mode 使用自己的 planning prompt，但也会追加同一份 compact skill listing 和调用规则，避免模型看到 `skill` schema 却没有 available skills 列表。
+
+SkillTool 校验规则：
+
+- `skill` 名不能为空，允许带开头 `/`。
+- skill 必须存在于 `SkillCatalog`。
+- 不能调用 built-in slash command。
+- `disable-model-invocation: true` 会拒绝。
+- `context: fork` 会拒绝。
+- 不要求 `user-invocable: true`；也就是说，一个 skill 可以不给用户 slash command，但仍允许模型主动调用。
+
+### 6.5 Compact Listing 预算
+
+模型常驻上下文只看到轻量 listing，不包含完整 `SKILL.md` body，也不包含 `allowed-tools`、`hooks`、`paths`、`argument-hint`、`source_path` 或 hash。
+
+预算规则：
+
+```python
+SKILL_BUDGET_CONTEXT_PERCENT = 0.01
+CHARS_PER_TOKEN = 4
+DEFAULT_CHAR_BUDGET = 8_000
+MAX_LISTING_DESC_CHARS = 250
+```
+
+如果 `config.max_tokens` 可用，listing 字符预算约为 `max_tokens * 1% * 4`；否则 fallback 到 8000 chars。格式化策略是：
+
+1. 按 skill id 稳定排序。
+2. 优先输出 `name + description + when_to_use`。
+3. 超预算时把每条 summary 截断到 250 chars。
+4. 仍超预算时退化为只显示 skill name。
+5. name-only 仍超预算时只保留预算内条目，并尽量追加 omitted count。
+
+### 6.6 allowed-tools 语义
+
+`allowed-tools` 与 Claude Code 语义对齐：它是 skill 声明的工具需求、允许或未来可预授权集合，不是当前 turn 的 exhaustive whitelist。
+
+当前 Xcode 的实际行为：
+
+- loader 解析 `allowed-tools`，支持 Claude-style 名称、逗号分隔、inline list 和 YAML 多行 list。
+- invocation service 将工具名归一化后写入 `audit_metadata["allowed_tools"]` 和 `model_metadata["allowed_tools"]`。
+- `allowed-tools` 不收窄 `ToolRegistry.get_openai_schemas()`。
+- `allowed-tools` 不参与 `ToolCallExecutor` 的执行拒绝逻辑。
+- `allowed-tools` 不自动提权；`write_file`、`edit_file`、`run_shell` 仍必须经过 `PermissionManager` 和审批流程。
+
+如果后续需要“严格限制某个 skill 能看到哪些工具”，应设计独立字段，例如 `tool-scope`、`visible-tools` 或 `restricted-tools`。如果后续需要“信任某个 skill 后免审”，应设计独立 trust policy。不要把这两类语义混进 Claude-compatible `allowed-tools`。
+
+### 6.7 防递归、barrier 和 session
+
+SkillTool 成功加载 skill 后有两层防递归：
+
+1. `ToolOutput.blocked_tools=["skill"]` 进入 `AgentRuntime._current_blocked_tools`，下一次 LLM request 的 tool schemas 不再包含 `skill`。
+2. `ToolCallExecutor.execute(... blocked_tools=...)` 在执行层也会拒绝 blocked tool，即使模型仍返回隐藏掉的 `skill` tool call，也不会执行。
+
+SkillTool 还是当前 tool batch 的 barrier。同一个 assistant response 中，如果 `skill(...)` 后面还有 sibling tool calls，后续 sibling tools 会被拒绝，要求模型在 loaded skill prompt 真正进入 history 后的下一步再调用工具。
+
+session / resume / compact 的保存策略：
+
+- 用户手动 `/skill-name args`：session user event 保存 display content 和 `metadata.model_content`，resume 时用 hidden model prompt 恢复 `_history`。
+- 模型主动 `skill(...)`：tool message 保存 `<xcode_loaded_skill ...>` marker 和完整展开 prompt；额外 `skill_invocation` event 只保存 audit metadata，不保存完整 `model_content`。
+- compact 直接压缩当前 `_history`，其中已经包含 loaded skill tool message，因此不需要为 skill 单独重放。
+
+当前未实现能力：
+
+- `context: fork` 子 agent。
+- hooks 执行。
+- remote / managed / bundled / plugin / MCP skills。
+- skill search、ranking 或 paths 条件自动激活。
+- 基于 skill `model` / `effort` 的模型切换。
 
 ## 7. Tool 系统
 

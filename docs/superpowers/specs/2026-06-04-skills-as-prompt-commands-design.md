@@ -194,7 +194,6 @@ class UserTurnInput:
     display_content: str
     model_content: str
     metadata: dict[str, Any] = field(default_factory=dict)
-    allowed_tools: list[str] | None = None
 ```
 
 普通用户输入使用：
@@ -217,8 +216,8 @@ UserTurnInput(
         "skill": "review",
         "args": "src/foo.py",
         "source_path": "D:/Xcode/.xcode/skills/review/SKILL.md",
+        "allowed_tools": ["read_file", "grep", "run_shell"],
     },
-    allowed_tools=["read_file", "grep", "run_shell"],
 )
 ```
 
@@ -296,8 +295,8 @@ xcode 采用保守权限模型：`allowed-tools` 不自动提升权限。即使�
 | `src/xcode_cli/core/commands/dispatcher.py` | 只负责分发 registry 中的 command |
 | `src/xcode_cli/core/turn.py` | `UserTurnInput` 与 turn metadata |
 | `src/xcode_cli/core/agent.py` | 注入 registry，复用 `_run_user_turn()` |
-| `src/xcode_cli/core/tool_registry.py` | 保留显式 runtime scope 过滤能力；不由 `SKILL.md allowed-tools` 驱动 |
-| `src/xcode_cli/core/tooling/execution.py` | 执行层支持显式 runtime scope 和 blocked-tools 兜底 |
+| `src/xcode_cli/core/tool_registry.py` | 提供工具 schema，并支持 blocked-tools 过滤；不由 `SKILL.md allowed-tools` 驱动 |
+| `src/xcode_cli/core/tooling/execution.py` | 执行层支持 blocked-tools 兜底和 SkillTool barrier；不把 `allowed-tools` 当白名单 |
 
 ## 验收标准
 

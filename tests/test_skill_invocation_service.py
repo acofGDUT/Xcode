@@ -30,9 +30,11 @@ def test_user_invocation_returns_display_and_model_metadata():
     assert "Review src/foo.py" in invocation.model_content
     assert invocation.model_metadata["source"] == "user"
     assert invocation.model_metadata["skill"] == "review"
+    assert invocation.model_metadata["allowed_tools"] == ["read_file", "grep"]
     assert invocation.model_metadata["model_content"] == invocation.model_content
     assert invocation.audit_metadata["source"] == "user"
     assert invocation.audit_metadata["skill"] == "review"
+    assert invocation.audit_metadata["allowed_tools"] == ["read_file", "grep"]
     assert invocation.audit_metadata["source_path"].endswith("SKILL.md")
     assert invocation.audit_metadata["skill_source_hash"] == "sha256:test"
     assert "model_content" not in invocation.audit_metadata

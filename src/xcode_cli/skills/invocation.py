@@ -4,7 +4,11 @@ from dataclasses import dataclass
 from typing import Literal
 
 from xcode_cli.skills.catalog import SkillCatalog
-from xcode_cli.skills.prompt import SkillPromptExpander, UnsupportedSkillInvocation
+from xcode_cli.skills.prompt import (
+    SkillPromptExpander,
+    UnsupportedSkillInvocation,
+    normalize_tool_name,
+)
 
 
 @dataclass(frozen=True)
@@ -54,6 +58,9 @@ class SkillInvocationService:
             audit_metadata["source_path"] = str(skill.source_path)
         if skill.source_hash is not None:
             audit_metadata["skill_source_hash"] = skill.source_hash
+        allowed_tools = [normalize_tool_name(tool) for tool in skill.allowed_tools]
+        if allowed_tools:
+            audit_metadata["allowed_tools"] = allowed_tools
         model_metadata = dict(audit_metadata)
         model_metadata["model_content"] = expanded.prompt
 

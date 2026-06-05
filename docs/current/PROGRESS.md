@@ -2,7 +2,7 @@
 
 > 本文档记录项目如何一步步走到现在。当前实现细节见 `ARCHITECTURE.md`，未来计划见 `ROADMAP.md`，已知问题和设计取舍见 `DEVNOTES.md`。
 
-最后更新：2026-06-04
+最后更新：2026-06-05
 
 ## 1. 当前状态总览
 
@@ -25,8 +25,8 @@
 | 开发流程与测试分层规范 | Spec-first + TDD-core + E2E-acceptance、P0/P1/P2 测试分层 | 完成 | `AGENTS.md` / `DEVNOTES.md` |
 | `/init` prompt command | 旧版 Claude 风格 prompt command，生成或改进仓库级 `XCODE.md` | 完成并通过测试 | `2026-06-04-init-command-plan.md` |
 | AgentRuntime Refactor Round 2 | SlashCommandDispatcher、SkillCommandService、普通 user turn 抽离 | 完成并通过 review | `2026-06-04-agent-runtime-refactor-round2-plan.md` |
-| Skills As Prompt Commands | `.xcode/skills/<name>/SKILL.md` 加载为 prompt slash command | 完成并通过逐 task review | `2026-06-04-skills-as-prompt-commands-plan.md` |
-| Model-Invocable Skills | compact listing + `SkillTool` 模型主动调用 skills | 完成并通过逐 task review | `2026-06-05-model-invocable-skills-plan.md` |
+| Skills As Prompt Commands | `.xcode/skills/<name>/SKILL.md` 加载为 prompt slash command | 完成并通过整体 review | `2026-06-04-skills-as-prompt-commands-plan.md` |
+| Model-Invocable Skills | compact listing + `SkillTool` 模型主动调用 skills | 完成并通过整体 review | `2026-06-05-model-invocable-skills-plan.md` |
 | Phase 5 | 生态扩展 | 冻结 | 未开始 |
 
 当前重点不是进入 Phase 5，而是补齐费用估算、原生 Windows 验收，并评估 skills 后续 fork/hooks/remote/search 等 Phase 3 能力是否值得进入设计。
