@@ -16,6 +16,9 @@ from xcode_cli.core.commands.slash import INIT_PROMPT
 def _setup_tmp_xcode_home(tmp_path: Path, monkeypatch) -> Path:
     import xcode_cli.paths
 
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
     xcode_dir = tmp_path / ".xcode"
     monkeypatch.setattr(xcode_cli.paths, "XCODE_DIR", xcode_dir, raising=True)
     xcode_dir.mkdir(parents=True, exist_ok=True)
@@ -123,3 +126,18 @@ class TestRunUserTurn:
 
         assert len(agent._history) == 1
         assert agent._history[0] == {"role": "user", "content": "hello"}
+
+
+def test_missing_qq_config_does_not_break_normal_turn(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("QQ_BOT_APP_ID", raising=False)
+    monkeypatch.delenv("QQ_BOT_CLIENT_SECRET", raising=False)
+
+    agent = _make_agent(tmp_path, monkeypatch)
+    agent._run_llm_loop = MagicMock(return_value="hi there")
+
+    assert agent.qqchat_service is None
+    assert "QQchat requires" in str(agent._qqchat_init_error)
+
+    agent._run_user_turn("hello")
+
+    assert agent._history[-1] == {"role": "assistant", "content": "hi there"}

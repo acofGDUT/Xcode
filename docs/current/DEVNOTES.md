@@ -510,10 +510,10 @@ Review 注意：
 
 ## 26. QQ 外部聊天入口边界
 
-**状态**：Open
+**状态**：Mitigated
 **关联**：ROADMAP Phase 6 / `/QQchat`
 
-2026-06-05 已完成 QQ 机器人 API v2 文档调研和 Xcode 接入方案设计。当前没有实现 `/QQchat`，只保留教程、设计文档和开发计划。
+2026-06-05 已实现 `/QQchat start|stop|status` 第一版代码，并通过自动化测试。真实 QQ 平台验收、原生 PowerShell/cmd.exe 手工验收仍未执行，因此不能把该能力标记为完整完成。
 
 设计结论：
 
@@ -524,8 +524,11 @@ Review 注意：
 - QQ 消息必须视为外部不可信输入，默认通过入口级 `ToolScope` 只暴露 `read_file`、`grep`、`glob`、`task_list` 等只读能力。
 - QQchat 的 `ToolScope` / `entry_tool_scope` 是外部入口安全边界，不复用 skill frontmatter 的 `allowed-tools`；后者只表示 skill 的工具需求/允许/可预授权 metadata，不是 turn 级严格白名单。
 - 远程 QQ 用户不能审批危险工具。`write_file`、`edit_file`、`run_shell` 这类工具即使未来开放，也必须由本机 owner 在终端内确认。
-- 不要让 QQ 线程直接复用当前 REPL 的 `_history`；每个 QQ conversation key 应有独立 session/history。
-- 需要先抽出可返回 assistant 文本的 headless external turn runner，否则当前 `_run_user_turn()` 只适合终端 REPL 展示，不适合 QQ 被动回复。
+- QQ turn 不复用当前 REPL 的 `_history`；`ExternalTurnRunner` 为每个 QQ conversation key 维护独立 session/history。
+- `ToolScope.visible_tools` 和 `execution_allowlist` 会先移除危险工具，再取交集；如果配置只列危险工具，则回退到安全默认只读工具。
+- AppSecret、AccessToken、完整 Authorization header 不得进入项目配置、session transcript metadata、audit event、错误输出或测试快照。
+- 被动回复受 `msg_id`、`msg_seq` 和 QQ 平台时间窗口限制；重复 `msg_id` 不会再次触发 runner。
+- 后续如果做 Webhook，需要单独设计签名校验、公网 HTTPS 回调、端口限制和重放防护。
 
 文档：
 

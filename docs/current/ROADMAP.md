@@ -629,7 +629,22 @@ Phase 5 当前冻结。后续如果解冻，建议逐项设计和验收，不一
 
 ## 15. Phase 6：外部聊天入口候选
 
-Phase 6 仍不是当前默认实现目标，但 QQ 机器人接入已经完成一次官方文档调研和架构方案整理。当前状态是：已有教程、设计文档和 Coding Agent 任务拆解，尚未获得实现授权，也没有 `/QQchat` 代码。
+QQ `/QQchat` 代码已实现并通过自动化测试；真实 QQ 平台验收未执行，不能标记为完整完成。
+
+当前已实现：
+
+- `/QQchat start|stop|status` side-effect command。
+- WebSocket gateway payload、C2C/group event normalization、`msg_id` 去重和被动文本回复 payload。
+- `ExternalTurnRunner` 为每个 QQ conversation key 维护独立 session/history。
+- 入口级只读 `ToolScope`，schema 层和 execution 层双重收窄，不复用 skill `allowed-tools`。
+- AppSecret、AccessToken、Authorization header 的错误和 metadata 脱敏回归测试。
+
+未执行/未完成：
+
+- 真实 QQ 单聊被动回复验收。
+- 真实 QQ 群聊 @ 被动回复验收。
+- 原生 PowerShell/cmd.exe 中 `/QQchat start` 与 prompt_toolkit 并存手工验收。
+- Webhook、富媒体、频道消息、主动推送、远程危险工具审批均不包含在第一版。
 
 相关文档：
 
@@ -637,7 +652,7 @@ Phase 6 仍不是当前默认实现目标，但 QQ 机器人接入已经完成�
 - `docs/superpowers/specs/2026-06-05-qq-chat-integration-design.md`
 - `docs/superpowers/plans/2026-06-05-qq-chat-integration-plan.md`
 
-可能方向：Xcode 后续可以向类似 OpenClaw 的外部聊天 Agent 形态发展，让 Xcode 不只运行在 CLI 内，也能接入外部 IM 用户进行对话，例如 QQ 用户入口。
+可能方向：Xcode 后续可以向类似 OpenClaw 的外部聊天 Agent 形态发展，让 Xcode 不只运行在 CLI 内，也能接入外部 IM 用户进行对话，例如继续完善 QQ 用户入口。
 
 初步设想：
 
@@ -650,7 +665,6 @@ Phase 6 仍不是当前默认实现目标，但 QQ 机器人接入已经完成�
 
 开放问题：
 
-- QQ 接入采用哪个协议或适配器，是否需要独立进程。
 - 外部用户身份如何认证和授权。
 - 群聊场景下如何避免 prompt 注入和多人上下文污染。
 - 是否允许外部用户触发 coding 任务，还是只允许咨询和只读探索。

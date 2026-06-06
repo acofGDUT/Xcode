@@ -373,7 +373,34 @@ Review 与验证：
 - skill search。
 - paths 条件自动激活。
 
-## 19. 当前阻塞和遗留
+## 19. QQ `/QQchat` 第一版代码实现：2026-06-05
+
+证据：
+
+- 编译检查通过：`python -m py_compile src\xcode_cli\core\agent.py src\xcode_cli\core\external_turn.py src\xcode_cli\core\commands\dispatcher.py src\xcode_cli\core\commands\slash.py src\xcode_cli\qqchat\config.py src\xcode_cli\qqchat\auth.py src\xcode_cli\qqchat\message_client.py src\xcode_cli\qqchat\events.py src\xcode_cli\qqchat\dedupe.py src\xcode_cli\qqchat\gateway.py src\xcode_cli\qqchat\service.py` 退出码 0。
+- 聚焦测试通过：`pytest tests\test_qqchat_config.py tests\test_qqchat_auth.py tests\test_qqchat_events.py tests\test_qqchat_message_client.py tests\test_qqchat_gateway.py tests\test_qqchat_service.py tests\test_external_turn.py tests\test_slash_dispatcher.py tests\test_agent_tool_loop.py -q` 为 `62 passed`。
+- 全量测试通过：`pytest -q` 为 `356 passed`。
+- `git diff --check` 退出码 0；仅有 Windows LF/CRLF 行尾提示。
+- PowerShell/cmd.exe 手工验收：未执行。
+- QQ 单聊被动回复验收：未执行。
+- QQ 群聊 @ 被动回复验收：未执行。
+- 危险工具请求真实 QQ 验收：未执行。
+
+当前实现内容：
+
+- 新增 `xcode_cli.qqchat` 包，包含 config、auth、events、dedupe、message_client、gateway、service。
+- 新增 `ExternalTurnRunner` 和入口级 `ToolScope`，QQ turn 按 conversation key 维护独立 session/history。
+- `/QQchat start|stop|status` 已注册为 side-effect slash command，不进入普通 LLM prompt command。
+- QQ C2C 和 group @ 事件会归一化为内部消息；group 默认按 `group_openid + member_openid` 隔离。
+- 默认只暴露并执行 `read_file`、`grep`、`glob`、`task_list`；危险工具即使被配置加入也会被过滤。
+- AppSecret、AccessToken、Authorization header 的配置 summary、错误字符串和 external metadata 均有脱敏回归测试。
+
+结论：
+
+- 代码和自动化回归已进入最终验证前状态。
+- 真实 QQ 平台和原生 Windows 终端手工验收未执行，不能声称 `/QQchat` 已完整完成真实接入。
+
+## 20. 当前阻塞和遗留
 
 | 项目 | 状态 | 说明 |
 |------|------|------|
@@ -398,9 +425,9 @@ Review 与验证：
 | 原生 Windows E2E | 未完成 | 需要在 cmd.exe/PowerShell 验证完整交互 |
 | Phase 5 | 冻结 | 不作为近期默认开发目标 |
 
-## 20. 下一步
+## 21. 下一步
 
 1. 评估 skills 后续能力：fork skill runtime、hooks 安全边界、paths 自动激活、remote skills 和 skill search。
 2. 做原生 cmd.exe/PowerShell 交互验收，重点覆盖审批菜单、diff preview、工具摘要折叠、多轮 tool call、`/resume`、`/compact`。
 3. 为 `/context` 增加 cost 估算，补齐 token 之外的费用视角。
-4. 如用户明确授权进入 Phase 6，可按 `docs/superpowers/plans/2026-06-05-qq-chat-integration-plan.md` 开始实现 `/QQchat`。当前仅完成 QQ 官方文档调研、接入教程和开发方案，没有实现代码。
+4. 为 `/QQchat` 补真实 PowerShell/cmd.exe 手工验收和 QQ 平台单聊/群聊被动回复验收；未完成前不要把 Phase 6 标记为完整完成。

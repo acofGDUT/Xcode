@@ -1,16 +1,16 @@
 # QQ 机器人接入 Xcode 教程
 
-> 状态：调研与目标教程，2026-06-05。当前 Xcode 还没有实现 `/QQchat`，本文描述接入后的目标用法、准备步骤和运行约束。
+> 状态：第一版代码已实现并通过自动化测试，2026-06-05。真实 QQ 单聊、群聊和原生 Windows 终端手工验收尚未执行，本文不声称已完成真实平台接入。
 
 ## 1. 目标体验
 
-目标是在本地 Xcode CLI 中输入：
+第一版是在本地 Xcode CLI 中输入：
 
 ```text
 /QQchat start
 ```
 
-随后 Xcode 连接 QQ 机器人 WebSocket 网关。用户在 QQ 单聊机器人，或在群里 @ 机器人时，Xcode 将收到的 QQ 消息转换为普通 user turn，再把 Xcode 的回答作为 QQ 被动回复发回去。
+随后 Xcode 通过 QQ 机器人 WebSocket 网关接收消息。用户在 QQ 单聊机器人，或在群里 @ 机器人时，Xcode 将收到的 QQ 消息转换为外部 user turn，再把 Xcode 的回答作为 QQ 被动文本回复发回去。
 
 推荐第一版只支持：
 
@@ -100,7 +100,7 @@ setx QQ_BOT_CLIENT_SECRET "你的 AppSecret"
 
 ## 5. 目标命令
 
-建议命令使用大小写不敏感的 `/QQchat`，内部注册为 `/qqchat`：
+命令使用大小写不敏感的 `/QQchat`，内部注册为 `/qqchat`：
 
 ```text
 /QQchat start
@@ -108,11 +108,13 @@ setx QQ_BOT_CLIENT_SECRET "你的 AppSecret"
 /QQchat status
 ```
 
-目标行为：
+实际行为：
 
-- `start`：读取配置，获取 AccessToken，调用 `/gateway`，建立 WebSocket，订阅 `1 << 25` intents。
-- `status`：显示连接状态、当前 seq、session id、最近消息时间、活动会话数、默认 `ToolScope` 摘要。
-- `stop`：关闭 WebSocket，停止心跳线程，保留 session transcript。
+- `start`：读取配置，获取 AccessToken，调用 `/gateway`，建立 WebSocket，并使用 `GROUP_AND_C2C_EVENT (1 << 25)` intents Identify。
+- `status`：显示 service 状态、最近错误、处理消息数、发送回复数和默认 `ToolScope` 摘要。
+- `stop`：关闭 WebSocket，停止后台线程，保留 session transcript。
+
+缺少 `QQ_BOT_APP_ID` 或 `QQ_BOT_CLIENT_SECRET` 时，普通 `xcode chat` 仍可启动；执行 `/QQchat status` 或 `/QQchat start` 时会显示 QQchat 不可用和缺配置原因。
 
 如果后续增加 CLI 入口，可使用：
 
@@ -208,6 +210,29 @@ Message:
 8. 让 QQ 用户要求执行 shell 或改文件，确认工具不可见或审批不会被远程绕过。
 9. 断开网络后恢复，确认 WebSocket reconnect/resume 不导致主循环崩溃。
 10. 跑 `pytest -q` 和 `python -m py_compile` 覆盖新增模块。
+
+### 常见错误
+
+| 错误 | 含义 | 处理 |
+|------|------|------|
+| missing app id | 未设置 `QQ_BOT_APP_ID`，且用户级 `~/.xcode/qqchat.json` 没有 `app_id` | 设置环境变量或用户级私密配置 |
+| missing client secret | 未设置 `QQ_BOT_CLIENT_SECRET`，且用户级 `~/.xcode/qqchat.json` 没有 `client_secret` | 设置环境变量或用户级私密配置，不要写入项目仓库 |
+| gateway fetch failed | `/gateway` 获取失败，可能是 AccessToken、网络或 QQ 平台状态问题 | 检查凭据、网络和 QQ 后台配置 |
+| websocket disconnected | WebSocket 断开或 heartbeat 失败 | 查看 `/QQchat status` 最近错误，必要时 stop 后重新 start |
+| reply window expired | QQ 被动回复窗口过期，群聊通常只有 5 分钟 | 避免在群聊里执行长时间任务，必要时缩短回复链路 |
+| dangerous tool blocked | QQ turn 请求 `write_file`、`edit_file`、`run_shell` 等危险工具 | 第一版默认拒绝，远程 QQ 用户不能审批 |
+
+### Windows 手工验收记录
+
+- 日期：未执行
+- 终端：PowerShell / cmd.exe
+- 命令：`xcode chat` -> `/QQchat status` -> `/QQchat start`
+- 结果：未执行
+- 是否出现 prompt_toolkit 输入错乱：未执行
+- 是否出现后台线程抢屏：未执行
+- QQ 单聊被动回复结果：未执行
+- QQ 群聊 @ 被动回复结果：未执行
+- 危险工具请求结果：未执行
 
 ## 10. 常见限制
 

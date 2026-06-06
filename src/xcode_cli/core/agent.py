@@ -29,6 +29,7 @@ from xcode_cli.core.ui.shell import ShellUI
 from xcode_cli.core.ui.streaming import StreamingTurnRenderer
 from xcode_cli.core.context import ContextManager
 from xcode_cli.core.dashboard import Dashboard
+from xcode_cli.core.external_turn import ExternalTurnRunner, ToolScope
 from xcode_cli.core.llm import LLMClient
 from xcode_cli.core.memory import MemoryManager
 from xcode_cli.core.planning import PlanMode, write_plan_file
@@ -42,6 +43,11 @@ from xcode_cli.core.tools import ALL_TOOLS
 from xcode_cli.core.tools.agent_tool import create_dispatch_agent_tool
 from xcode_cli.core.tools.skill_tool import create_skill_tool
 from xcode_cli.core.turn import UserTurnInput, coerce_user_turn_input
+from xcode_cli.qqchat.auth import QQAuthClient
+from xcode_cli.qqchat.config import load_qqchat_config
+from xcode_cli.qqchat.gateway import QQGatewayClient
+from xcode_cli.qqchat.message_client import QQMessageClient
+from xcode_cli.qqchat.service import QQChatService
 from xcode_cli.skills.catalog import SkillCatalog
 from xcode_cli.skills.invocation import SkillInvocationService
 from xcode_cli.skills.listing import SkillListingFormatter
@@ -118,6 +124,12 @@ class AgentRuntime:
             self._session_auto_approve,
             tool_display=self.tool_display,
         )
+        self.qqchat_service: QQChatService | None = None
+        self._qqchat_init_error: str | None = None
+        try:
+            self.qqchat_service = self._create_qqchat_service()
+        except Exception as exc:
+            self._qqchat_init_error = str(exc)
         self._dispatcher = SlashCommandDispatcher(
             console=self.console,
             help_handler=self._handle_help_command,
@@ -129,8 +141,58 @@ class AgentRuntime:
             memory_handler=self._handle_memory_command,
             resume_handler=self._handle_resume_command,
             compact_handler=self._handle_compact_command,
+            qqchat_handler=self._handle_qqchat_command,
             registry=self._command_registry,
         )
+
+    def _create_qqchat_service(self) -> QQChatService:
+        qq_config = load_qqchat_config(project_root=self.cwd)
+        if not qq_config.app_id or not qq_config.client_secret:
+            raise RuntimeError(
+                "QQchat requires QQ_BOT_APP_ID and QQ_BOT_CLIENT_SECRET, "
+                "or app_id/client_secret in ~/.xcode/qqchat.json."
+            )
+        auth_client = QQAuthClient(qq_config.app_id, qq_config.client_secret)
+        gateway = QQGatewayClient(
+            access_token_getter=auth_client.get_access_token,
+            on_event=lambda payload: self.qqchat_service.handle_gateway_event(payload) if self.qqchat_service else None,
+        )
+        runner = ExternalTurnRunner(
+            session_store=self.sessions,
+            run_llm_loop=self._run_external_llm_loop,
+            build_system_prompt=self._build_external_system_prompt,
+        )
+        reply_client = QQMessageClient(access_token_getter=auth_client.get_access_token)
+        return QQChatService(
+            gateway=gateway,
+            runner=runner,
+            reply_client=reply_client,
+            default_tool_scope=qq_config.tool_scope,
+        )
+
+    def _build_external_system_prompt(self) -> str:
+        cfg = self.config_store.load()
+        return build_system_prompt(cfg, self.cwd)
+
+    def _run_external_llm_loop(
+        self,
+        *,
+        history: list[dict[str, Any]],
+        system_prompt: str,
+        tool_scope: ToolScope,
+        session_id: str | None = None,
+    ) -> str:
+        previous_blocked_tools = self._current_blocked_tools
+        self._current_blocked_tools = set()
+        try:
+            return self._run_llm_loop(
+                history=history,
+                system_prompt=system_prompt,
+                tool_scope=tool_scope,
+                session_id=session_id,
+            )
+        finally:
+            self._current_blocked_tools = previous_blocked_tools
 
     def run_chat(self) -> None:
         self._session_id = self.sessions.new_session_id()
@@ -239,6 +301,40 @@ class AgentRuntime:
 
     def _handle_skill_command(self, parts: list[str]) -> None:
         self._skill_service.run(parts)
+
+    def _handle_qqchat_command(self, parts: list[str]) -> None:
+        action = parts[1].lower() if len(parts) > 1 else "status"
+        if action not in {"start", "stop", "status"}:
+            self.console.print("Usage: /QQchat start|stop|status")
+            return
+        if self.qqchat_service is None:
+            detail = self._qqchat_init_error or "QQchat is not available."
+            self.console.print(f"QQchat unavailable: {detail}", markup=False, highlight=False)
+            return
+        if action == "start":
+            try:
+                self.qqchat_service.start()
+            except RuntimeError as exc:
+                self.console.print(str(exc), markup=False, highlight=False)
+        elif action == "stop":
+            self.qqchat_service.stop()
+        self._print_qqchat_status()
+
+    def _print_qqchat_status(self) -> None:
+        if self.qqchat_service is None:
+            return
+        status = self.qqchat_service.status()
+        table = Table(title="QQchat")
+        table.add_column("Key")
+        table.add_column("Value")
+        for key in ("state", "last_error", "handled_messages", "sent_replies"):
+            table.add_row(key, str(status.get(key)))
+        tool_scope = status.get("tool_scope")
+        if isinstance(tool_scope, dict):
+            table.add_row("visible_tools", ", ".join(str(x) for x in tool_scope.get("visible_tools", [])))
+            table.add_row("execution_allowlist", ", ".join(str(x) for x in tool_scope.get("execution_allowlist", [])))
+            table.add_row("remote_approval", str(tool_scope.get("remote_approval")))
+        self.console.print(table)
 
     def _handle_env_command(self, parts: list[str]) -> None:
         from xcode_cli.core.ui.env_dashboard import EnvDashboard
@@ -491,10 +587,17 @@ class AgentRuntime:
         self.console.print()
         self.console.print("\n".join(lines))
 
-    def _run_llm_loop(self, history: list[dict[str, Any]], system_prompt: str) -> str:
+    def _run_llm_loop(
+        self,
+        history: list[dict[str, Any]],
+        system_prompt: str,
+        tool_scope: ToolScope | None = None,
+        session_id: str | None = None,
+    ) -> str:
         cfg = self.config_store.load()
         render_mode = cfg.response_render_mode
         assistant_turn_started = False
+        transcript_session_id = self._session_id if session_id is None else session_id
 
         renderer = StreamingTurnRenderer(
             self.console,
@@ -514,8 +617,8 @@ class AgentRuntime:
                         f"[dim]Context compressed: {before_messages} -> {after_messages} messages, "
                         f"saved ~{saved_tokens} tokens.[/dim]"
                     )
-                    if self._session_id:
-                        self.compactor.write_checkpoint(self._session_id, outcome)
+                    if transcript_session_id:
+                        self.compactor.write_checkpoint(transcript_session_id, outcome)
 
             content_buffer: list[str] = []
             reasoning_buffer: list[str] = []
@@ -577,6 +680,7 @@ class AgentRuntime:
                     messages=history,
                     tool_schemas=self.tools.get_openai_schemas(
                         blocked_tools=self._current_blocked_tools,
+                        visible_tools=tool_scope.visible_tools if tool_scope is not None else None,
                     ),
                     on_text_token=on_token,
                     on_reasoning_token=on_reasoning_token,
@@ -612,6 +716,7 @@ class AgentRuntime:
             tool_result = self.tool_executor.execute(
                 response,
                 blocked_tools=self._current_blocked_tools,
+                tool_scope=tool_scope,
             )
             if tool_result.blocked_tools:
                 self._current_blocked_tools.update(tool_result.blocked_tools)
@@ -620,12 +725,12 @@ class AgentRuntime:
             history.extend(tool_result.tool_messages)
             self._render_task_panel(response.tool_calls)
 
-            if self._session_id:
-                self.sessions.append_message(self._session_id, tool_result.assistant_message)
+            if transcript_session_id:
+                self.sessions.append_message(transcript_session_id, tool_result.assistant_message)
                 for tm in tool_result.tool_messages:
-                    self.sessions.append_message(self._session_id, tm)
+                    self.sessions.append_message(transcript_session_id, tm)
                 for invocation in tool_result.skill_invocations:
                     self.sessions.append_event(
-                        self._session_id,
+                        transcript_session_id,
                         {"type": "skill_invocation", **invocation},
                     )

@@ -71,6 +71,7 @@ COMMANDS = {
     "/memory": "Memory status and auto-memory toggle",
     "/resume": "List and resume previous sessions",
     "/compact": "Compress current conversation context",
+    "/QQchat": "Start, stop, or inspect QQ chat bridge",
     "/exit": "Exit chat",
 }
 
@@ -124,6 +125,16 @@ class SlashCompleter(Completer):
 
         if text.startswith("/compact"):
             yield Completion("/compact", start_position=-len(text), display="/compact — Compress current conversation context")
+            return
+
+        if text.lower().startswith("/qqchat"):
+            for cmd, desc in [
+                ("/QQchat start", "Start QQ chat bridge"),
+                ("/QQchat stop", "Stop QQ chat bridge"),
+                ("/QQchat status", "Inspect QQ chat bridge"),
+            ]:
+                if cmd.lower().startswith(text.lower()):
+                    yield Completion(cmd, start_position=-len(text), display=f"{cmd} - {desc}")
             return
 
         for cmd, desc in self._commands.items():

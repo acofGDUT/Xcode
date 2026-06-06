@@ -46,6 +46,7 @@ class SlashCommandDispatcher:
         memory_handler: Callable[[list[str]], None],
         resume_handler: Callable[[], None],
         compact_handler: Callable[[], None],
+        qqchat_handler: Callable[[list[str]], None] | None = None,
         registry: CommandRegistry | None = None,
     ) -> None:
         self._console = console
@@ -60,6 +61,7 @@ class SlashCommandDispatcher:
             "/memory": lambda parts: memory_handler(parts),
             "/resume": lambda parts: resume_handler(),
             "/compact": lambda parts: compact_handler(),
+            "/qqchat": lambda parts: qqchat_handler(parts) if qqchat_handler else self._console.print("QQchat is not available."),
         }
 
     def dispatch(self, command: str) -> SlashDispatchResult:

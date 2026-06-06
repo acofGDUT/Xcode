@@ -511,11 +511,38 @@ runtime status 写入：
 - skill invocation 的 transcript user event 保留 `/skill-name args` 展示文本，`metadata.model_content` 保留展开后的 hidden/model prompt；恢复 `_history` 时优先使用 `metadata.model_content`。
 - 当前不实现 CLI `--resume` / `--continue`，也不实现 rollback/fork。
 
-## 12. 当前文件职责
+## 12. QQ 外部聊天入口
+
+`/QQchat` 是 side-effect slash command，用于启动、停止和查看 QQ bot WebSocket bridge 状态；它不是 prompt command，不会进入普通 `_run_user_turn()`。
+
+当前第一版数据流：
+
+```text
+QQChatService
+  -> QQGatewayClient
+  -> QQEventNormalizer
+  -> QQMessageDedupe
+  -> ExternalTurnRunner
+  -> QQMessageClient
+```
+
+关键边界：
+
+- QQ turn 不复用当前 REPL `_history`。`ExternalTurnRunner` 按 conversation key 维护独立 session id 和独立 history。
+- 默认 conversation key：单聊为 `qq:c2c:{user_openid}`，群聊为 `qq:group:{group_openid}:member:{member_openid}`。
+- 默认入口级 `ToolScope.visible_tools` 和 `ToolScope.execution_allowlist` 都是 `read_file`、`grep`、`glob`、`task_list`。
+- schema 层会按 `ToolScope.visible_tools ∩ execution_allowlist` 过滤模型可见工具；execution 层会再次拒绝不在 allowlist 内的工具调用。
+- QQchat 不复用 skill frontmatter 的 `allowed-tools`。skill `allowed-tools` 只作为 skill metadata 保留，不是外部入口安全字段。
+- `QQGatewayClient` 的 WebSocket 依赖在 `start()` 内延迟导入；普通 CLI 启动不依赖真实 QQ 网络。
+- WebSocket 回调把 dispatch payload 交给 `QQChatService.handle_gateway_event()`；状态摘要由 `/QQchat status` 输出，后台线程不直接渲染终端 UI。
+- AppSecret、AccessToken 和完整 Authorization header 不写入项目配置、session transcript metadata 或错误输出。
+
+## 13. 当前文件职责
 
 | 文件 | 职责 |
 |------|------|
 | `src/xcode_cli/core/agent.py` | REPL 输入循环、普通 user turn orchestration、命令 handler glue、工具注册、LLM/tool loop orchestration |
+| `src/xcode_cli/core/external_turn.py` | 外部入口 headless turn runner、per-conversation session/history、入口级 `ToolScope` |
 | `src/xcode_cli/core/commands/dispatcher.py` | slash command 路由；区分 prompt command 和 side-effect command |
 | `src/xcode_cli/core/commands/slash.py` | slash command 列表和 prompt_toolkit 补全 |
 | `src/xcode_cli/core/commands/registry.py` | 合并 built-in prompt commands 与 project skill prompt commands |
@@ -549,8 +576,15 @@ runtime status 写入：
 | `src/xcode_cli/core/task_tracker.py` | task CRUD 和 task 工具工厂 |
 | `src/xcode_cli/core/sub_agent.py` | 子 Agent 执行 |
 | `src/xcode_cli/ui/renderer.py` | Rich Markdown / diff 渲染 |
+| `src/xcode_cli/qqchat/config.py` | QQchat 配置加载、项目级非敏感配置和 secret 安全摘要 |
+| `src/xcode_cli/qqchat/auth.py` | QQ AccessToken 获取、缓存、刷新和错误脱敏 |
+| `src/xcode_cli/qqchat/events.py` | QQ C2C/group 事件归一化和 conversation key |
+| `src/xcode_cli/qqchat/dedupe.py` | QQ `msg_id` 去重和 `msg_seq` 分配 |
+| `src/xcode_cli/qqchat/message_client.py` | QQ C2C/group 被动文本回复 HTTP client |
+| `src/xcode_cli/qqchat/gateway.py` | QQ WebSocket gateway payload、状态和后台线程骨架 |
+| `src/xcode_cli/qqchat/service.py` | `/QQchat` service 生命周期、事件去重、external runner 和 reply 编排 |
 
-## 13. 当前架构边界
+## 14. 当前架构边界
 
 - 不引入 `asyncio`。
 - 不提供专用 memory CRUD 工具。

@@ -44,10 +44,12 @@ class ToolCallExecutor:
         self,
         response: LLMResponse,
         blocked_tools: set[str] | list[str] | None = None,
+        tool_scope=None,
     ) -> ToolExecutionResult:
         executed_calls: list[tuple[Any, ToolOutput]] = []
         executed_count = 0
         blocked = set(blocked_tools or [])
+        execution_allowlist = set(tool_scope.execution_allowlist) if tool_scope is not None else None
         newly_blocked_tools: list[str] = []
         skill_invocations: list[dict[str, object]] = []
         skill_barrier_active = False
@@ -64,6 +66,12 @@ class ToolCallExecutor:
                 executed_calls.append((tc, ToolOutput(content=result)))
                 continue
 
+            if execution_allowlist is not None and tc.name not in execution_allowlist:
+                result = f"Tool error: tool '{tc.name}' is blocked by entry tool scope."
+                self.console.print(f"  [bold red]{result}[/bold red]")
+                executed_calls.append((tc, ToolOutput(content=result)))
+                continue
+
             if tc.name in blocked:
                 result = f"Tool error: tool '{tc.name}' is blocked for the current turn."
                 self.console.print(f"  [bold red]{result}[/bold red]")
@@ -73,6 +81,11 @@ class ToolCallExecutor:
             level = self.permissions.check(tc.name, is_read_only=self.tools.is_read_only(tc.name))
             if level == "deny":
                 result = f"Permission denied for tool: {tc.name}"
+                self.console.print(f"  [bold red]{result}[/bold red]")
+                executed_calls.append((tc, ToolOutput(content=result)))
+                continue
+            if level == "ask" and tool_scope is not None and not getattr(tool_scope, "remote_approval", False):
+                result = f"Tool error: tool '{tc.name}' requires local approval and remote approval is disabled."
                 self.console.print(f"  [bold red]{result}[/bold red]")
                 executed_calls.append((tc, ToolOutput(content=result)))
                 continue

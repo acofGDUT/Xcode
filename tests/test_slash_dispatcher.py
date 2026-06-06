@@ -134,6 +134,15 @@ class TestDispatchSideEffectCommands:
         assert result.kind == "handled"
         handler.assert_called_once()
 
+    def test_qqchat_dispatch_is_side_effect_command(self) -> None:
+        calls = []
+        dispatcher = _make_dispatcher(qqchat_handler=lambda parts: calls.append(parts))
+
+        result = dispatcher.dispatch("/QQchat status")
+
+        assert result.kind == "handled"
+        assert calls == [["/QQchat", "status"]]
+
 
 # ------------------------------------------------------------------
 # unknown command

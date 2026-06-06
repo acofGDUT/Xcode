@@ -32,11 +32,15 @@ class ToolRegistry:
     def get_openai_schemas(
         self,
         blocked_tools: set[str] | list[str] | None = None,
+        visible_tools: set[str] | list[str] | tuple[str, ...] | None = None,
     ) -> list[dict]:
         blocked = set(blocked_tools or [])
+        visible = set(visible_tools) if visible_tools is not None else None
         schemas: list[dict] = []
         for tool in self._tools.values():
             if tool.name in blocked:
+                continue
+            if visible is not None and tool.name not in visible:
                 continue
             schemas.append(
                 {

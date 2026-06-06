@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from xcode_cli.core.agent import AgentRuntime
+from xcode_cli.core.external_turn import ToolScope
 from xcode_cli.core.llm import LLMResponse, ToolCall
 
 
@@ -182,3 +183,61 @@ def test_llm_loop_buffer_then_render_prints_final_answer(tmp_path: Path, monkeyp
 
     assert result == "buffered final answer"
     assert printed == ["buffered final answer"]
+
+
+def test_llm_loop_filters_tool_schemas_for_entry_tool_scope(tmp_path: Path, monkeypatch) -> None:
+    agent = _make_agent(tmp_path, monkeypatch)
+    seen_tool_names: list[list[str]] = []
+
+    def fake_complete(**kwargs):
+        seen_tool_names.append(
+            [schema["function"]["name"] for schema in kwargs["tool_schemas"]]
+        )
+        return LLMResponse(content="scoped answer", tool_calls=[])
+
+    agent.llm.complete = fake_complete
+    scope = ToolScope(
+        source="qqchat",
+        visible_tools=("read_file", "grep"),
+        execution_allowlist=("read_file", "grep"),
+        remote_approval=False,
+    )
+
+    result = agent._run_llm_loop([], "system", tool_scope=scope)
+
+    assert result == "scoped answer"
+    assert "read_file" in seen_tool_names[0]
+    assert "grep" in seen_tool_names[0]
+    assert "write_file" not in seen_tool_names[0]
+    assert "run_shell" not in seen_tool_names[0]
+
+
+def test_llm_loop_blocks_tool_calls_outside_execution_scope(tmp_path: Path, monkeypatch) -> None:
+    agent = _make_agent(tmp_path, monkeypatch)
+    calls = [0]
+    scope = ToolScope(
+        source="qqchat",
+        visible_tools=("read_file",),
+        execution_allowlist=("read_file",),
+        remote_approval=False,
+    )
+
+    def fake_complete(**kwargs):
+        calls[0] += 1
+        if calls[0] == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(id="call_shell", name="run_shell", args={"command": "echo hi"})],
+            )
+        assert any(
+            m.get("role") == "tool" and "blocked by entry tool scope" in str(m.get("content", ""))
+            for m in kwargs["messages"]
+        )
+        return LLMResponse(content="continued safely", tool_calls=[])
+
+    agent.llm.complete = fake_complete
+
+    result = agent._run_llm_loop([], "system", tool_scope=scope)
+
+    assert result == "continued safely"
+    assert calls[0] == 2
