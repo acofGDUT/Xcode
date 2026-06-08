@@ -35,7 +35,7 @@ def _make_agent(tmp_path: Path, monkeypatch):
     import xcode_cli.core.agent as agent_mod
 
     project_dir = tmp_path / "project"
-    project_dir.mkdir()
+    project_dir.mkdir(exist_ok=True)
     monkeypatch.chdir(project_dir)
     _setup_tmp_xcode_home(tmp_path, monkeypatch)
     monkeypatch.setattr(agent_mod, "PromptSession", MagicMock(return_value=MagicMock()), raising=True)
@@ -141,3 +141,22 @@ def test_missing_qq_config_does_not_break_normal_turn(tmp_path: Path, monkeypatc
     agent._run_user_turn("hello")
 
     assert agent._history[-1] == {"role": "assistant", "content": "hi there"}
+
+
+def test_agent_runtime_passes_full_qqchat_config_to_service(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("QQ_BOT_APP_ID", "app")
+    monkeypatch.setenv("QQ_BOT_CLIENT_SECRET", "secret")
+
+    agent = _make_agent(tmp_path, monkeypatch)
+    project_config = Path(agent.cwd) / ".xcode" / "config.json"
+    project_config.parent.mkdir()
+    project_config.write_text(
+        json.dumps({"qqchat": {"enable_c2c": False, "max_reply_chars": 7}}),
+        encoding="utf-8",
+    )
+
+    agent = _make_agent(tmp_path, monkeypatch)
+
+    assert agent.qqchat_service is not None
+    assert agent.qqchat_service.status()["config"]["enable_c2c"] is False
+    assert agent.qqchat_service.status()["config"]["max_reply_chars"] == 7

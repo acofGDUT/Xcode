@@ -156,6 +156,7 @@ class AgentRuntime:
         gateway = QQGatewayClient(
             access_token_getter=auth_client.get_access_token,
             on_event=lambda payload: self.qqchat_service.handle_gateway_event(payload) if self.qqchat_service else None,
+            on_status=lambda message: self.qqchat_service.handle_gateway_status(message) if self.qqchat_service else None,
         )
         runner = ExternalTurnRunner(
             session_store=self.sessions,
@@ -167,7 +168,7 @@ class AgentRuntime:
             gateway=gateway,
             runner=runner,
             reply_client=reply_client,
-            default_tool_scope=qq_config.tool_scope,
+            config=qq_config,
         )
 
     def _build_external_system_prompt(self) -> str:
@@ -182,17 +183,15 @@ class AgentRuntime:
         tool_scope: ToolScope,
         session_id: str | None = None,
     ) -> str:
-        previous_blocked_tools = self._current_blocked_tools
-        self._current_blocked_tools = set()
-        try:
-            return self._run_llm_loop(
-                history=history,
-                system_prompt=system_prompt,
-                tool_scope=tool_scope,
-                session_id=session_id,
-            )
-        finally:
-            self._current_blocked_tools = previous_blocked_tools
+        return self._run_llm_loop(
+            history=history,
+            system_prompt=system_prompt,
+            tool_scope=tool_scope,
+            session_id=session_id,
+            render_output=False,
+            update_runtime_stats=False,
+            turn_blocked_tools=set(),
+        )
 
     def run_chat(self) -> None:
         self._session_id = self.sessions.new_session_id()
@@ -593,16 +592,24 @@ class AgentRuntime:
         system_prompt: str,
         tool_scope: ToolScope | None = None,
         session_id: str | None = None,
+        render_output: bool = True,
+        update_runtime_stats: bool = True,
+        turn_blocked_tools: set[str] | None = None,
     ) -> str:
         cfg = self.config_store.load()
         render_mode = cfg.response_render_mode
         assistant_turn_started = False
         transcript_session_id = self._session_id if session_id is None else session_id
+        active_blocked_tools = self._current_blocked_tools if turn_blocked_tools is None else turn_blocked_tools
 
-        renderer = StreamingTurnRenderer(
-            self.console,
-            render_mode=render_mode,
-            render_markdown=lambda text: self._print_assistant_bubble(text),
+        renderer = (
+            StreamingTurnRenderer(
+                self.console,
+                render_mode=render_mode,
+                render_markdown=lambda text: self._print_assistant_bubble(text),
+            )
+            if render_output
+            else None
         )
 
         while True:
@@ -613,10 +620,11 @@ class AgentRuntime:
                     after_messages = outcome.after_messages
                     history[:] = outcome.messages
                     saved_tokens = max(outcome.before_tokens - outcome.after_tokens, 0)
-                    self.console.print(
-                        f"[dim]Context compressed: {before_messages} -> {after_messages} messages, "
-                        f"saved ~{saved_tokens} tokens.[/dim]"
-                    )
+                    if render_output:
+                        self.console.print(
+                            f"[dim]Context compressed: {before_messages} -> {after_messages} messages, "
+                            f"saved ~{saved_tokens} tokens.[/dim]"
+                        )
                     if transcript_session_id:
                         self.compactor.write_checkpoint(transcript_session_id, outcome)
 
@@ -650,7 +658,8 @@ class AgentRuntime:
                 thinking_stop.set()
                 if thinking_thread is not None:
                     thinking_thread.join(timeout=0.2)
-                thinking_live.stop()
+                if render_output:
+                    thinking_live.stop()
 
             def on_token(token: str) -> None:
                 nonlocal first_text_token_elapsed_ms, assistant_prefix_printed, assistant_turn_started
@@ -659,27 +668,32 @@ class AgentRuntime:
                     first_text_token_elapsed_ms = elapsed * 1000
                     stop_thinking()
                 content_buffer.append(token)
+                if not render_output:
+                    return
                 if not assistant_prefix_printed:
                     if not assistant_turn_started:
                         self._render_assistant_prefix()
                         assistant_turn_started = True
                     assistant_prefix_printed = True
-                renderer.on_text_token(token)
+                if renderer is not None:
+                    renderer.on_text_token(token)
 
             def on_reasoning_token(token: str) -> None:
                 reasoning_buffer.append(token)
-                renderer.on_reasoning_token(token)
+                if render_output and renderer is not None:
+                    renderer.on_reasoning_token(token)
 
-            thinking_live.start()
-            thinking_thread = threading.Thread(target=thinking_loop, daemon=True)
-            thinking_thread.start()
+            if render_output:
+                thinking_live.start()
+                thinking_thread = threading.Thread(target=thinking_loop, daemon=True)
+                thinking_thread.start()
 
             try:
                 response = self.llm.complete(
                     system_prompt=system_prompt,
                     messages=history,
                     tool_schemas=self.tools.get_openai_schemas(
-                        blocked_tools=self._current_blocked_tools,
+                        blocked_tools=active_blocked_tools,
                         visible_tools=tool_scope.visible_tools if tool_scope is not None else None,
                     ),
                     on_text_token=on_token,
@@ -687,43 +701,49 @@ class AgentRuntime:
                 )
             except KeyboardInterrupt:
                 stop_thinking()
-                self.console.print("[dim]Interrupted.[/dim]")
+                if render_output:
+                    self.console.print("[dim]Interrupted.[/dim]")
                 return "Interrupted."
             finally:
                 stop_thinking()
-            self._estimated_tokens = self.context.estimate_tokens(history)
+            if update_runtime_stats:
+                self._estimated_tokens = self.context.estimate_tokens(history)
 
             total_ms = (time.monotonic() - start_time) * 1000
 
-            if content_buffer or reasoning_buffer:
+            if render_output and (content_buffer or reasoning_buffer):
                 first_text_ms = int(first_text_token_elapsed_ms or total_ms)
                 response_ms = max(int(total_ms - first_text_ms), 0)
                 self.console.print(f"[dim](思考 {first_text_ms}ms / 回复 {response_ms}ms)[/dim]")
 
             if not response.tool_calls:
                 final_text = response.content or ""
-                turn_result = renderer.finish(final_text)
-                if final_text and turn_result.needs_final_render:
-                    if not assistant_turn_started:
-                        self._render_assistant_prefix()
-                        assistant_turn_started = True
-                    if render_mode == "buffer_then_render":
-                        self._print_assistant_bubble(final_text)
+                if render_output and renderer is not None:
+                    turn_result = renderer.finish(final_text)
+                    if final_text and turn_result.needs_final_render:
+                        if not assistant_turn_started:
+                            self._render_assistant_prefix()
+                            assistant_turn_started = True
+                        if render_mode == "buffer_then_render":
+                            self._print_assistant_bubble(final_text)
                 if not final_text:
                     return "No response."
                 return final_text
 
             tool_result = self.tool_executor.execute(
                 response,
-                blocked_tools=self._current_blocked_tools,
+                blocked_tools=active_blocked_tools,
                 tool_scope=tool_scope,
+                render_output=render_output,
             )
             if tool_result.blocked_tools:
-                self._current_blocked_tools.update(tool_result.blocked_tools)
-            self._tool_call_count += tool_result.executed_count
+                active_blocked_tools.update(tool_result.blocked_tools)
+            if update_runtime_stats:
+                self._tool_call_count += tool_result.executed_count
             history.append(tool_result.assistant_message)
             history.extend(tool_result.tool_messages)
-            self._render_task_panel(response.tool_calls)
+            if render_output:
+                self._render_task_panel(response.tool_calls)
 
             if transcript_session_id:
                 self.sessions.append_message(transcript_session_id, tool_result.assistant_message)

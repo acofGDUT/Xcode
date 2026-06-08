@@ -159,6 +159,43 @@ Slash command 分两类：
 
 这两个阶段共享同一套 loader、catalog、prompt expansion 和 invocation metadata，不存在旧 `skill.json` / `enabled_skills` / system prompt 全量注入的第二套语义。
 
+### 6.0 分层总览
+
+Skill 机制分为五层，自底向上：
+
+```text
+Layer 0  数据模型        skills/model.py
+Layer 1  加载与校验      skills/loader.py, skills/catalog.py, skills/validation.py
+Layer 2  调用服务        skills/invocation.py, skills/prompt.py, skills/listing.py
+Layer 3  工具注册        core/tools/skill_tool.py, core/tool_registry.py
+Layer 4  执行与编排      core/tooling/execution.py, core/agent.py, core/commands/registry.py
+```
+
+**Layer 0 — 数据模型**（`skills/model.py`）
+
+`Skill` frozen dataclass，定义 skill 的不可变结构：`name`、`description`、`body`、`allowed_tools`、`when_to_use`、`disable_model_invocation`、`user_invocable`、`context`、`hooks`、`source_hash` 等。`SkillLoadResult` 持有批量加载结果和 notices。
+
+**Layer 1 — 加载与校验**
+
+- `SkillLoader`：从 `.xcode/skills/*/SKILL.md` 扫描加载，自制 YAML frontmatter 解析器，计算 `sha256:` source hash。
+- `SkillCatalog`：按名称归一化查找（忽略大小写和前导 `/`），按条件过滤 `user_invocable_skills()` 和 `model_invocable_skills()`，校验模型调用合法性。
+- `validate_skills()`：校验名称冲突、`allowed_tools` 工具名、`context=fork` 警告、`hooks` 警告。
+
+**Layer 2 — 调用服务**
+
+- `SkillInvocationService`：唯一的 skill 调用入口。`invoke_for_user()` 跳过模型校验，`invoke_for_model()` 完整校验。内部通过 `SkillPromptExpander.expand()` 展开 `$ARGUMENTS` 和 `${XCODE_SKILL_DIR}`，构造 `SkillInvocation`（含 display/model/audit 三份 metadata）。
+- `SkillListingFormatter`：生成 compact listing 注入 system prompt，三级降级预算控制（full → truncated → name_only → name_only_with_omissions）。
+
+**Layer 3 — 工具注册**
+
+`create_skill_tool()` 创建名为 `"skill"` 的 `ToolDef` 注册到 `ToolRegistry`，仅当存在 model_invocable skills 时注册。execute 逻辑调用 `invoke_for_model()`，返回 `<xcode_loaded_skill>` XML 标签包裹的展开内容，并声明 `blocked_tools=["skill"]` 触发防递归。
+
+**Layer 4 — 执行与编排**
+
+- `ToolCallExecutor`：skill barrier 机制（同 turn 阻断后续 tool calls）+ 防递归 blocked-tools 收集。
+- `CommandRegistry.from_skills()`：为 user-invocable skills 注册 slash commands。
+- `AgentRuntime`：初始化链（loader → catalog → invocation service → command registry → 条件注册 skill tool）、system prompt 注入 listing、`_run_llm_loop` 中累积 blocked_tools 和写入 session transcript。
+
 ### 6.1 Skill 目录包
 
 当前只从项目目录加载 skills：
@@ -521,8 +558,11 @@ runtime status 写入：
 QQChatService
   -> QQGatewayClient
   -> QQEventNormalizer
+  -> QQChatConfig policy
   -> QQMessageDedupe
+  -> qqchat-worker queue
   -> ExternalTurnRunner
+  -> headless LLM/tool loop
   -> QQMessageClient
 ```
 
@@ -531,11 +571,119 @@ QQChatService
 - QQ turn 不复用当前 REPL `_history`。`ExternalTurnRunner` 按 conversation key 维护独立 session id 和独立 history。
 - 默认 conversation key：单聊为 `qq:c2c:{user_openid}`，群聊为 `qq:group:{group_openid}:member:{member_openid}`。
 - 默认入口级 `ToolScope.visible_tools` 和 `ToolScope.execution_allowlist` 都是 `read_file`、`grep`、`glob`、`task_list`。
-- schema 层会按 `ToolScope.visible_tools ∩ execution_allowlist` 过滤模型可见工具；execution 层会再次拒绝不在 allowlist 内的工具调用。
+- schema 层会按 `ToolScope.visible_tools ∩ execution_allowlist` 过滤模型可见工具；execution 层会再次拒绝不在 allowlist 内的工具调用，并对 `source == "qqchat"` 强制 `ToolDef.is_read_only`。
 - QQchat 不复用 skill frontmatter 的 `allowed-tools`。skill `allowed-tools` 只作为 skill metadata 保留，不是外部入口安全字段。
 - `QQGatewayClient` 的 WebSocket 依赖在 `start()` 内延迟导入；普通 CLI 启动不依赖真实 QQ 网络。
-- WebSocket 回调把 dispatch payload 交给 `QQChatService.handle_gateway_event()`；状态摘要由 `/QQchat status` 输出，后台线程不直接渲染终端 UI。
+- WebSocket 回调只把 dispatch payload 交给 `QQChatService.handle_gateway_event()` 入队；`qqchat-worker` 串行执行 runner 和 reply，避免 gateway 线程被 LLM/tool loop 阻塞。
+- QQ external turn 走 `_run_external_llm_loop()`，该路径调用普通 `_run_llm_loop()` 的 headless 模式：不创建 streaming renderer、不启动 Rich Live、不打印工具摘要、不更新本地 bottom toolbar 工具计数。
+- `QQChatConfig` 在 normalize 后、dedupe 前执行：`enabled`、`enable_c2c`、`enable_group_at`、`group_allowlist`、`owner_openids`、`group_turn_timeout_seconds`、`c2c_turn_timeout_seconds` 都会影响消息是否进入 runner。
+- `max_reply_chars` 在发送前截断被动回复，避免长回复直接打到 QQ HTTP 接口限制。
+- Gateway status 通过 `on_status -> QQChatService.handle_gateway_status()` 进入 service，`/QQchat status` 可看到最近断线、重连、heartbeat 或 gateway 错误。
 - AppSecret、AccessToken 和完整 Authorization header 不写入项目配置、session transcript metadata 或错误输出。
+
+### 12.1 QQchat 运行时数据流
+
+```mermaid
+sequenceDiagram
+    participant QQ as QQ Gateway
+    participant G as QQGatewayClient
+    participant S as QQChatService
+    participant W as qqchat-worker
+    participant R as ExternalTurnRunner
+    participant L as Headless LLM/tool loop
+    participant API as QQ OpenAPI
+
+    QQ->>G: Dispatch C2C/GROUP_AT
+    G->>S: handle_gateway_event(payload)
+    S->>S: normalize + policy + dedupe
+    S->>W: queue message
+    W->>R: run(conversation_key, UserTurnInput, ToolScope)
+    R->>L: headless external user turn
+    L-->>R: assistant final text
+    R-->>W: ExternalTurnResult
+    W->>API: POST /v2/users 或 /v2/groups
+```
+
+`QQChatService.handle_gateway_event()` 不直接调用 LLM。它只完成轻量同步工作：事件归一化、配置策略过滤、`msg_id` 去重和入队。真正的 runner 调用在 `qqchat-worker` 线程中串行完成。这样即使 QQ 侧瞬时重复投递或 LLM 响应较慢，也不会让 WebSocket 回调线程长时间卡住。
+
+### 12.2 配置策略
+
+`QQChatConfig` 分三类：
+
+| 字段 | 作用 |
+|------|------|
+| `app_id`, `client_secret` | QQ AccessToken 鉴权；`client_secret` 只允许环境变量或用户级私密配置提供，项目配置不能覆盖 |
+| `enabled`, `enable_c2c`, `enable_group_at` | 控制 `/QQchat` 是否可启动，以及是否处理单聊/群聊事件 |
+| `group_allowlist`, `owner_openids` | 限制群 openid 和发送者 openid；非空时必须命中才进入 runner |
+| `tool_scope` | 入口级工具可见性与执行 allowlist；会被 `sanitize_tool_scope()` 再收窄 |
+| `max_reply_chars` | 发送 QQ 被动回复前的最大字符数 |
+| `group_turn_timeout_seconds`, `c2c_turn_timeout_seconds` | 根据 QQ 事件 timestamp 丢弃过期消息，避免超过被动回复窗口后继续跑 turn |
+
+策略顺序是：normalize 成 `QQIncomingMessage` 后先检查配置，再调用 dedupe。被配置拒绝的消息不会消耗 `msg_id` 去重记录，也不会进入 worker 队列。
+
+### 12.3 工具安全四层检查
+
+QQ 外部入口的工具执行经过四层独立检查，任一层拒绝即可阻止执行：
+
+```text
+Layer 1: sanitize_tool_scope (external_turn.py)
+  构造阶段过滤 FORBIDDEN_EXTERNAL_TOOLS 黑名单
+      ↓ 通过
+Layer 2: schema visible_tools (tool_registry.py)
+  schema 暴露阶段只给模型看到 visible_tools
+      ↓ 通过
+Layer 3: execution_allowlist + is_read_only (execution.py)
+  执行阶段检查工具是否在白名单内
+  QQ 来源还必须是 ToolDef.is_read_only
+      ↓ 通过
+Layer 4: permissions + remote_approval (execution.py + permissions.py)
+  权限阶段检查 ask 级工具是否需要本地审批
+```
+
+**Layer 1 — `sanitize_tool_scope`（构造阶段）**
+
+`FORBIDDEN_EXTERNAL_TOOLS` 硬编码黑名单，从 `execution_allowlist` 和 `visible_tools` 中移除：
+
+| 黑名单工具 | 原因 |
+|-----------|------|
+| `write_file` | 写文件 |
+| `edit_file` | 编辑文件 |
+| `run_shell` | 执行 shell 命令 |
+| `dispatch_agent` | 派发子 Agent |
+| `skill` | 加载 skill（可间接执行任意工具） |
+
+此层在 `ExternalTurnRunner.run()` 和 `QQChatService._coerce_tool_scope()` 中调用，确保配置文件即使写了危险工具也会被移除。
+
+**Layer 2 — schema 可见性**
+
+`ToolRegistry.get_openai_schemas()` 接收 `visible_tools`，只把 `ToolScope.visible_tools` 中的工具 schema 暴露给模型。被隐藏的工具通常不会被模型调用。
+
+**Layer 3 — `execution_allowlist` 与只读检查（执行阶段）**
+
+`ToolCallExecutor.execute()` 会检查工具是否在 `tool_scope.execution_allowlist` 中。不在白名单内的工具直接返回 `"blocked by entry tool scope"` 错误，不执行。对 `source == "qqchat"`，即使工具被用户加入 allowlist，也必须满足 `ToolRegistry.is_read_only(tool_name)`；因此 `task_create`、`task_update`、`write_plan` 这类非只读本地状态修改工具会在 execution 层被拒绝。
+
+**Layer 4 — `permissions` + `remote_approval`（执行阶段）**
+
+`ToolCallExecutor.execute()` 最后调用 `PermissionManager.check()`：
+
+1. 调用 `PermissionManager.check()` 获取权限等级（`allow` / `deny` / `ask`）。
+2. `deny` → 拒绝。
+3. `ask` + `remote_approval=False` → 拒绝（QQ 来源在 sanitize 阶段被强制设为 `remote_approval=False`）。
+4. `ask` + `remote_approval=True` → 理论上允许，但当前 QQ 入口不可能出现。
+5. `allow` → 放行。
+
+### 12.4 Gateway reconnect/resume
+
+`QQGatewayClient.start()` 先获取 `/gateway` 地址，再启动 `qq-gateway` 线程。线程内每次创建一个 `websocket-client` `WebSocketApp`：
+
+- `on_open`：有 `session_id` 时发送 `op=6 Resume`，否则发送 `op=2 Identify`。
+- `op=10 Hello`：启动 heartbeat 线程，按 QQ 下发 interval 发送 `op=1`，payload 为最新 `seq`。
+- `op=0 READY`：保存 `session_id` 和最新 `seq`。
+- `op=7 Reconnect`：关闭当前 socket，标记重连。
+- `op=9 Invalid Session`：清空 `session_id` 和 `seq`，关闭当前 socket，下一次连接重新 Identify。
+- `run_forever()` 意外返回：按指数退避重新获取 gateway URL 并重连。
+
+所有 gateway 错误、断线、重连状态都通过 `on_status` 进入 `QQChatService.last_error`，由 `/QQchat status` 展示。AccessToken 会在 gateway 错误字符串中脱敏。
 
 ## 13. 当前文件职责
 
@@ -581,8 +729,8 @@ QQChatService
 | `src/xcode_cli/qqchat/events.py` | QQ C2C/group 事件归一化和 conversation key |
 | `src/xcode_cli/qqchat/dedupe.py` | QQ `msg_id` 去重和 `msg_seq` 分配 |
 | `src/xcode_cli/qqchat/message_client.py` | QQ C2C/group 被动文本回复 HTTP client |
-| `src/xcode_cli/qqchat/gateway.py` | QQ WebSocket gateway payload、状态和后台线程骨架 |
-| `src/xcode_cli/qqchat/service.py` | `/QQchat` service 生命周期、事件去重、external runner 和 reply 编排 |
+| `src/xcode_cli/qqchat/gateway.py` | QQ WebSocket identify/heartbeat/resume/reconnect、gateway 状态回传 |
+| `src/xcode_cli/qqchat/service.py` | `/QQchat` service 生命周期、配置策略、queue worker、external runner 和 reply 编排 |
 
 ## 14. 当前架构边界
 

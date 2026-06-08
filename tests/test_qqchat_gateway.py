@@ -16,6 +16,14 @@ class FakeGatewayTransport:
         return 200, {"url": "wss://api.sgroup.qq.com/websocket/"}
 
 
+class FakeWebSocket:
+    def __init__(self):
+        self.closed = 0
+
+    def close(self):
+        self.closed += 1
+
+
 def test_group_and_c2c_intents_bitmask():
     assert GROUP_AND_C2C_INTENTS == 1 << 25
 
@@ -114,3 +122,67 @@ def test_gateway_error_masks_token():
 
     assert "secret-token" not in message
     assert "401" in message
+
+
+def test_reconnect_opcode_closes_socket_and_reports_status():
+    statuses = []
+    client = QQGatewayClient(
+        access_token_getter=lambda: "token",
+        transport=FakeGatewayTransport(),
+        on_status=statuses.append,
+    )
+    websocket = FakeWebSocket()
+    client._websocket_app = websocket
+
+    client.handle_payload({"op": 7, "s": 10, "t": None, "d": None})
+
+    assert websocket.closed == 1
+    assert any("reconnect" in status.lower() for status in statuses)
+
+
+def test_invalid_session_clears_resume_state():
+    statuses = []
+    client = QQGatewayClient(
+        access_token_getter=lambda: "token",
+        transport=FakeGatewayTransport(),
+        on_status=statuses.append,
+    )
+    client.handle_payload({"op": 0, "s": 7, "t": "READY", "d": {"session_id": "session-1"}})
+
+    client.handle_payload({"op": 9, "s": 8, "t": None, "d": False})
+
+    assert client.session_id is None
+    assert client.seq is None
+    assert any("invalid session" in status.lower() for status in statuses)
+
+
+def test_run_forever_reconnects_after_unexpected_return():
+    statuses = []
+    created_apps = []
+
+    class App:
+        def __init__(self, url, on_open=None, on_message=None, on_error=None, on_close=None):
+            self.url = url
+            self.closed = 0
+            created_apps.append(self)
+
+        def run_forever(self):
+            return None
+
+        def close(self):
+            self.closed += 1
+
+    client = QQGatewayClient(
+        access_token_getter=lambda: "token",
+        transport=FakeGatewayTransport(),
+        on_status=statuses.append,
+        websocket_app_factory=App,
+        sleep=lambda _seconds: None,
+        max_reconnect_attempts=1,
+    )
+
+    client.start()
+    assert client.wait_until_stopped(timeout=1)
+
+    assert len(created_apps) == 2
+    assert any("reconnect" in status.lower() for status in statuses)

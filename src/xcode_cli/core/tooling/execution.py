@@ -45,6 +45,7 @@ class ToolCallExecutor:
         response: LLMResponse,
         blocked_tools: set[str] | list[str] | None = None,
         tool_scope=None,
+        render_output: bool = True,
     ) -> ToolExecutionResult:
         executed_calls: list[tuple[Any, ToolOutput]] = []
         executed_count = 0
@@ -54,7 +55,8 @@ class ToolCallExecutor:
         skill_invocations: list[dict[str, object]] = []
         skill_barrier_active = False
 
-        self._render_tool_calls(response.tool_calls)
+        if render_output:
+            self._render_tool_calls(response.tool_calls)
 
         for tc in response.tool_calls:
             if skill_barrier_active:
@@ -62,38 +64,54 @@ class ToolCallExecutor:
                     f"Tool error: tool '{tc.name}' must be called in the next assistant step "
                     "after the loaded skill takes effect."
                 )
-                self.console.print(f"  [bold red]{result}[/bold red]")
+                if render_output:
+                    self.console.print(f"  [bold red]{result}[/bold red]")
                 executed_calls.append((tc, ToolOutput(content=result)))
                 continue
 
             if execution_allowlist is not None and tc.name not in execution_allowlist:
                 result = f"Tool error: tool '{tc.name}' is blocked by entry tool scope."
-                self.console.print(f"  [bold red]{result}[/bold red]")
+                if render_output:
+                    self.console.print(f"  [bold red]{result}[/bold red]")
+                executed_calls.append((tc, ToolOutput(content=result)))
+                continue
+
+            if (
+                tool_scope is not None
+                and getattr(tool_scope, "source", None) == "qqchat"
+                and not self.tools.is_read_only(tc.name)
+            ):
+                result = f"Tool error: tool '{tc.name}' is blocked by entry tool scope because it is not read-only."
+                if render_output:
+                    self.console.print(f"  [bold red]{result}[/bold red]")
                 executed_calls.append((tc, ToolOutput(content=result)))
                 continue
 
             if tc.name in blocked:
                 result = f"Tool error: tool '{tc.name}' is blocked for the current turn."
-                self.console.print(f"  [bold red]{result}[/bold red]")
+                if render_output:
+                    self.console.print(f"  [bold red]{result}[/bold red]")
                 executed_calls.append((tc, ToolOutput(content=result)))
                 continue
 
             level = self.permissions.check(tc.name, is_read_only=self.tools.is_read_only(tc.name))
             if level == "deny":
                 result = f"Permission denied for tool: {tc.name}"
-                self.console.print(f"  [bold red]{result}[/bold red]")
+                if render_output:
+                    self.console.print(f"  [bold red]{result}[/bold red]")
                 executed_calls.append((tc, ToolOutput(content=result)))
                 continue
             if level == "ask" and tool_scope is not None and not getattr(tool_scope, "remote_approval", False):
                 result = f"Tool error: tool '{tc.name}' requires local approval and remote approval is disabled."
-                self.console.print(f"  [bold red]{result}[/bold red]")
+                if render_output:
+                    self.console.print(f"  [bold red]{result}[/bold red]")
                 executed_calls.append((tc, ToolOutput(content=result)))
                 continue
 
             scope = self.approval.scope_for_tool(tc.name)
             is_memory_write = self._is_memory_write_tool_call(tc.name, tc.args)
 
-            if tc.name in {"edit_file", "write_file"}:
+            if render_output and tc.name in {"edit_file", "write_file"}:
                 file_path = str(tc.args.get("path", ""))
                 old_text = ""
                 if file_path:
@@ -124,18 +142,21 @@ class ToolCallExecutor:
                     )
 
             if is_memory_write and level != "deny":
-                self.console.print("  [dim]approval: memory auto-allow[/dim]")
+                if render_output:
+                    self.console.print("  [dim]approval: memory auto-allow[/dim]")
             elif scope and self.auto_approve.get(scope):
-                self.console.print("  [dim]approval: auto-yes (this conversation)[/dim]")
+                if render_output:
+                    self.console.print("  [dim]approval: auto-yes (this conversation)[/dim]")
             elif level == "ask":
-                if tc.name == "run_shell":
+                if render_output and tc.name == "run_shell":
                     cmd = str(tc.args.get("command", ""))
                     self.console.print("  [dim]Review: command preview before approval[/dim]")
                     self.console.print(f"  [bold yellow]$ {cmd}[/bold yellow]")
                 approval_result = self.approval.prompt(tc.name, scope)
                 if approval_result == "no":
                     result = f"User denied tool: {tc.name}"
-                    self.console.print(f"  [dim]{result}[/dim]")
+                    if render_output:
+                        self.console.print(f"  [dim]{result}[/dim]")
                     executed_calls.append((tc, ToolOutput(content=result)))
                     continue
                 if approval_result == "yes_all" and scope:
@@ -144,15 +165,17 @@ class ToolCallExecutor:
             try:
                 output = self.tools.execute(tc.name, tc.args)
             except KeyboardInterrupt:
-                self.console.print("  [dim]Interrupted.[/dim]")
+                if render_output:
+                    self.console.print("  [dim]Interrupted.[/dim]")
                 output = ToolOutput(content="Error: user interrupted the operation")
 
             executed_count += 1
-            if output.content.startswith("Error:"):
-                self.console.print(f"  [bold red]{output.content}[/bold red]")
-            else:
-                summary = self._summarize_tool_result(tc.name, tc.args, output.content)
-                self.console.print(f"  [dim]→ {summary}[/dim]")
+            if render_output:
+                if output.content.startswith("Error:"):
+                    self.console.print(f"  [bold red]{output.content}[/bold red]")
+                else:
+                    summary = self._summarize_tool_result(tc.name, tc.args, output.content)
+                    self.console.print(f"  [dim]→ {summary}[/dim]")
 
             if output.audit_metadata.get("kind") == "skill_invocation":
                 skill_invocations.append(dict(output.audit_metadata))

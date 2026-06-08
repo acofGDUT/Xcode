@@ -400,7 +400,34 @@ Review 与验证：
 - 代码和自动化回归已进入最终验证前状态。
 - 真实 QQ 平台和原生 Windows 终端手工验收未执行，不能声称 `/QQchat` 已完整完成真实接入。
 
-## 20. 当前阻塞和遗留
+## 20. QQ `/QQchat` review 加固：2026-06-08
+
+背景：QQ 第一版实现完成后，review 发现四类风险：gateway callback 内同步跑带 UI 的 LLM loop、配置访问控制字段未执行、QQ `ToolScope` 不是严格只读、gateway reconnect/status 不完整。
+
+本次修复：
+
+- `QQChatService.handle_gateway_event()` 改为 normalize -> config policy -> dedupe -> queue；`qqchat-worker` 串行执行 `ExternalTurnRunner` 和 `QQMessageClient`。
+- `AgentRuntime._run_external_llm_loop()` 走 headless `_run_llm_loop()` 参数，不渲染 terminal UI、不启动 Rich Live、不更新本地工具统计，并使用 external turn 独立 blocked-tools set。
+- `ToolCallExecutor` 对 `tool_scope.source == "qqchat"` 强制 `ToolDef.is_read_only`，防止 `task_create`、`task_update`、`write_plan` 等非只读工具通过配置 allowlist 修改本地状态。
+- `QQChatConfig` 的 `enabled`、`enable_c2c`、`enable_group_at`、`group_allowlist`、`owner_openids`、`max_reply_chars`、C2C/group timeout 已在 service 层执行。
+- `QQGatewayClient` 支持 `op=7 Reconnect`、`op=9 Invalid Session`、`run_forever()` 意外返回后的 reconnect/backoff，并将 status 回传到 `/QQchat status`。
+
+新增/更新回归覆盖：
+
+- service queue 不在 gateway callback 内同步跑 runner。
+- 禁用 C2C、非 allowlist 群、非 owner openid 不进入 runner。
+- 长回复按 `max_reply_chars` 截断，过期群消息丢弃。
+- external loop 不渲染终端、不更新本地工具计数。
+- QQ scope 中 allowlisted 非只读工具被 execution 层拒绝。
+- gateway op7/op9/reconnect/status 回传。
+
+仍未执行：
+
+- 真实 QQ 单聊被动回复验收。
+- 真实 QQ 群聊 @ 被动回复验收。
+- 原生 PowerShell/cmd.exe 中 `/QQchat start` 与 prompt_toolkit 并存手工验收。
+
+## 21. 当前阻塞和遗留
 
 | 项目 | 状态 | 说明 |
 |------|------|------|
@@ -425,7 +452,7 @@ Review 与验证：
 | 原生 Windows E2E | 未完成 | 需要在 cmd.exe/PowerShell 验证完整交互 |
 | Phase 5 | 冻结 | 不作为近期默认开发目标 |
 
-## 21. 下一步
+## 22. 下一步
 
 1. 评估 skills 后续能力：fork skill runtime、hooks 安全边界、paths 自动激活、remote skills 和 skill search。
 2. 做原生 cmd.exe/PowerShell 交互验收，重点覆盖审批菜单、diff preview、工具摘要折叠、多轮 tool call、`/resume`、`/compact`。

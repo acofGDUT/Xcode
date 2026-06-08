@@ -629,14 +629,18 @@ Phase 5 当前冻结。后续如果解冻，建议逐项设计和验收，不一
 
 ## 15. Phase 6：外部聊天入口候选
 
-QQ `/QQchat` 代码已实现并通过自动化测试；真实 QQ 平台验收未执行，不能标记为完整完成。
+QQ `/QQchat` 代码已实现并通过自动化测试；2026-06-08 已补 review 加固。真实 QQ 平台验收未执行，不能标记为完整完成。
 
 当前已实现：
 
 - `/QQchat start|stop|status` side-effect command。
 - WebSocket gateway payload、C2C/group event normalization、`msg_id` 去重和被动文本回复 payload。
 - `ExternalTurnRunner` 为每个 QQ conversation key 维护独立 session/history。
-- 入口级只读 `ToolScope`，schema 层和 execution 层双重收窄，不复用 skill `allowed-tools`。
+- `QQChatService` queue worker：gateway callback 只做 normalize、配置策略、dedupe 和入队，不直接跑 LLM。
+- external turn 使用 headless LLM/tool loop，不在本地 terminal 渲染 QQ 对话、不更新本地工具统计。
+- 入口级只读 `ToolScope`，schema 层、execution allowlist、`is_read_only` 和 remote approval 四层收窄，不复用 skill `allowed-tools`。
+- `QQChatConfig` 的 enable/allowlist/owner/timeout/max reply 策略已在 service 层执行。
+- Gateway 支持 `op=7`、`op=9`、断线后 reconnect/resume，并把状态回传到 `/QQchat status`。
 - AppSecret、AccessToken、Authorization header 的错误和 metadata 脱敏回归测试。
 
 未执行/未完成：

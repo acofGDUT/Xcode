@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Callable, Mapping
@@ -63,18 +64,43 @@ class QQGatewayClient:
         transport=None,
         on_event: Callable[[dict[str, Any]], None] | None = None,
         on_status: Callable[[str], None] | None = None,
+        websocket_app_factory=None,
+        sleep: Callable[[float], None] | None = None,
+        reconnect_base_delay: float = 1.0,
+        max_reconnect_attempts: int | None = None,
     ) -> None:
         self._access_token_getter = access_token_getter
         self._transport = transport or UrllibGatewayTransport()
         self._on_event = on_event
         self._on_status = on_status
+        self._websocket_app_factory = websocket_app_factory
+        self._sleep = sleep or time.sleep
+        self._reconnect_base_delay = reconnect_base_delay
+        self._max_reconnect_attempts = max_reconnect_attempts
         self._seq: int | None = None
         self._session_id: str | None = None
         self._last_access_token = ""
         self._stop_event = threading.Event()
+        self._reconnect_requested = False
         self._thread: threading.Thread | None = None
         self._heartbeat_thread: threading.Thread | None = None
         self._websocket_app = None
+
+    @property
+    def on_event(self) -> Callable[[dict[str, Any]], None] | None:
+        return self._on_event
+
+    @on_event.setter
+    def on_event(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
+        self._on_event = callback
+
+    @property
+    def on_status(self) -> Callable[[str], None] | None:
+        return self._on_status
+
+    @on_status.setter
+    def on_status(self, callback: Callable[[str], None] | None) -> None:
+        self._on_status = callback
 
     @property
     def seq(self) -> int | None:
@@ -104,13 +130,27 @@ class QQGatewayClient:
         if isinstance(seq, int):
             self._seq = seq
 
+        op = payload.get("op")
+        if op == 7:
+            self._reconnect_requested = True
+            self._emit_status("QQ gateway reconnect requested")
+            self._close_websocket()
+            return
+        if op == 9:
+            self._session_id = None
+            self._seq = None
+            self._reconnect_requested = True
+            self._emit_status("QQ gateway invalid session; reconnecting with identify")
+            self._close_websocket()
+            return
+
         event_type = payload.get("t")
         if event_type == "READY":
             data = payload.get("d")
             if isinstance(data, Mapping) and isinstance(data.get("session_id"), str):
                 self._session_id = data["session_id"]
 
-        if payload.get("op") == 0 and event_type in {QQ_EVENT_C2C_MESSAGE_CREATE, QQ_EVENT_GROUP_AT_MESSAGE_CREATE}:
+        if op == 0 and event_type in {QQ_EVENT_C2C_MESSAGE_CREATE, QQ_EVENT_GROUP_AT_MESSAGE_CREATE}:
             if self._on_event is None:
                 return
             try:
@@ -123,10 +163,23 @@ class QQGatewayClient:
             return
 
         self._stop_event.clear()
+        self._reconnect_requested = False
         gateway_url = self.fetch_gateway_url()
+        websocket_app_factory = self._websocket_app_factory or self._load_websocket_app_factory()
 
+        self._thread = threading.Thread(
+            target=lambda: self._run_forever_loop(gateway_url, websocket_app_factory),
+            name="qq-gateway",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _load_websocket_app_factory(self):
         import websocket  # type: ignore[import-not-found]
 
+        return websocket.WebSocketApp
+
+    def _build_websocket_app(self, gateway_url: str, websocket_app_factory):
         def on_open(ws) -> None:
             access_token = self._get_access_token()
             if self._session_id:
@@ -158,7 +211,7 @@ class QQGatewayClient:
         def on_close(_ws, _status_code, _message) -> None:
             self._emit_status("QQ gateway websocket closed")
 
-        self._websocket_app = websocket.WebSocketApp(
+        return websocket_app_factory(
             gateway_url,
             on_open=on_open,
             on_message=on_message,
@@ -166,24 +219,50 @@ class QQGatewayClient:
             on_close=on_close,
         )
 
-        def run() -> None:
+    def _run_forever_loop(self, gateway_url: str, websocket_app_factory) -> None:
+        reconnect_attempts = 0
+        while not self._stop_event.is_set():
+            self._websocket_app = self._build_websocket_app(gateway_url, websocket_app_factory)
             try:
                 self._websocket_app.run_forever()
             except Exception as exc:
                 self._emit_status(f"QQ gateway run loop failed: {self._sanitize(str(exc))}")
 
-        self._thread = threading.Thread(target=run, name="qq-gateway", daemon=True)
-        self._thread.start()
+            if self._stop_event.is_set():
+                return
+            if self._max_reconnect_attempts is not None and reconnect_attempts >= self._max_reconnect_attempts:
+                self._emit_status("QQ gateway reconnect limit reached")
+                return
+
+            reconnect_attempts += 1
+            if self._reconnect_requested:
+                self._reconnect_requested = False
+            else:
+                self._emit_status("QQ gateway disconnected; reconnecting")
+
+            delay = min(self._reconnect_base_delay * (2 ** max(reconnect_attempts - 1, 0)), 30.0)
+            if delay > 0:
+                self._sleep(delay)
+            if self._stop_event.is_set():
+                return
+            try:
+                gateway_url = self.fetch_gateway_url()
+            except Exception as exc:
+                self._emit_status(f"QQ gateway reconnect fetch failed: {self._sanitize(str(exc))}")
 
     def stop(self) -> None:
         self._stop_event.set()
-        if self._websocket_app is not None:
-            try:
-                self._websocket_app.close()
-            except Exception as exc:
-                self._emit_status(f"QQ gateway close failed: {self._sanitize(str(exc))}")
+        self._close_websocket()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2)
+        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            self._heartbeat_thread.join(timeout=2)
+
+    def wait_until_stopped(self, *, timeout: float = 1.0) -> bool:
+        if self._thread is None:
+            return True
+        self._thread.join(timeout=timeout)
+        return not self._thread.is_alive()
 
     def _start_heartbeat(self, ws, interval_seconds: float) -> None:
         if self._heartbeat_thread and self._heartbeat_thread.is_alive():
@@ -204,6 +283,14 @@ class QQGatewayClient:
         access_token = self._access_token_getter()
         self._last_access_token = access_token
         return access_token
+
+    def _close_websocket(self) -> None:
+        if self._websocket_app is None:
+            return
+        try:
+            self._websocket_app.close()
+        except Exception as exc:
+            self._emit_status(f"QQ gateway close failed: {self._sanitize(str(exc))}")
 
     def _safe_reason(self, body: object) -> str:
         if isinstance(body, Mapping):

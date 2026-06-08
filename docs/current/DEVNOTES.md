@@ -513,7 +513,7 @@ Review 注意：
 **状态**：Mitigated
 **关联**：ROADMAP Phase 6 / `/QQchat`
 
-2026-06-05 已实现 `/QQchat start|stop|status` 第一版代码，并通过自动化测试。真实 QQ 平台验收、原生 PowerShell/cmd.exe 手工验收仍未执行，因此不能把该能力标记为完整完成。
+2026-06-05 已实现 `/QQchat start|stop|status` 第一版代码。2026-06-08 对 review findings 做了安全加固：QQ event 进入 service 后先做配置策略、去重和入队，真正的 external turn 在 `qqchat-worker` 中串行执行；external loop 使用 headless 模式，不在前端渲染、不启动 Rich Live、不更新本地工具计数。真实 QQ 平台验收、原生 PowerShell/cmd.exe 手工验收仍未执行，因此不能把该能力标记为完整完成。
 
 设计结论：
 
@@ -525,7 +525,11 @@ Review 注意：
 - QQchat 的 `ToolScope` / `entry_tool_scope` 是外部入口安全边界，不复用 skill frontmatter 的 `allowed-tools`；后者只表示 skill 的工具需求/允许/可预授权 metadata，不是 turn 级严格白名单。
 - 远程 QQ 用户不能审批危险工具。`write_file`、`edit_file`、`run_shell` 这类工具即使未来开放，也必须由本机 owner 在终端内确认。
 - QQ turn 不复用当前 REPL 的 `_history`；`ExternalTurnRunner` 为每个 QQ conversation key 维护独立 session/history。
+- QQ turn 不在前端做渲染。不要从 gateway callback 或 worker 直接调用会打印 Rich/Live/prompt_toolkit UI 的路径。
 - `ToolScope.visible_tools` 和 `execution_allowlist` 会先移除危险工具，再取交集；如果配置只列危险工具，则回退到安全默认只读工具。
+- execution 层对 `source == "qqchat"` 还会强制 `ToolDef.is_read_only`；`task_create`、`task_update`、`write_plan` 这类本地状态修改工具即使出现在 allowlist 里也会被拒绝。
+- `QQChatConfig.enabled`、`enable_c2c`、`enable_group_at`、`group_allowlist`、`owner_openids`、`max_reply_chars` 和回复时间窗口已在 service 层执行；后续新增配置字段要补同层回归测试。
+- Gateway 要处理 `op=7 Reconnect`、`op=9 Invalid Session` 和 `run_forever()` 意外退出；status 必须回传到 `/QQchat status`，不要只写后台线程日志。
 - AppSecret、AccessToken、完整 Authorization header 不得进入项目配置、session transcript metadata、audit event、错误输出或测试快照。
 - 被动回复受 `msg_id`、`msg_seq` 和 QQ 平台时间窗口限制；重复 `msg_id` 不会再次触发 runner。
 - 后续如果做 Webhook，需要单独设计签名校验、公网 HTTPS 回调、端口限制和重放防护。
@@ -543,3 +547,4 @@ Review 注意：
 - 群聊默认按 `group_openid + member_openid` 隔离上下文，避免多人上下文污染。
 - 被动回复要按 `msg_id + msg_seq` 去重，防止 QQ 重复投递导致重复回复。
 - 群聊被动回复窗口只有 5 分钟，长时间 coding 任务不适合直接在 QQ 群里跑。
+- QQchat 相关测试应覆盖 service queue、headless external loop、只读 tool scope、配置策略、gateway reconnect/status；不能只测 happy path payload。

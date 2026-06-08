@@ -130,18 +130,22 @@ xcode qqchat start
 sequenceDiagram
     participant QQ as QQ Gateway
     participant Bot as QQChatService
+    participant W as qqchat-worker
     participant X as Xcode ExternalTurnRunner
-    participant L as LLM/tool loop
+    participant L as Headless LLM/tool loop
     participant API as QQ OpenAPI
 
     QQ->>Bot: C2C_MESSAGE_CREATE / GROUP_AT_MESSAGE_CREATE
     Bot->>Bot: 校验事件类型、提取 openid、msg_id、content
+    Bot->>Bot: 执行 enable/allowlist/owner/timeout 配置策略
     Bot->>Bot: 按 msg_id 去重
-    Bot->>X: 转为 UserTurnInput(metadata=qq, entry_tool_scope=只读)
-    X->>L: 运行普通 Xcode user turn
+    Bot->>W: 入队，gateway callback 返回
+    W->>X: 转为 UserTurnInput(metadata=qq, entry_tool_scope=只读)
+    X->>L: 运行 headless external turn
     L-->>X: assistant final text
-    X-->>Bot: 返回待发送文本
-    Bot->>API: POST /v2/users 或 /v2/groups 被动回复
+    X-->>W: 返回待发送文本
+    W->>W: 按 max_reply_chars 截断
+    W->>API: POST /v2/users 或 /v2/groups 被动回复
 ```
 
 ## 7. 会话映射
@@ -179,10 +183,13 @@ QQ 接入必须默认保守：
 - QQchat 使用入口级 `ToolScope` 收窄工具范围，不复用 skill frontmatter 的 `allowed-tools`；后者只是 skill metadata，不是当前 turn 的严格白名单。
 - 默认 `ToolScope.visible_tools` 和 `ToolScope.execution_allowlist` 都只包含只读工具。
 - 禁止第一版从 QQ 触发 `write_file`、`edit_file`、`run_shell`、git、删除、安装依赖等高风险动作。
+- execution 层对 QQ 来源强制 `ToolDef.is_read_only`，所以 `task_create`、`task_update`、`write_plan` 这类本地状态修改工具即使被写进 allowlist 也会被拒绝。
 - 即使后续开放危险工具，也必须走本机 owner 审批，不能只由 QQ 远程用户批准。
-- 群聊默认需要 allowlist，避免机器人被拉入未知群后暴露本地 Xcode。
+- `enable_c2c`、`enable_group_at`、`group_allowlist` 和 `owner_openids` 在 service 层执行；群聊建议配置 allowlist，避免机器人被拉入未知群后暴露本地 Xcode。
 - 默认不写 auto memory，或为 QQ turn 使用 `auto_memory=false` 的 system prompt。
 - 所有 QQ 事件和回复都要写审计日志，但日志中不能保存 AppSecret 或 AccessToken。
+
+QQchat 不在前端做渲染。QQ 消息进入 `qqchat-worker` 后走 headless external loop，不启动 Rich Live、不打印工具摘要、不和 prompt_toolkit 抢屏。用户可通过 `/QQchat status` 查看最近 gateway 状态、处理消息数、发送回复数和默认 ToolScope 摘要。
 
 建议 QQ turn 的模型内容包装为：
 
@@ -221,6 +228,7 @@ Message:
 | websocket disconnected | WebSocket 断开或 heartbeat 失败 | 查看 `/QQchat status` 最近错误，必要时 stop 后重新 start |
 | reply window expired | QQ 被动回复窗口过期，群聊通常只有 5 分钟 | 避免在群聊里执行长时间任务，必要时缩短回复链路 |
 | dangerous tool blocked | QQ turn 请求 `write_file`、`edit_file`、`run_shell` 等危险工具 | 第一版默认拒绝，远程 QQ 用户不能审批 |
+| websocket reconnecting | 收到 `op=7`、`op=9` 或 `run_forever()` 意外返回 | 查看 `/QQchat status`；客户端会按 session/seq 尝试 resume，invalid session 会重新 identify |
 
 ### Windows 手工验收记录
 
