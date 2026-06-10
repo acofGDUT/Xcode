@@ -9,7 +9,9 @@ from typing import Any
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import ANSI
 
+from xcode_cli.core.session_resume import ResumeReplayMessage
 from xcode_cli.core.session_resume import SessionResumeBuilder
+from xcode_cli.core.session_resume import build_resume_replay_messages
 from xcode_cli.core.tooling.approval import read_key
 
 
@@ -71,6 +73,9 @@ class ResumeCommandService:
 
         # 选中后执行恢复
         selected_session = sessions[selected]
+        return self._restore_selected_session(selected_session)
+
+    def _restore_selected_session(self, selected_session) -> ResumeResult | None:
         resume_budget = int(self.context.max_tokens * 0.6)
         builder = SessionResumeBuilder(self.context, resume_budget)
         result = builder.build(selected_session.path)
@@ -84,6 +89,9 @@ class ResumeCommandService:
         self.console.print(f"Estimated context: ~{result.estimated_tokens} tokens")
         if selected_session.last_user_input:
             self.console.print(f"Latest user input: {selected_session.last_user_input[:100]}")
+
+        replay_messages = build_resume_replay_messages(selected_session.path)
+        self._render_recent_conversation(replay_messages)
 
         return ResumeResult(
             history=result.history,
@@ -125,28 +133,31 @@ class ResumeCommandService:
             return None
 
         selected = sessions[idx]
-        resume_budget = int(self.context.max_tokens * 0.6)
-        builder = SessionResumeBuilder(self.context, resume_budget)
-        result = builder.build(selected.path)
-        if not result.history:
-            self.console.print("Failed to load session history.")
-            return None
+        return self._restore_selected_session(selected)
 
-        self.console.print(f"Resumed session {selected.session_id}")
-        self.console.print(f"Restored from checkpoint: {'yes' if result.restored_from_checkpoint else 'no'}")
-        self.console.print(f"Restored messages: {result.message_count}")
-        self.console.print(f"Estimated context: ~{result.estimated_tokens} tokens")
-        if selected.last_user_input:
-            self.console.print(f"Latest user input: {selected.last_user_input[:100]}")
+    def _render_recent_conversation(self, messages: list[ResumeReplayMessage]) -> None:
+        self.console.print()
+        if not messages:
+            self.console.print(
+                "No user/assistant messages after the latest checkpoint.",
+                style="dim",
+                markup=False,
+                highlight=False,
+            )
+            return
 
-        return ResumeResult(
-            history=result.history,
-            session_id=selected.session_id,
-            restored_from_checkpoint=result.restored_from_checkpoint,
-            message_count=result.message_count,
-            estimated_tokens=result.estimated_tokens,
-            last_user_input=selected.last_user_input,
+        self.console.print(
+            "Recent conversation since checkpoint:",
+            style="bold",
+            markup=False,
+            highlight=False,
         )
+        for message in messages:
+            label = "you" if message.role == "user" else "assistant"
+            style = "bold cyan" if message.role == "user" else "bold green"
+            self.console.print(label, style=style, markup=False, highlight=False)
+            for line in message.content.splitlines() or [""]:
+                self.console.print(f"  {line}", markup=False, highlight=False)
 
     def _render_session_list(self, sessions, selected: int) -> None:
         """渲染 session 列表"""

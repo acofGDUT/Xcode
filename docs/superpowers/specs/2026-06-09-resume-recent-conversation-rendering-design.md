@@ -1,6 +1,8 @@
 # `/resume` 恢复后最近对话渲染设计
 
-> 本文定义 `/resume` 成功恢复 session 后，在终端中展示最新 checkpoint 之后用户与助手最近对话记录的增量能力。当前任务只写 spec 和 plan，不直接修改功能代码。
+> 本文定义 `/resume` 成功恢复 session 后，在终端中展示最新 checkpoint 之后用户与助手最近对话记录的增量能力。
+
+实施状态：2026-06-10 已完成代码实现、自动化回归和真实 PowerShell/cmd.exe 手工验收。
 
 ## 背景
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from dataclasses import replace
 from typing import Any
 
 from prompt_toolkit import PromptSession
@@ -45,6 +46,9 @@ from xcode_cli.core.tools.skill_tool import create_skill_tool
 from xcode_cli.core.turn import UserTurnInput, coerce_user_turn_input
 from xcode_cli.mcp.config import MCPConfig, MCPServerConfig, load_mcp_config
 from xcode_cli.mcp.connection import MCPConnectionManager
+from xcode_cli.mcp.catalog import MCPCatalogTool
+from xcode_cli.mcp.events import MCPEvent
+from xcode_cli.mcp.state import MAX_MCP_TOOL_OUTPUT_LIMIT, MCPStateStore
 from xcode_cli.mcp.tools import create_mcp_tool_defs
 from xcode_cli.mcp.trust import MCPTrustStore, compute_server_fingerprint
 from xcode_cli.qqchat.auth import QQAuthClient
@@ -66,7 +70,10 @@ class AgentRuntime:
         self._project_key = self.sessions.project_key()
         self.mcp_config: MCPConfig = load_mcp_config(self.cwd, env=os.environ)
         self.mcp_trust = MCPTrustStore()
+        self.mcp_state_store = MCPStateStore(self._project_key)
         self.mcp_manager: MCPConnectionManager | None = None
+        self._mcp_tool_catalog: list[MCPCatalogTool] = []
+        self._mcp_events: list[MCPEvent] = []
         self._mcp_tool_warnings: list[str] = []
         self._runtime_status = RuntimeStatusStore()
         self.skill_loader = SkillLoader(self.cwd)
@@ -351,11 +358,35 @@ class AgentRuntime:
     def _handle_mcp_command(self, parts: list[str]) -> None:
         action = parts[1].lower() if len(parts) > 1 else "status"
         if action == "status":
-            self._print_mcp_status()
+            self._print_mcp_status(verbose="--verbose" in parts[2:])
+            return
+        if action == "tools":
+            self._handle_mcp_tools_command(parts)
             return
         if action == "reload":
             self._reload_mcp_servers()
             self._print_mcp_status()
+            return
+        if action == "enable":
+            self._handle_mcp_enable_command(parts, enabled=True)
+            return
+        if action == "disable":
+            self._handle_mcp_enable_command(parts, enabled=False)
+            return
+        if action == "tool":
+            self._handle_mcp_tool_command(parts)
+            return
+        if action == "refresh":
+            self._handle_mcp_refresh_command(parts)
+            return
+        if action == "reconnect":
+            self._handle_mcp_reconnect_command(parts)
+            return
+        if action == "events":
+            self._handle_mcp_events_command(parts)
+            return
+        if action == "output-limit":
+            self._handle_mcp_output_limit_command(parts)
             return
         if action == "trust":
             if len(parts) < 3:
@@ -371,9 +402,10 @@ class AgentRuntime:
             self._reload_mcp_servers()
             self.console.print(f"MCP server '{parts[2]}' untrusted.")
             return
-        self.console.print("Usage: /mcp status|trust <server>|untrust <server>|reload", markup=False, highlight=False)
+        self.console.print(_mcp_usage(), markup=False, highlight=False)
 
-    def _print_mcp_status(self) -> None:
+    def _print_mcp_status(self, *, verbose: bool = False) -> None:
+        self._drain_mcp_refresh_events()
         table = Table(title="MCP")
         table.add_column("Server")
         table.add_column("Status")
@@ -390,11 +422,11 @@ class AgentRuntime:
                 details.append(status.error_summary)
             details.extend(status.warnings)
             table.add_row(
-                status.name,
-                status.status,
-                str(status.tool_count),
-                _short_fingerprint(status.fingerprint),
-                "\n".join(details),
+                _table_text(status.name),
+                _table_text(status.status),
+                _table_text(str(status.tool_count)),
+                _table_text(_short_fingerprint(status.fingerprint)),
+                _table_text("\n".join(details)),
             )
 
         for server in self.mcp_config.servers:
@@ -402,11 +434,174 @@ class AgentRuntime:
                 continue
             fingerprint = compute_server_fingerprint(self._project_key, server)
             status = "disabled" if not server.enabled else "untrusted"
-            table.add_row(server.name, status, "0", _short_fingerprint(fingerprint), "")
+            table.add_row(
+                _table_text(server.name),
+                _table_text(status),
+                _table_text("0"),
+                _table_text(_short_fingerprint(fingerprint)),
+                _table_text(""),
+            )
 
         for warning in [*self.mcp_config.warnings, *self._mcp_tool_warnings]:
-            table.add_row("(warning)", "", "", "", warning)
+            table.add_row(_table_text("(warning)"), _table_text(""), _table_text(""), _table_text(""), _table_text(warning))
         self.console.print(table)
+        if verbose:
+            self._print_mcp_tools_table()
+
+    def _handle_mcp_tools_command(self, parts: list[str]) -> None:
+        server_name = parts[2] if len(parts) > 2 else None
+        if server_name is not None and self._find_mcp_server(server_name) is None:
+            self.console.print(f"Unknown MCP server: {server_name}", markup=False, highlight=False)
+            return
+        self._drain_mcp_refresh_events()
+        self._print_mcp_tools_table(server_name=server_name)
+
+    def _print_mcp_tools_table(self, server_name: str | None = None) -> None:
+        table = Table(title="MCP Tools")
+        table.add_column("Server")
+        table.add_column("Tool")
+        table.add_column("Registered")
+        table.add_column("State")
+        table.add_column("Read-only")
+        table.add_column("Output limit")
+        table.add_column("Warnings")
+        entries = [
+            entry
+            for entry in self._mcp_tool_catalog
+            if server_name is None or entry.server_name == server_name
+        ]
+        if not entries:
+            table.add_row(
+                _table_text(server_name or "(all)"),
+                _table_text("(none)"),
+                _table_text(""),
+                _table_text(""),
+                _table_text(""),
+                _table_text(""),
+                _table_text(""),
+            )
+        for entry in entries:
+            table.add_row(
+                _table_text(entry.server_name),
+                _table_text(entry.original_name),
+                _table_text(entry.registered_name or ""),
+                _table_text(entry.state),
+                _table_text(str(entry.read_only)),
+                _table_text(f"{entry.output_limit} ({entry.output_limit_source})"),
+                _table_text("; ".join(entry.schema_warnings)),
+            )
+        self.console.print(table)
+
+    def _handle_mcp_enable_command(self, parts: list[str], *, enabled: bool) -> None:
+        if len(parts) < 3:
+            verb = "enable" if enabled else "disable"
+            self.console.print(f"Usage: /mcp {verb} <server>", markup=False, highlight=False)
+            return
+        server_name = parts[2]
+        if self._find_mcp_server(server_name) is None:
+            self.console.print(f"Unknown MCP server: {server_name}", markup=False, highlight=False)
+            return
+        self.mcp_state_store.set_server_enabled(server_name, enabled)
+        self._reload_mcp_servers()
+        state = "enabled" if enabled else "disabled"
+        self.console.print(f"MCP server '{server_name}' {state}.", markup=False, highlight=False)
+
+    def _handle_mcp_tool_command(self, parts: list[str]) -> None:
+        if len(parts) < 5 or parts[2].lower() not in {"enable", "disable"}:
+            self.console.print("Usage: /mcp tool enable|disable <server> <tool>", markup=False, highlight=False)
+            return
+        enabled = parts[2].lower() == "enable"
+        server_name = parts[3]
+        tool_name = parts[4]
+        if self._find_mcp_server(server_name) is None:
+            self.console.print(f"Unknown MCP server: {server_name}", markup=False, highlight=False)
+            return
+        entry = self._find_mcp_catalog_tool(server_name, tool_name)
+        if entry is None:
+            self.console.print(f"Unknown MCP tool: {server_name}.{tool_name}", markup=False, highlight=False)
+            return
+        if enabled and entry.state in {"disabled_by_config", "invalid_schema", "name_conflict"}:
+            self.console.print(
+                f"Cannot enable MCP tool '{server_name}.{tool_name}' while state is {entry.state}.",
+                markup=False,
+                highlight=False,
+            )
+            return
+        self.mcp_state_store.set_tool_enabled(server_name, tool_name, enabled)
+        self._rebuild_mcp_tool_registry()
+        state = "enabled" if enabled else "disabled"
+        self.console.print(f"MCP tool '{server_name}.{tool_name}' {state}.", markup=False, highlight=False)
+
+    def _handle_mcp_refresh_command(self, parts: list[str]) -> None:
+        if len(parts) > 2 and self._find_mcp_server(parts[2]) is None:
+            self.console.print(f"Unknown MCP server: {parts[2]}", markup=False, highlight=False)
+            return
+        server_name = parts[2] if len(parts) > 2 else None
+        targets = self._refresh_mcp_tools(server_name)
+        self.console.print(self._mcp_operation_message("refresh", targets), markup=False, highlight=False)
+
+    def _handle_mcp_reconnect_command(self, parts: list[str]) -> None:
+        if len(parts) > 2 and self._find_mcp_server(parts[2]) is None:
+            self.console.print(f"Unknown MCP server: {parts[2]}", markup=False, highlight=False)
+            return
+        server_name = parts[2] if len(parts) > 2 else None
+        targets = self._reconnect_mcp_servers(server_name)
+        self.console.print(self._mcp_operation_message("reconnect", targets), markup=False, highlight=False)
+
+    def _handle_mcp_events_command(self, parts: list[str]) -> None:
+        if len(parts) > 2 and self._find_mcp_server(parts[2]) is None:
+            self.console.print(f"Unknown MCP server: {parts[2]}", markup=False, highlight=False)
+            return
+        self._collect_mcp_manager_events()
+        server_name = parts[2] if len(parts) > 2 else None
+        events = getattr(self, "_mcp_events", [])
+        if server_name is not None:
+            events = [event for event in events if event.server_name == server_name]
+        if not events:
+            self.console.print("No MCP events recorded.", markup=False, highlight=False)
+            return
+        table = Table(title="MCP Events")
+        table.add_column("Time")
+        table.add_column("Server")
+        table.add_column("Kind")
+        table.add_column("Message")
+        for event in events[-100:]:
+            table.add_row(
+                _table_text(time.strftime("%H:%M:%S", time.localtime(event.ts))),
+                _table_text(event.server_name),
+                _table_text(event.kind),
+                _table_text(event.message),
+            )
+        self.console.print(table)
+
+    def _handle_mcp_output_limit_command(self, parts: list[str]) -> None:
+        if len(parts) < 5:
+            self.console.print("Usage: /mcp output-limit <server> <tool> <chars|default>", markup=False, highlight=False)
+            return
+        server_name, tool_name, raw_value = parts[2], parts[3], parts[4]
+        if self._find_mcp_server(server_name) is None:
+            self.console.print(f"Unknown MCP server: {server_name}", markup=False, highlight=False)
+            return
+        if self._find_mcp_catalog_tool(server_name, tool_name) is None:
+            self.console.print(f"Unknown MCP tool: {server_name}.{tool_name}", markup=False, highlight=False)
+            return
+        value: int | None
+        if raw_value.lower() == "default":
+            value = None
+        else:
+            try:
+                value = int(raw_value)
+            except ValueError:
+                self.console.print(_invalid_mcp_output_limit_message(), markup=False, highlight=False)
+                return
+        try:
+            self.mcp_state_store.set_tool_output_limit(server_name, tool_name, value)
+        except ValueError:
+            self.console.print(_invalid_mcp_output_limit_message(), markup=False, highlight=False)
+            return
+        self._rebuild_mcp_tool_registry()
+        label = "default" if value is None else str(value)
+        self.console.print(f"MCP tool '{server_name}.{tool_name}' output limit set to {label}.", markup=False, highlight=False)
 
     def _trust_mcp_server(self, server_name: str) -> None:
         server = self._find_mcp_server(server_name)
@@ -446,21 +641,108 @@ class AgentRuntime:
                 return server
         return None
 
+    def _find_mcp_catalog_tool(self, server_name: str, tool_name: str) -> MCPCatalogTool | None:
+        for entry in self._mcp_tool_catalog:
+            if entry.server_name == server_name and entry.original_name == tool_name:
+                return entry
+        return None
+
     def _reload_mcp_servers(self) -> None:
         self._shutdown_mcp_manager()
         self.mcp_config = load_mcp_config(self.cwd, env=os.environ)
         self._mcp_tool_warnings = []
+        self._mcp_tool_catalog = []
         self._remove_mcp_tools()
         self._initialize_mcp_manager()
         self._register_mcp_tools()
+
+    def _rebuild_mcp_tool_registry(self) -> None:
+        self._mcp_tool_catalog = []
+        self._mcp_tool_warnings = []
+        self._remove_mcp_tools()
+        self._register_mcp_tools()
+
+    def _drain_mcp_refresh_events(self) -> None:
+        if self.mcp_manager is None:
+            return
+        self._collect_mcp_manager_events()
+        pending_func = getattr(self.mcp_manager, "pending_refresh_servers", None)
+        pending = set(pending_func()) if callable(pending_func) else set()
+        if not pending:
+            return
+        refresh_func = getattr(self.mcp_manager, "refresh_tools_sync", None)
+        if not callable(refresh_func):
+            return
+        for server_name in sorted(pending):
+            refresh_func(server_name)
+        self._collect_mcp_manager_events()
+        self._rebuild_mcp_tool_registry()
+
+    def _refresh_mcp_tools(self, server_name: str | None = None) -> list[str]:
+        if self.mcp_manager is None:
+            self._rebuild_mcp_tool_registry()
+            return []
+        refresh_func = getattr(self.mcp_manager, "refresh_tools_sync", None)
+        if not callable(refresh_func):
+            self._rebuild_mcp_tool_registry()
+            return []
+        if server_name is not None:
+            server_names = [server_name]
+        else:
+            server_names = [
+                status.name
+                for status in self.mcp_manager.statuses()
+                if getattr(status, "status", "") == "connected"
+            ]
+        for name in server_names:
+            refresh_func(name)
+        self._collect_mcp_manager_events()
+        self._rebuild_mcp_tool_registry()
+        return server_names
+
+    def _reconnect_mcp_servers(self, server_name: str | None = None) -> list[str]:
+        if self.mcp_manager is None:
+            self._reload_mcp_servers()
+            return [server.name for server in self.mcp_config.servers if server_name is None or server.name == server_name]
+        reconnect_func = getattr(self.mcp_manager, "reconnect_sync", None)
+        if not callable(reconnect_func):
+            self._reload_mcp_servers()
+            return [server.name for server in self.mcp_config.servers if server_name is None or server.name == server_name]
+        reconnect_func(server_name)
+        self._collect_mcp_manager_events()
+        self._rebuild_mcp_tool_registry()
+        return [server.name for server in self.mcp_config.servers if server_name is None or server.name == server_name]
+
+    def _mcp_operation_message(self, action: str, target_names: list[str]) -> str:
+        statuses = self.mcp_manager.statuses() if self.mcp_manager is not None else []
+        status_by_name = {status.name: status for status in statuses}
+        problematic = {
+            "failed",
+            "untrusted",
+            "disabled",
+        }
+        if any(status_by_name.get(name) is not None and status_by_name[name].status in problematic for name in target_names):
+            return f"MCP {action} requested; check /mcp status."
+        if action == "refresh":
+            return "MCP tools refreshed."
+        return "MCP servers reconnected."
+
+    def _collect_mcp_manager_events(self) -> None:
+        drain_func = getattr(self.mcp_manager, "drain_events", None) if self.mcp_manager is not None else None
+        if not callable(drain_func):
+            return
+        if not hasattr(self, "_mcp_events"):
+            self._mcp_events = []
+        self._mcp_events.extend(drain_func())
 
     def _initialize_mcp_manager(self) -> None:
         if not self.mcp_config.servers:
             self.mcp_manager = None
             return
         try:
+            effective_config = self._effective_mcp_config()
             self.mcp_manager = MCPConnectionManager(
-                config=self.mcp_config,
+                config=effective_config,
                 trust_store=self.mcp_trust,
                 project_key=self._project_key,
             )
@@ -472,19 +754,30 @@ class AgentRuntime:
     def _register_mcp_tools(self) -> None:
         if self.mcp_manager is None:
             return
-        tool_defs, warnings = create_mcp_tool_defs(
+        project_state = self.mcp_state_store.load()
+        self._mcp_tool_warnings.extend(project_state.warnings)
+        tool_defs, warnings, catalog = create_mcp_tool_defs(
             connection_manager=self.mcp_manager,
             config=self.mcp_config,
+            project_state=project_state,
             existing_names=set(self.tools.list_names()),
         )
         self._mcp_tool_warnings.extend(warnings)
+        self._mcp_tool_catalog = catalog
         for tool in tool_defs:
             self.tools.register(tool)
 
     def _remove_mcp_tools(self) -> None:
-        for name in list(self.tools.list_names()):
-            if name.startswith("mcp__"):
-                self.tools._tools.pop(name, None)
+        self.tools.unregister_prefix("mcp__")
+
+    def _effective_mcp_config(self) -> MCPConfig:
+        state = self.mcp_state_store.load()
+        servers = []
+        for server in self.mcp_config.servers:
+            server_state = state.servers.get(server.name)
+            enabled = server.enabled and not (server_state is not None and server_state.enabled is False)
+            servers.append(replace(server, enabled=enabled))
+        return replace(self.mcp_config, servers=tuple(servers))
 
     def _shutdown_mcp_manager(self) -> None:
         if self.mcp_manager is None:
@@ -850,6 +1143,7 @@ class AgentRuntime:
                 thinking_thread.start()
 
             try:
+                self._drain_mcp_refresh_events()
                 response = self.llm.complete(
                     system_prompt=system_prompt,
                     messages=history,
@@ -940,3 +1234,19 @@ def _mcp_command_is_risky(server: MCPServerConfig) -> bool:
     if command == "docker" and "run" in args:
         return True
     return any(pattern in joined for pattern in ("pnpm dlx", "docker run", "npx -y"))
+
+
+def _mcp_usage() -> str:
+    return (
+        "Usage: /mcp status [--verbose]|tools [server]|enable <server>|disable <server>|"
+        "tool enable|disable <server> <tool>|refresh [server]|reconnect [server]|events [server]|"
+        "output-limit <server> <tool> <chars|default>|trust <server>|untrust <server>|reload"
+    )
+
+
+def _invalid_mcp_output_limit_message() -> str:
+    return f"Invalid output limit; expected 1..{MAX_MCP_TOOL_OUTPUT_LIMIT} or default."
+
+
+def _table_text(value: object) -> Text:
+    return Text(str(value))

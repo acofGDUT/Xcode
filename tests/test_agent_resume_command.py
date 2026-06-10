@@ -168,6 +168,51 @@ class TestResumeSuccessful:
         assert len(agent._history) == 3
         assert agent._history[0] == {"role": "user", "content": "q1"}
 
+    def test_resume_renders_recent_conversation_after_checkpoint(
+        self, tmp_path: Path, monkeypatch, capsys
+    ) -> None:
+        agent = _make_agent(tmp_path, monkeypatch)
+        sid = agent.sessions.new_session_id()
+        _write_transcript(agent.sessions, sid, [
+            {"role": "user", "content": "old question"},
+            {"role": "assistant", "content": "old answer"},
+        ])
+        agent.sessions.append_event(sid, {"type": "compaction_checkpoint", "summary": "old summary"})
+        _write_transcript(agent.sessions, sid, [
+            {
+                "role": "user",
+                "content": "/review src/foo.py",
+                "metadata": {"model_content": "FULL HIDDEN SKILL PROMPT"},
+            },
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "secret tool output"},
+            {"role": "assistant", "content": "final answer"},
+        ])
+
+        mock_prompt = agent.prompt.prompt
+        mock_prompt.return_value = "1"
+
+        agent._handle_resume_command()
+        captured = capsys.readouterr()
+
+        assert "Recent conversation since checkpoint:" in captured.out
+        assert "/review src/foo.py" in captured.out
+        assert "final answer" in captured.out
+        assert "old question" not in captured.out
+        assert "secret tool output" not in captured.out
+        assert "FULL HIDDEN SKILL PROMPT" not in captured.out
+        assert any(m.get("content") == "FULL HIDDEN SKILL PROMPT" for m in agent._history)
+
     def test_resume_loads_tool_calls(self, tmp_path: Path, monkeypatch) -> None:
         agent = _make_agent(tmp_path, monkeypatch)
         sid = agent.sessions.new_session_id()

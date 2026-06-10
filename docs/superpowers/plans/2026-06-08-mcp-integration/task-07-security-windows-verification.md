@@ -45,9 +45,9 @@ pytest tests/test_mcp_config.py tests/test_mcp_trust.py tests/test_mcp_naming_sc
 
 Expected: PASS。
 
-- [ ] **Step 4: 原生 PowerShell 手工验收**
+- [x] **Step 4: 原生 PowerShell 手工验收**
 
-状态：用户反馈已基本完成，待补具体命令、现象和结果记录后勾选。
+状态：2026-06-10 用户确认通过。
 
 记录：
 
@@ -59,11 +59,13 @@ Expected: PASS。
 - 调用 `mcp__server__tool` 出现审批 UI。
 - `/exit` 后 fake server 进程退出。
 
-- [ ] **Step 5: 原生 cmd.exe 手工验收**
+- [x] **Step 5: 原生 cmd.exe 手工验收**
 
-状态：用户反馈已基本完成，待补具体命令、现象和结果记录后勾选。
+状态：2026-06-10 用户确认通过。
 
 同 PowerShell，重点看路径、中文、审批菜单和进程退出。
+
+验收结论：PowerShell/cmd.exe 均覆盖 fake stdio server、untrusted 不启动、trust/reload 后 connected、MCP tool 审批 UI 和 `/exit` 后子进程退出。
 
 - [x] **Step 6: Review 检查点**
 

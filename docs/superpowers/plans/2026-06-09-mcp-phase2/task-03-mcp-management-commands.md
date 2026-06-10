@@ -32,7 +32,7 @@
 
 ## Steps
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 覆盖：
 
@@ -45,7 +45,7 @@
 - unknown server/tool 输出 usage 或可读错误，不崩。
 - 输出关闭 Rich markup 解析。
 
-- [ ] **Step 2: 更新 slash command 列表和补全**
+- [x] **Step 2: 更新 slash command 列表和补全**
 
 补全至少覆盖：
 
@@ -60,7 +60,7 @@
 - `/mcp events`
 - `/mcp output-limit `
 
-- [ ] **Step 3: 实现命令 handler**
+- [x] **Step 3: 实现命令 handler**
 
 建议拆小 helper：
 
@@ -75,7 +75,7 @@ _handle_mcp_output_limit_command(parts)
 
 不要让 `_handle_mcp_command()` 继续无限膨胀。
 
-- [ ] **Step 4: 接入 state store 和 registry rebuild**
+- [x] **Step 4: 接入 state store 和 registry rebuild**
 
 命令写 state 后应调用统一的 MCP rebuild 方法：
 
@@ -85,7 +85,7 @@ _rebuild_mcp_tool_registry()
 
 server enable/disable 需要 reload 或 reconnect，具体策略在实现中保持可审查。
 
-- [ ] **Step 5: 运行聚焦测试**
+- [x] **Step 5: 运行聚焦测试**
 
 Run:
 
@@ -95,7 +95,7 @@ pytest tests/test_mcp_management_command.py tests/test_mcp_command.py tests/test
 
 Expected: PASS。
 
-- [ ] **Step 6: Codex review 检查点**
+- [x] **Step 6: Codex review 检查点**
 
 Review 重点：
 
@@ -103,3 +103,12 @@ Review 重点：
 - disable 是否从 ToolRegistry 和 schema 中移除工具。
 - 命令是否写本机 state 而非项目 config。
 - 输出是否不泄露 env values。
+
+Review 记录（2026-06-10）：
+
+- 实现文件：`src/xcode_cli/core/agent.py`、`src/xcode_cli/core/commands/slash.py`。
+- 验证：`pytest tests\test_mcp_management_command.py tests\test_mcp_command.py tests\test_slash_dispatcher.py -q`：38 passed。
+- 验证：`pytest tests\test_mcp_state.py tests\test_mcp_catalog.py tests\test_mcp_tools.py tests\test_mcp_management_command.py tests\test_mcp_command.py tests\test_mcp_agent_integration.py -q`：58 passed。
+- 验证：`python -m py_compile src\xcode_cli\core\agent.py src\xcode_cli\core\commands\slash.py src\xcode_cli\mcp\state.py src\xcode_cli\mcp\catalog.py src\xcode_cli\mcp\tools.py src\xcode_cli\core\tool_registry.py`：通过。
+- Review 结论：通过。`/mcp enable` 只写 local state，不写 trust；effective config 保证 local disable 阻止 server 启动且 local enable 不能覆盖 config `enabled=false`；tool disable 通过 `_rebuild_mcp_tool_registry()` 从 `ToolRegistry` 和 OpenAI schema 移除；命令写 `mcp_state.json`，不写项目 `.xcode/mcp.json`；tools/status 表格使用 `Text` cell，测试覆盖 Rich markup 不被解析且 env value 不输出。
+- 说明：`/mcp refresh` 当前先做安全 registry rebuild；`/mcp reconnect` 当前走 reload，真实 tools/list refresh 与 lifecycle event 细化留给 Task 4/5。

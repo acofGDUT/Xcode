@@ -19,7 +19,7 @@
 
 ## Steps
 
-- [ ] **Step 1: 写失败测试 `tests/test_mcp_catalog.py`**
+- [x] **Step 1: 写失败测试 `tests/test_mcp_catalog.py`**
 
 覆盖：
 
@@ -32,7 +32,7 @@
 - name conflict 状态为 `name_conflict`，不覆盖内置工具或同 server 工具。
 - registered tool 保留 original name、registered name、read_only、output limit。
 
-- [ ] **Step 2: 实现 catalog 数据结构**
+- [x] **Step 2: 实现 catalog 数据结构**
 
 建议：
 
@@ -57,7 +57,7 @@ class MCPCatalogTool:
     output_limit: int | None = None
 ```
 
-- [ ] **Step 3: 修改 ToolDef adapter**
+- [x] **Step 3: 修改 ToolDef adapter**
 
 `create_mcp_tool_defs()` 应返回：
 
@@ -67,7 +67,7 @@ tuple[list[ToolDef], list[str], list[MCPCatalogTool]]
 
 或等价结构。AgentRuntime 后续可用 catalog 展示 `/mcp tools`。
 
-- [ ] **Step 4: 增加 ToolRegistry 公开移除接口**
+- [x] **Step 4: 增加 ToolRegistry 公开移除接口**
 
 避免继续使用 `self.tools._tools.pop(...)`：
 
@@ -76,7 +76,7 @@ def unregister(self, name: str) -> None: ...
 def unregister_prefix(self, prefix: str) -> list[str]: ...
 ```
 
-- [ ] **Step 5: 运行聚焦测试**
+- [x] **Step 5: 运行聚焦测试**
 
 Run:
 
@@ -86,7 +86,7 @@ pytest tests/test_mcp_catalog.py tests/test_mcp_tools.py -q
 
 Expected: PASS。
 
-- [ ] **Step 6: Codex review 检查点**
+- [x] **Step 6: Codex review 检查点**
 
 Review 重点：
 
@@ -94,3 +94,12 @@ Review 重点：
 - state 是否不能越过 config allow/block。
 - ToolRegistry mutation 是否通过公开方法。
 - read-only 仍只来自 `.xcode/mcp.json`，不是 local state。
+
+Review 记录（2026-06-10）：
+
+- 实现文件：`src/xcode_cli/mcp/catalog.py`、`src/xcode_cli/mcp/tools.py`、`src/xcode_cli/mcp/status.py`、`src/xcode_cli/core/tool_registry.py`、`src/xcode_cli/core/agent.py`。
+- 验证：`pytest tests\test_mcp_catalog.py tests\test_mcp_tools.py -q`：18 passed。
+- 验证：`pytest tests\test_mcp_agent_integration.py tests\test_mcp_command.py -q`：15 passed。
+- 验证：`pytest tests\test_mcp_state.py tests\test_mcp_catalog.py tests\test_mcp_tools.py tests\test_mcp_agent_integration.py tests\test_mcp_command.py -q`：44 passed。
+- 验证：`python -m py_compile src\xcode_cli\mcp\catalog.py src\xcode_cli\mcp\status.py src\xcode_cli\mcp\tools.py src\xcode_cli\core\tool_registry.py src\xcode_cli\core\agent.py`：通过。
+- Review 结论：通过。过滤优先级为 config 硬边界、local state、schema、name conflict、registered；disabled/invalid/conflicting tools 不进入 OpenAI schema；local state enabled 不能覆盖 config blocklist；`_remove_mcp_tools()` 已改用 `ToolRegistry.unregister_prefix()`；read-only 仍只来自 `.xcode/mcp.json`。

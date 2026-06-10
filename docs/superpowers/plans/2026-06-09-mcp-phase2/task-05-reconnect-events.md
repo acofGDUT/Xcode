@@ -19,7 +19,7 @@
 
 ## Steps
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 覆盖：
 
@@ -32,7 +32,7 @@
 - events 不包含 env values。
 - repeated shutdown/reconnect 不泄露 session。
 
-- [ ] **Step 2: 实现 manager reconnect API**
+- [x] **Step 2: 实现 manager reconnect API**
 
 建议：
 
@@ -46,7 +46,7 @@ def reconnect_sync(self, server_name: str | None = None) -> None: ...
 - 再按 trust/config/state 重新启动。
 - server 不存在或 disabled 给可读 event。
 
-- [ ] **Step 3: 扩展 status**
+- [x] **Step 3: 扩展 status**
 
 `MCPServerStatus` 可增加：
 
@@ -58,7 +58,7 @@ def reconnect_sync(self, server_name: str | None = None) -> None: ...
 
 不要让 status 必须依赖 wall-clock 精确断言，测试用存在性和 ordering 即可。
 
-- [ ] **Step 4: `/mcp events` 命令**
+- [x] **Step 4: `/mcp events` 命令**
 
 展示：
 
@@ -69,7 +69,7 @@ def reconnect_sync(self, server_name: str | None = None) -> None: ...
 | kind | refresh/reconnect/failed/warning |
 | message | 脱敏摘要 |
 
-- [ ] **Step 5: 运行聚焦测试**
+- [x] **Step 5: 运行聚焦测试**
 
 Run:
 
@@ -79,7 +79,7 @@ pytest tests/test_mcp_connection.py tests/test_mcp_management_command.py -q
 
 Expected: PASS。
 
-- [ ] **Step 6: Codex review 检查点**
+- [x] **Step 6: Codex review 检查点**
 
 Review 重点：
 
@@ -87,3 +87,11 @@ Review 重点：
 - 旧 session 是否可靠关闭。
 - failed reconnect 是否移除旧工具。
 - events/status 是否不泄露 env values/token。
+
+Review 记录（2026-06-10）：
+
+- 实现文件：`src/xcode_cli/mcp/connection.py`、`src/xcode_cli/mcp/events.py`、`src/xcode_cli/mcp/status.py`、`src/xcode_cli/core/agent.py`。
+- 验证：`pytest tests\test_mcp_connection.py tests\test_mcp_management_command.py -q`：30 passed。
+- 验证：`pytest tests\test_mcp_state.py tests\test_mcp_catalog.py tests\test_mcp_tools.py tests\test_mcp_management_command.py tests\test_mcp_command.py tests\test_mcp_dynamic_refresh.py tests\test_mcp_connection.py tests\test_mcp_agent_integration.py -q`：80 passed。
+- 验证：`python -m py_compile src\xcode_cli\mcp\events.py src\xcode_cli\mcp\connection.py src\xcode_cli\mcp\status.py src\xcode_cli\core\agent.py`：通过。
+- Review 结论：通过。`reconnect_sync()` 对每个 server 先关闭旧 session，再走 config enabled + local state effective config + trust gate；untrusted/disabled server 不启动；reconnect failure 标记 failed、移除旧 record/tools，runtime rebuild 后旧 schema 消失；重复 reconnect/shutdown 覆盖旧 session 关闭；`/mcp events [server]` 展示最近事件表格，测试覆盖 env value/token-like 文本不出现在 status/events。

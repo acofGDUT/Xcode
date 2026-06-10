@@ -243,3 +243,36 @@ cmd.exe:
 git add src/xcode_cli/core/session_resume.py src/xcode_cli/core/conversation/resume.py tests/test_session_resume.py tests/test_resume.py tests/test_agent_resume_command.py docs/current/ARCHITECTURE.md docs/current/DEVNOTES.md docs/current/PROGRESS.md
 git commit -m "feat: show recent conversation after resume"
 ```
+
+## Closeout: 2026-06-10
+
+实现完成：
+
+- `src/xcode_cli/core/session_resume.py` 新增 `ResumeReplayMessage` 和 `build_resume_replay_messages()`，从 transcript JSONL 中提取最新 checkpoint 后的 user/assistant UI replay 内容。
+- replay helper 不复用 `_message_for_model_history()`，因此 user skill invocation 只显示 transcript display content，不显示 `metadata.model_content`。
+- helper 跳过损坏 JSON 行、tool result、system message、audit event 和 assistant tool_call-only 中间消息；缺失 transcript 返回空列表。
+- `src/xcode_cli/core/conversation/resume.py` 抽出 `_restore_selected_session()`，TTY 与非 TTY 成功恢复路径共用，并在恢复摘要后调用 `_render_recent_conversation()`。
+- replay 渲染使用 `Recent conversation since checkpoint:` 标题，空列表显示 `No user/assistant messages after the latest checkpoint.`；用户内容打印时禁用 Rich markup/highlight。
+- `Latest user input` 继续保留，避免改变已有恢复摘要行为。
+
+测试补充：
+
+- `tests/test_session_resume.py` 覆盖 latest checkpoint 边界、无 checkpoint fallback、tool/system/audit 跳过、assistant tool_call-only 跳过、skill hidden prompt 不泄露、缺失/损坏 transcript。
+- `tests/test_resume.py` 覆盖 `/resume` 成功后调用最近对话渲染、取消不渲染、渲染用户内容时禁用 markup。
+- `tests/test_agent_resume_command.py` 覆盖真实 transcript 集成：checkpoint 后 replay 显示 display command 和 final answer，不显示旧 checkpoint 前内容、tool result 或 hidden prompt，同时 `_history` 仍保留 hidden model content。
+
+验证记录：
+
+```powershell
+pytest tests\test_session_resume.py tests\test_resume.py tests\test_agent_resume_command.py -q
+# 45 passed
+
+cmd /c pytest tests\test_session_resume.py tests\test_resume.py tests\test_agent_resume_command.py -q
+# 45 passed
+```
+
+原生 Windows E2E：
+
+- 2026-06-10 用户确认真实 PowerShell/cmd.exe 手工验收通过。
+- 已覆盖 checkpoint 后多轮对话、tool result 不显示、skill hidden prompt 不显示，以及与 `/resume` 固定 9 行长列表菜单连续操作共存。
+- 同轮确认 `/compact` Rich Live 进度正常，多轮 tool call 可持续推进且不会被终端 UI 状态中断。

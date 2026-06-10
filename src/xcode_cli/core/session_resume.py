@@ -8,6 +8,12 @@ from typing import Any
 from xcode_cli.core.context import ContextManager
 
 
+@dataclass(frozen=True)
+class ResumeReplayMessage:
+    role: str
+    content: str
+
+
 @dataclass
 class ResumeResult:
     history: list[dict[str, Any]]
@@ -159,6 +165,36 @@ def build_model_history_from_events(events: list[dict[str, Any]]) -> list[dict[s
     ]
 
 
+def build_resume_replay_messages(transcript_path: Path | str) -> list[ResumeReplayMessage]:
+    transcript = Path(transcript_path)
+    if not transcript.exists():
+        return []
+
+    replay: list[ResumeReplayMessage] = []
+    try:
+        with transcript.open("r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                event_type = event.get("type")
+                if event_type == "compaction_checkpoint":
+                    replay = []
+                    continue
+                if event_type != "message":
+                    continue
+
+                message = _message_for_resume_replay(event)
+                if message is not None:
+                    replay.append(message)
+    except OSError:
+        return []
+
+    return replay
+
+
 def _message_for_model_history(event: dict[str, Any]) -> dict[str, Any]:
     msg: dict[str, Any] = {}
     for key, value in event.items():
@@ -176,3 +212,13 @@ def _message_for_model_history(event: dict[str, Any]) -> dict[str, Any]:
         msg["content"] = metadata["model_content"]
 
     return msg
+
+
+def _message_for_resume_replay(event: dict[str, Any]) -> ResumeReplayMessage | None:
+    role = event.get("role")
+    content = event.get("content")
+    if role == "user" and isinstance(content, str):
+        return ResumeReplayMessage(role="user", content=content)
+    if role == "assistant" and isinstance(content, str) and content:
+        return ResumeReplayMessage(role="assistant", content=content)
+    return None

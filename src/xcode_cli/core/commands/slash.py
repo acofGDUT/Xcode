@@ -71,7 +71,7 @@ COMMANDS = {
     "/memory": "Memory status and auto-memory toggle",
     "/resume": "List and resume previous sessions",
     "/compact": "Compress current conversation context",
-    "/mcp": "Manage MCP servers (status/trust/untrust/reload)",
+    "/mcp": "Manage MCP servers and tools",
     "/QQchat": "Start, stop, or inspect QQ chat bridge",
     "/exit": "Exit chat",
 }
@@ -141,6 +141,17 @@ class SlashCompleter(Completer):
         if text.startswith("/mcp"):
             for cmd, desc in [
                 ("/mcp status", "Inspect MCP servers"),
+                ("/mcp status --verbose", "Inspect MCP servers and tools"),
+                ("/mcp tools", "List MCP tool catalog"),
+                ("/mcp tools ", "List one MCP server tool catalog"),
+                ("/mcp enable ", "Enable an MCP server in local state"),
+                ("/mcp disable ", "Disable an MCP server in local state"),
+                ("/mcp tool enable ", "Enable an MCP tool in local state"),
+                ("/mcp tool disable ", "Disable an MCP tool in local state"),
+                ("/mcp refresh", "Refresh MCP tool registration"),
+                ("/mcp reconnect", "Reconnect MCP servers"),
+                ("/mcp events", "Show MCP lifecycle events"),
+                ("/mcp output-limit ", "Set MCP tool output limit"),
                 ("/mcp trust ", "Trust an MCP server config"),
                 ("/mcp untrust ", "Remove trust for an MCP server"),
                 ("/mcp reload", "Reload MCP config and trusted servers"),

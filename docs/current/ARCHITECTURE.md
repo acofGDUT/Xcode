@@ -125,6 +125,8 @@ sequenceDiagram
 
 当前真正参与 LLM 推理的对话状态是运行时内存里的 `self._history`。`SessionStore` 负责 append-only transcript，`SessionResumeBuilder` 负责从 transcript 构造可恢复 history。普通输入、`/init` 展开的 prompt command、project skill prompt command、以及后续可能出现的外部入口都应复用 `_run_user_turn()`，避免出现第二条 user turn 路径。
 
+`_run_llm_loop()` 使用持续循环推进 assistant tool calls 和 tool results，不依赖固定轮数上限。2026-06-10 的原生 PowerShell/cmd.exe E2E 已确认多轮 tool call 可以持续推进，工具摘要和终端渲染状态不会让循环提前结束。
+
 ## 5. Slash Command 流程
 
 用户输入以 `/` 开头时会先交给 `SlashCommandDispatcher.dispatch()`。命令补全和 prompt command 注册表由 `core/commands/slash.py` 提供；dispatcher 只负责路由，不直接扫描项目、不调用 LLM、不写文件。
@@ -546,7 +548,12 @@ runtime status 写入：
 - 无 checkpoint 时，只恢复 token budget 内的 recent tail。
 - 裁剪时保护 assistant `tool_calls` 和 tool result pair，避免恢复出非法 OpenAI-compatible message 顺序。
 - skill invocation 的 transcript user event 保留 `/skill-name args` 展示文本，`metadata.model_content` 保留展开后的 hidden/model prompt；恢复 `_history` 时优先使用 `metadata.model_content`。
+- 恢复成功后，`ResumeCommandService` 会额外渲染 `Recent conversation since checkpoint:`，展示最新 checkpoint 后的 user/assistant 对话；无 checkpoint 时展示 transcript 内 user/assistant 对话。
+- 最近对话 replay 只用于终端 UI，不参与 LLM `_history`，也不写回 transcript。它使用 transcript display content，因此不会把 skill invocation 的 `metadata.model_content` hidden prompt 显示给用户；assistant tool_call-only 中间消息、tool result、system summary 和 audit event 都会跳过。
+- replay 渲染使用 `markup=False` / `highlight=False`，避免用户输入中的 Rich markup 被解析。
 - 当前不实现 CLI `--resume` / `--continue`，也不实现 rollback/fork。
+
+2026-06-10 的原生 PowerShell/cmd.exe E2E 已覆盖 `/resume` 固定 9 行长列表、窄窗口和中文预览连续操作、checkpoint 后 replay、tool result/hidden prompt 不显示，以及 `/compact` Rich Live 进度。上述行为已从“自动化覆盖”提升为真实 Windows 终端已验收契约。
 
 ## 12. QQ 外部聊天入口
 
@@ -687,7 +694,7 @@ Layer 4: permissions + remote_approval (execution.py + permissions.py)
 
 ## 13. MCP stdio tools 接入
 
-MCP Phase 1 已实现为 `xcode_cli.mcp` 子系统，只支持 `.xcode/mcp.json` 中的 stdio tools。它不是完整生态扩展：当前不支持 resources、prompts、HTTP、SSE、OAuth、`list_changed`、marketplace 或自动安装。
+MCP Phase 1/2 已实现为 `xcode_cli.mcp` 子系统，只支持 `.xcode/mcp.json` 中的 stdio tools。它不是完整生态扩展：当前不支持 resources、prompts、HTTP、SSE、OAuth、marketplace 或自动安装。Phase 2 补齐的是 stdio tools 的本机管理面、动态工具刷新、reconnect/events 可观测性和 per-tool output limit。
 
 数据流：
 
@@ -695,36 +702,53 @@ MCP Phase 1 已实现为 `xcode_cli.mcp` 子系统，只支持 `.xcode/mcp.json`
 .xcode/mcp.json
   -> load_mcp_config()
   -> MCPTrustStore(~/.xcode/mcp_trust.json)
+  -> MCPStateStore(~/.xcode/projects/<project-key>/mcp_state.json)
+  -> AgentRuntime effective MCP config
   -> MCPConnectionManager.start_trusted_servers()
   -> tools/list
-  -> create_mcp_tool_defs()
-  -> ToolRegistry.register(mcp__server__tool)
+  -> create_mcp_tool_defs(config + state)
+  -> MCPToolCatalog(discovered/registered/disabled/invalid/conflict)
+  -> ToolRegistry.register(mcp__server__tool) at AgentRuntime safe point
   -> ToolCallExecutor + PermissionManager
   -> MCPConnectionManager.call_tool_sync()
-  -> render_mcp_tool_result(max_mcp_output_chars)
+  -> render_mcp_tool_result(per-tool state limit or max_mcp_output_chars)
 ```
 
 关键边界：
 
 - trust gate 先于 stdio server 启动；未信任、hash 变化或 disabled server 不会 spawn subprocess。
 - trust fingerprint 绑定 project key、server name、type、command、args、resolved cwd 和 env keys；env values 不写入 hash 或 trust store。
+- 本机 MCP state 写入 `~/.xcode/projects/<project-key>/mcp_state.json`，只保存 server/tool enable-disable 和 per-tool output limit；不写项目仓库，也不替代 trust store。
+- `.xcode/mcp.json` 的 `enabled=false`、`tool_allowlist`、`tool_blocklist` 是硬边界；local state 只能额外禁用，不能越权启用。
 - MCP tool 命名为 `mcp__<server>__<tool>`，server/tool 原名先 sanitize；冲突 tool 会 skip + warning，不覆盖内置工具。
 - MCP tool 默认 `is_read_only=False`；只有 `.xcode/mcp.json` 的 `read_only_tools` 显式声明才可变为只读，且显式 `deny` 仍优先。
 - MCP `inputSchema` 防御式转换；不兼容 schema 会 skip 对应 tool，不打崩 AgentRuntime。
-- MCP `tools/call` result 一律文本化；image/audio/resource 只写 omitted 占位；进入 tool message 前按 `max_mcp_output_chars` 截断。
+- MCP `tools/call` result 一律文本化；image/audio/resource 只写 omitted 占位；进入 tool message 前按 per-tool state override 或全局 `max_mcp_output_chars` 截断。
 - `MCPConnectionManager` 内部使用 async event loop/thread，但 `AgentRuntime`、`_run_llm_loop()`、`ToolCallExecutor` 仍保持同步外观。
 - 某个 server 启动或 `tools/list` 失败只进入 `/mcp status failed`，不阻止 Xcode 启动。
+- `notifications/tools/list_changed` 已通过 MCP SDK `ClientSession(..., message_handler=...)` 接入到 `MCPConnectionManager.mark_tools_changed(server.name)`；background MCP thread 只记录 pending/event，不直接修改 `ToolRegistry`。
+- `AgentRuntime` 只在 safe point 重建 MCP ToolDefs：构建 LLM schema 前、`/mcp status/tools` 前、显式 `/mcp refresh` 或 `/mcp reconnect` 后。
+- refresh 成功会更新 manager 的 tool cache；refresh/reconnect 失败会标记 failed、移除旧 record/tools，避免旧 schema 继续暴露。
+- lifecycle events 保存在本机 runtime 内存 ring/list，用于 `/mcp events`；events/status 不输出 env values、Authorization header、token 或完整 secret。
+- enabled MCP tools 超过 100 时只显示 warning，用户可通过 `/mcp tools` 和 `/mcp tool disable` 收敛；当前不做 model-driven tool search。
 
 `/mcp` 是 side-effect slash command：
 
 | 命令 | 行为 |
 |------|------|
-| `/mcp` / `/mcp status` | 展示 server 状态、tool count、短 hash、错误和 warning |
+| `/mcp` / `/mcp status [--verbose]` | 展示 server 状态、tool count、短 hash、错误和 warning；verbose 追加 tool catalog |
+| `/mcp tools [server]` | 展示 discovered/registered/disabled/invalid/conflict tool catalog、read-only 和 output limit 来源 |
+| `/mcp enable <server>` / `/mcp disable <server>` | 写本机 state 并 reload；不改 `.xcode/mcp.json`，不写 trust |
+| `/mcp tool enable <server> <tool>` / `/mcp tool disable <server> <tool>` | 写本机 state 并在 safe point 重建 registry；config-blocked/invalid/conflict tool 不能被 enable |
+| `/mcp refresh [server]` | 对 connected server 重新 `tools/list` 并重建 MCP ToolDefs |
+| `/mcp reconnect [server]` | 关闭旧 session，按 trust + enabled 状态重新 connect，并重建 MCP ToolDefs |
+| `/mcp events [server]` | 展示最近 lifecycle events，输出脱敏 |
+| `/mcp output-limit <server> <tool> <chars|default>` | 写本机 per-tool output limit override，`default` 清除 override |
 | `/mcp trust <server>` | 展示 command、args、cwd、env keys、hash 和高风险命令提示，确认后写入本机 trust store |
 | `/mcp untrust <server>` | 删除本机 trust record，reload 后停止暴露该 server tools |
 | `/mcp reload` | shutdown 当前 manager，重新读取配置/trust，启动 trusted servers 并注册工具 |
 
-当前自动化覆盖已完成；原生 PowerShell/cmd.exe fake stdio server、审批 UI 和 `/exit` 子进程退出手工验收仍未执行。
+MCP Phase 1/2 自动化和原生 Windows 验收均已完成。Phase 1 的 PowerShell/cmd.exe E2E 覆盖 untrusted server 不启动、trust/reload 后 connected、MCP tool 审批 UI 和 `/exit` 后 stdio 子进程退出；Phase 2 原生 PTY 覆盖 server enable-disable、tool enable-disable、refresh 后工具集合变化、reconnect 旧进程退出与新进程启动、events 脱敏、output-limit、`/exit` shutdown 和 MCP 工具名审批 UI 冒烟。
 
 ## 14. 当前文件职责
 
@@ -737,7 +761,7 @@ MCP Phase 1 已实现为 `xcode_cli.mcp` 子系统，只支持 `.xcode/mcp.json`
 | `src/xcode_cli/core/commands/registry.py` | 合并 built-in prompt commands 与 project skill prompt commands |
 | `src/xcode_cli/core/commands/skill.py` | CLI / REPL 共享的 project skill list/show/validate 命令服务 |
 | `src/xcode_cli/core/conversation/compaction.py` | `/compact` 和自动 compression checkpoint 编排 |
-| `src/xcode_cli/core/conversation/resume.py` | `/resume` 交互命令编排，调用 `SessionResumeBuilder` |
+| `src/xcode_cli/core/conversation/resume.py` | `/resume` 交互命令编排，调用 `SessionResumeBuilder` 并在恢复成功后渲染最近对话 replay |
 | `src/xcode_cli/core/tooling/approval.py` | 工具审批 scope、方向键菜单、TTY / non-TTY fallback、`read_key()` 模块级键盘读取函数 |
 | `src/xcode_cli/core/tooling/display.py` | 工具调用折叠/展开摘要状态 |
 | `src/xcode_cli/core/tooling/execution.py` | tool call 执行、权限检查、diff preview、memory auto-allow、结果摘要 |
@@ -752,7 +776,7 @@ MCP Phase 1 已实现为 `xcode_cli.mcp` 子系统，只支持 `.xcode/mcp.json`
 | `src/xcode_cli/core/permissions.py` | session/project/global 三级权限 |
 | `src/xcode_cli/core/context.py` | token 估算和历史压缩 |
 | `src/xcode_cli/core/session.py` | transcript、history.jsonl 和 session listing |
-| `src/xcode_cli/core/session_resume.py` | transcript 到可恢复 history 的构造 |
+| `src/xcode_cli/core/session_resume.py` | transcript 到可恢复 history 的构造，以及 `/resume` 最近对话 replay 数据提取 |
 | `src/xcode_cli/core/runtime_status.py` | 当前活跃进程状态文件和 stale status 清理 |
 | `src/xcode_cli/core/memory.py` | memory 路径、读取和 prompt context 注入 |
 | `src/xcode_cli/core/turn.py` | `UserTurnInput`，区分 UI 展示内容、模型可见内容和当前 turn metadata |
@@ -767,6 +791,9 @@ MCP Phase 1 已实现为 `xcode_cli.mcp` 子系统，只支持 `.xcode/mcp.json`
 | `src/xcode_cli/ui/renderer.py` | Rich Markdown / diff 渲染 |
 | `src/xcode_cli/mcp/config.py` | `.xcode/mcp.json` 加载、校验、变量展开和输出长度配置 |
 | `src/xcode_cli/mcp/trust.py` | MCP server fingerprint 和本机 trust store |
+| `src/xcode_cli/mcp/state.py` | project-scoped 本机 MCP state store，保存 server/tool enable-disable 和 per-tool output limit |
+| `src/xcode_cli/mcp/catalog.py` | MCP tool catalog 状态：registered、disabled_by_config/state、invalid_schema、name_conflict |
+| `src/xcode_cli/mcp/events.py` | lifecycle event 数据模型和 ring buffer |
 | `src/xcode_cli/mcp/naming.py` | `mcp__server__tool` 名称 sanitize 和冲突检测 |
 | `src/xcode_cli/mcp/schema.py` | MCP `inputSchema` 防御式转换 |
 | `src/xcode_cli/mcp/result.py` | MCP `tools/call` result 文本化和截断 |

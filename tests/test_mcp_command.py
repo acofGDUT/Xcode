@@ -132,4 +132,6 @@ def test_mcp_unknown_subcommand_prints_usage(tmp_path: Path) -> None:
 
     runtime._handle_mcp_command(["/mcp", "bogus"])
 
-    assert "Usage: /mcp status|trust" in _output(runtime.console)
+    output = _output(runtime.console)
+    assert "Usage: /mcp status [--verbose]" in output
+    assert "output-limit <server> <tool>" in output

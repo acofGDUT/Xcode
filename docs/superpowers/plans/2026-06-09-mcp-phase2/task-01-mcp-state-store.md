@@ -17,7 +17,7 @@
 
 ## Steps
 
-- [ ] **Step 1: 写失败测试 `tests/test_mcp_state.py`**
+- [x] **Step 1: 写失败测试 `tests/test_mcp_state.py`**
 
 覆盖：
 
@@ -29,7 +29,7 @@
 - `set_tool_output_limit()` 支持正整数和 `default` 清除。
 - env values / secrets 不会写入 state。
 
-- [ ] **Step 2: 实现 `state.py` 数据模型**
+- [x] **Step 2: 实现 `state.py` 数据模型**
 
 建议数据结构：
 
@@ -61,7 +61,7 @@ class MCPStateStore:
     def set_tool_output_limit(self, server_name: str, tool_name: str, value: int | None) -> None: ...
 ```
 
-- [ ] **Step 3: 定义安全默认值**
+- [x] **Step 3: 定义安全默认值**
 
 规则：
 
@@ -70,11 +70,11 @@ class MCPStateStore:
 - state 中 unknown server/tool 不报错，但在 `/mcp status --verbose` 或 task 后续 catalog 中可显示 warning。
 - output limit 最大值建议 clamp 或拒绝超过 `200000`。
 
-- [ ] **Step 4: AgentRuntime 初始化接入**
+- [x] **Step 4: AgentRuntime 初始化接入**
 
 只初始化 store，不改变现有 MCP 注册行为。后续 Task 2 再把 state 应用于 tool registration。
 
-- [ ] **Step 5: 运行聚焦测试**
+- [x] **Step 5: 运行聚焦测试**
 
 Run:
 
@@ -84,7 +84,7 @@ pytest tests/test_mcp_state.py -q
 
 Expected: PASS。
 
-- [ ] **Step 6: Codex review 检查点**
+- [x] **Step 6: Codex review 检查点**
 
 Review 重点：
 
@@ -92,3 +92,11 @@ Review 重点：
 - 损坏 state 是否不会放大权限。
 - config disabled / blocklist 是否还没有被 state 覆盖。
 - secret 是否不会进入 state 或 warning。
+
+Review 记录（2026-06-10）：
+
+- 实现文件：`src/xcode_cli/mcp/state.py`；`AgentRuntime` 仅初始化 `mcp_state_store`，尚未让 state 影响 MCP 启动或工具注册。
+- 验证：`pytest tests\test_mcp_state.py -q`：11 passed。
+- 验证：`pytest tests\test_mcp_agent_integration.py tests\test_mcp_command.py -q`：15 passed。
+- 验证：`python -m py_compile src\xcode_cli\mcp\state.py src\xcode_cli\core\agent.py`：通过。
+- Review 结论：通过。state 默认路径位于本机 `~/.xcode/projects/<project-key>/mcp_state.json`；损坏 JSON 只返回 empty state + safe warning；本 task 未改变 config disabled、tool allow/blocklist、trust 或权限语义；测试覆盖 secret-like 内容不进入 state/warning。

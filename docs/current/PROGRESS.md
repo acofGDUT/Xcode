@@ -2,7 +2,7 @@
 
 > 本文档记录项目如何一步步走到现在。当前实现细节见 `ARCHITECTURE.md`，未来计划见 `ROADMAP.md`，已知问题和设计取舍见 `DEVNOTES.md`。
 
-最后更新：2026-06-09
+最后更新：2026-06-10
 
 ## 1. 当前状态总览
 
@@ -27,11 +27,12 @@
 | AgentRuntime Refactor Round 2 | SlashCommandDispatcher、SkillCommandService、普通 user turn 抽离 | 完成并通过 review | `2026-06-04-agent-runtime-refactor-round2-plan.md` |
 | Skills As Prompt Commands | `.xcode/skills/<name>/SKILL.md` 加载为 prompt slash command | 完成并通过整体 review | `2026-06-04-skills-as-prompt-commands-plan.md` |
 | Model-Invocable Skills | compact listing + `SkillTool` 模型主动调用 skills | 完成并通过整体 review | `2026-06-05-model-invocable-skills-plan.md` |
-| MCP Phase 1 | stdio tools 安全接入、trust gate、ToolRegistry adapter、内部 async connection manager、`/mcp` 命令 | 代码实现和自动化通过；Windows 手工验收待补记录 | `2026-06-08-mcp-integration-plan.md` |
-| MCP Phase 2 设计 | 管理面、动态工具刷新、tool enable-disable、reconnect/events | 设计完成，待实现 | `2026-06-09-mcp-phase2-plan.md` |
+| MCP Phase 1 | stdio tools 安全接入、trust gate、ToolRegistry adapter、内部 async connection manager、`/mcp` 命令 | 完成；自动化和原生 Windows E2E 通过 | `2026-06-08-mcp-integration-plan.md` |
+| MCP Phase 2 | 管理面、动态工具刷新、tool enable-disable、reconnect/events、per-tool output limit | 代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 验收通过 | `2026-06-09-mcp-phase2-plan.md` |
+| `/resume` 最近对话 replay | 恢复成功后展示 checkpoint 后 user/assistant 对话 | 完成；自动化和原生 Windows E2E 通过 | `2026-06-09-resume-recent-conversation-rendering-plan.md` |
 | Phase 5 | 生态扩展 | 冻结 | 未开始 |
 
-当前重点仍不是全面进入 Phase 5，而是补齐费用估算、原生 Windows 验收和 QQchat 收口。MCP 作为唯一按 spec 小步解冻的生态方向，Phase 1 已完成 stdio tools 安全接入代码和自动化回归，Phase 2 已完成管理面与动态工具刷新设计；后续不得无 spec 扩展到 resources/prompts/HTTP/SSE/OAuth。
+当前重点仍不是全面进入 Phase 5，而是补齐费用估算和 QQchat 收口。MCP Phase 1 已完成 stdio tools 安全接入、自动化回归和 PowerShell/cmd.exe 原生 E2E，Phase 2 已完成 stdio tools 管理面与动态刷新代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 验收；后续不得无 spec 扩展到 resources/prompts/HTTP/SSE/OAuth。核心 CLI 的 `/resume`、`/compact` 和多轮 tool call 原生 Windows E2E 也已完成，剩余 Windows 验收集中在 QQchat。
 
 ## 2. Phase 1：协议与工具升级
 
@@ -503,7 +504,7 @@ Review 与验证：
 - Task 4 通过：adapter 默认非只读；read-only 只来自配置；allow/blocklist 按 provider 原名过滤；执行错误被 `ToolRegistry`/adapter 转成 tool result。
 - Task 5 通过：`/mcp` 不进入 LLM；trust prompt 展示关键配置和风险提示；usage 输出关闭 Rich markup。
 - Task 6 通过：MCP tool 复用现有 `PermissionManager`；explicit deny 覆盖 read-only；failed server 不破坏 AgentRuntime；runtime shutdown 接入。
-- Task 7 通过：自动化安全矩阵覆盖完成；PowerShell/cmd.exe 手工验收用户反馈已基本完成，待补具体记录后再勾选手工验收步骤。
+- Task 7 通过：自动化安全矩阵覆盖完成；2026-06-10 用户确认 PowerShell/cmd.exe 手工验收完成，手工验收步骤已勾选。
 
 验证证据：
 
@@ -512,10 +513,10 @@ Review 与验证：
 - Task 6 集成聚焦回归通过：`pytest tests/test_mcp_agent_integration.py tests/test_agent_tool_loop.py tests/test_task_permissions.py -q` 为 `27 passed`。
 - 全量测试通过：`pytest -q` 为 `432 passed`。
 - `git diff --check` 退出码 0；仅有 Windows LF/CRLF 行尾提示。
-- 原生 PowerShell fake stdio server 手工验收：用户反馈已基本完成，待补具体命令、现象和结果记录。
-- 原生 cmd.exe fake stdio server 手工验收：用户反馈已基本完成，待补具体命令、现象和结果记录。
-- MCP tool 审批 UI 真实交互验收：用户反馈已基本完成，待补具体命令、现象和结果记录。
-- `/exit` 后真实 stdio server 子进程退出验收：用户反馈已基本完成，待补具体命令、现象和结果记录。
+- 原生 PowerShell fake stdio server 手工验收：2026-06-10 用户确认通过；覆盖 untrusted 不启动、trust/reload 后 connected、工具调用审批 UI 和 `/exit` 后子进程退出。
+- 原生 cmd.exe fake stdio server 手工验收：2026-06-10 用户确认通过；覆盖 Windows 路径、中文输出、审批菜单和进程退出。
+- MCP tool 审批 UI 真实交互验收：2026-06-10 用户确认通过。
+- `/exit` 后真实 stdio server 子进程退出验收：2026-06-10 用户确认通过。
 
 ## 23. MCP Phase 2 设计：2026-06-09
 
@@ -546,23 +547,81 @@ Review 与验证：
 
 执行计划：进入实现时按 `2026-06-09-mcp-phase2-plan.md` 的 8 个 task 执行；每个 task 完成后停下做 Codex review。该功能仍涉及 P0 安全路径，实现时必须先写失败测试。
 
-## 24. `/resume` 恢复后最近对话渲染设计：2026-06-09
+## 23.1 MCP Phase 2 实现：2026-06-10
 
-背景：当前 `/resume` 成功后只打印恢复摘要和最近一条用户输入，用户无法直接看到最新 checkpoint 之后这段 session 的最近对话。用户希望恢复后能看到 checkpoint 后所有用户输入和助手最终输出，以便确认当前 session 最近聊到了哪里。
+背景：按 `docs/superpowers/plans/2026-06-09-mcp-phase2-plan.md` 继续实现 Phase 2。范围保持为 stdio tools 管理面与动态刷新，不做 HTTP、SSE、OAuth、resources、prompts、MCP Apps、marketplace、registry 或 model-driven tool search。
+
+本次实现内容：
+
+- 新增 `src/xcode_cli/mcp/state.py`：project-scoped 本机 `mcp_state.json`，保存 server/tool enable-disable 和 per-tool output limit；缺失/损坏 state 可恢复，不写项目仓库。
+- 新增 `src/xcode_cli/mcp/catalog.py`：区分 registered、disabled_by_config、disabled_by_state、invalid_schema、name_conflict；disabled/invalid/conflict tools 不进入 OpenAI schema。
+- 新增 `src/xcode_cli/mcp/events.py`：lifecycle event 模型和 ring buffer。
+- 扩展 `MCPConnectionManager`：pending refresh、manual refresh、reconnect、refresh failure 降级、event 脱敏、旧 session 关闭。
+- 扩展 `/mcp`：`status --verbose`、`tools`、`enable|disable`、`tool enable|disable`、`refresh`、`reconnect`、`events`、`output-limit`。
+- `AgentRuntime` 使用 effective MCP config，local state 只能额外禁用，不能覆盖 config `enabled=false` 或 trust gate。
+- `ToolRegistry` 增加公开 `unregister()` / `unregister_prefix()`，MCP registry rebuild 不再直接操作 `_tools`。
+- `notifications/tools/list_changed` 已通过 MCP SDK `ClientSession(..., message_handler=...)` 桥接到 `MCPConnectionManager.mark_tools_changed()`；ToolRegistry mutation 仍只在 AgentRuntime safe point 发生。
+- per-tool output limit 在 `render_mcp_tool_result()` 生成 `ToolOutput` 前生效，优先级为 local state override > 全局 `max_mcp_output_chars`。
+- enabled MCP tools 超过 100 时只显示 warning，用户可通过 `/mcp tools` 和 `/mcp tool disable` 收敛。
+
+逐 task review 结论：
+
+- Task 1 通过：state store 默认路径为本机 project-scoped；损坏 JSON 不放大权限；secret-like 内容不进入 state/warning。
+- Task 2 通过：config/state/schema/name conflict 过滤顺序固定；disabled/invalid/conflicting tools 不进入 schema；read-only 仍只来自 `.xcode/mcp.json`。
+- Task 3 通过：管理命令只写本机 state，不写项目 config/trust；server disable 进入 effective config 阻止启动；tool disable 从 registry/schema 移除。
+- Task 4 通过：list_changed 只置 pending，不从 background thread 改 ToolRegistry；safe point refresh 成功更新 schema，失败移除旧 tools。
+- Task 5 通过：reconnect 先关闭旧 session，再走 trust/effective enabled；失败不崩且移除旧 tools；events/status 脱敏。
+- Task 6 通过：per-tool output limit 覆盖全局上限并在 ToolOutput 前截断；工具数量过多只 warning，不做 tool search。
+- Task 7 通过：自动化安全矩阵、PowerShell 原生 PTY、cmd.exe 原生 PTY 和 MCP 工具名审批 UI 冒烟均通过。
+
+验证证据：
+
+- 编译检查通过：`python -m py_compile src\xcode_cli\mcp\state.py src\xcode_cli\mcp\catalog.py src\xcode_cli\mcp\events.py src\xcode_cli\mcp\status.py src\xcode_cli\mcp\connection.py src\xcode_cli\mcp\tools.py src\xcode_cli\core\tool_registry.py src\xcode_cli\core\agent.py src\xcode_cli\core\commands\slash.py`。
+- MCP Phase 2 聚焦矩阵通过：`pytest tests\test_mcp_state.py tests\test_mcp_catalog.py tests\test_mcp_dynamic_refresh.py tests\test_mcp_management_command.py tests\test_mcp_connection.py tests\test_mcp_tools.py tests\test_mcp_agent_integration.py -q` 为 `77 passed`。
+- cmd.exe 下同一聚焦矩阵通过：`cmd /c pytest tests\test_mcp_state.py tests\test_mcp_catalog.py tests\test_mcp_dynamic_refresh.py tests\test_mcp_management_command.py tests\test_mcp_connection.py tests\test_mcp_tools.py tests\test_mcp_agent_integration.py -q` 为 `77 passed`。
+- 全量测试通过：`pytest -q` 为 `504 passed`。
+- `git diff --check` 退出码 0；仅有 Windows LF/CRLF 行尾提示。
+
+仍未执行：
+
+- PowerShell 原生 PTY 验收：`winpty.PtyProcess` 启动 `powershell.exe` + `python -m xcode_cli.main`，临时项目设置 `XCODE_PROJECT_ROOT`，临时 fake MCP server 支持 mode 切换。结果：`config_hash_unchanged=True`、`process_exitstatus=0`、`secret_absent_from_transcript=True`、`connected_seen=True`、`tool_disable_seen=True`、`tool_enable_seen=True`、`output_limit_seen=True`、`refresh_extra_seen=True`、`reconnect_seen=True`、`events_seen=True`、`exit_seen=True`；fake server log 显示 `start=3`、`stop=3`。
+- cmd.exe 原生 PTY 验收：同一临时项目与同一组 `/mcp` 命令在 `cmd.exe /d /c python -m xcode_cli.main` 下通过，结果同样为 `config_hash_unchanged=True`、`process_exitstatus=0`、`secret_absent_from_transcript=True`、`refresh_extra_seen=True`、`reconnect_seen=True`、`events_seen=True`、`exit_seen=True`，fake server log `start=3`、`stop=3`。
+- 审批 UI 原生 PTY 冒烟：PowerShell 和 cmd.exe 中直接调用 `ToolApprovalController.prompt("mcp__fake__echo", "mcp__fake__echo")`，真实菜单渲染 `Apply mcp__fake__echo for mcp__fake__echo?`，输入 `y` 后 `approval_result=yes`。
+
+结论：MCP Phase 2 代码实现、自动化安全回归和 PowerShell/cmd.exe 原生 PTY 交互验收已完成；Phase 2 仍只覆盖 stdio tools 管理面，不包含 HTTP/OAuth/resources/prompts/MCP Apps。
+
+Review follow-up（2026-06-10）：
+- P1 修复：真实 SDK `notifications/tools/list_changed` 已接到 `mark_tools_changed(server.name)`，补 `SDKStdioSession.open()` message handler 回归测试。
+- P1 修复：`call_tool_sync()` 执行异常会按 server env value、token、secret-like 文本脱敏后再返回 tool result，避免 secret 进入 history。
+- P2 修复：动态 refresh 后 `_mcp_tool_warnings` 重新按当前 catalog 计算，bad schema 修复后旧 warning 会消失。
+- P2 修复：`/mcp refresh` 和 `/mcp reconnect` 遇到 failed/untrusted/disabled 状态时输出 `requested; check /mcp status`，不再无条件提示成功。
+
+## 24. `/resume` 恢复后最近对话渲染：2026-06-10
+
+背景：此前 `/resume` 成功后只打印恢复摘要和最近一条用户输入，用户无法直接看到最新 checkpoint 之后这段 session 的最近对话。用户希望恢复后能看到 checkpoint 后所有用户输入和助手最终输出，以便确认当前 session 最近聊到了哪里。
 
 本次产出：
 
 - 规格文档：`docs/superpowers/specs/2026-06-09-resume-recent-conversation-rendering-design.md`
 - 实施计划：`docs/superpowers/plans/2026-06-09-resume-recent-conversation-rendering-plan.md`
+- 代码实现：`src/xcode_cli/core/session_resume.py` 新增 `ResumeReplayMessage` 和 `build_resume_replay_messages()`；`src/xcode_cli/core/conversation/resume.py` 在恢复成功后渲染 replay。
 
-设计边界：
+当前实现：
 
 - 只做 `/resume` 成功后的用户可见 replay，不改变 `SessionResumeBuilder` 构造 LLM `_history` 的语义。
 - replay 使用 transcript display content；skill prompt command 不展示 `metadata.model_content`。
 - 只展示 user 和有文本 `content` 的 assistant final message；跳过 tool result、system summary 和 audit event。
-- 第一版按最新 checkpoint 边界展示全部 post-checkpoint user/assistant 对话；真实 PowerShell/cmd.exe 体验需要在实现后补手工验收。
+- 第一版按最新 checkpoint 边界展示全部 post-checkpoint user/assistant 对话；无 checkpoint 时展示 transcript 中已有 user/assistant 对话。
+- TTY 与非 TTY `/resume` 成功路径共用 `_restore_selected_session()`，只有恢复成功后才读取 replay；失败、取消、无 session 不渲染。
+- Rich 输出使用 `markup=False` / `highlight=False`，避免用户输入中的 `[xxx]` 被当作 markup。
 
-状态：已写 spec/plan，未实现。
+验证：
+
+- 先补失败测试，确认缺少 replay helper 时聚焦套件失败。
+- PowerShell：`pytest tests\test_session_resume.py tests\test_resume.py tests\test_agent_resume_command.py -q`：45 passed。
+- cmd.exe：`cmd /c pytest tests\test_session_resume.py tests\test_resume.py tests\test_agent_resume_command.py -q`：45 passed。
+- 原生 PowerShell/cmd.exe 手工验收：2026-06-10 用户确认通过；覆盖 checkpoint 后多轮 replay、tool result 不显示、skill hidden prompt 不泄露，以及固定 9 行长列表连续操作。
+- 同轮核心 CLI E2E 还确认 `/compact` Rich Live 进度正常，多轮 tool call 在 PowerShell/cmd.exe 中可持续推进且不会被 UI 状态中断。
 
 ## 25. 当前阻塞和遗留
 
@@ -571,26 +630,22 @@ Review 与验证：
 | CLI `--resume` / `--continue` | 延后 | 当前只做交互内 `/resume`，CLI 恢复入口后续如有明确需求再设计 |
 | runtime status stale cleanup | 代码实现和自动化通过 | `RuntimeStatusStore.create()` 已调用 `prune_stale()` 清理 dead pid 和损坏 status；后续 dashboard/list 读取活跃进程前应复用 |
 | `/context` cost | 未实现 | 当前只有 token 估算，没有价格估算 |
-| MCP Phase 1 | 代码实现和自动化通过；Windows 手工验收待补记录 | stdio tools 安全接入已实现；用户反馈 PowerShell/cmd.exe fake server、审批 UI 和 `/exit` shutdown 基本验收完成，仍需补具体记录 |
-| MCP Phase 2 | 设计完成，待实现 | 已写 spec、总 plan 和 8 个 task 文件；范围限定为 stdio tools 管理面和动态刷新 |
+| MCP Phase 1 | 完成 | stdio tools 安全接入、自动化回归和 PowerShell/cmd.exe fake server、审批 UI、`/exit` shutdown 验收均通过 |
+| MCP Phase 2 | 代码实现、自动化回归和 Windows PTY 验收通过 | stdio tools 管理面、动态刷新、reconnect/events、per-tool output limit 已实现；不包含 HTTP/OAuth/resources/prompts/MCP Apps |
 | `/QQchat init` + reload | 已写 spec/plan，未实现 | 需要实现配置文件骨架初始化和热部署 reload；项目级 config 不能写 secret |
 | `/QQchat` 最终验证 | 未完成 | Task 7 仍需收口文档、跑聚焦测试、记录未完成的真实 QQ/Windows 验收 |
 | QQ 真实平台验收 | 未完成 | 单聊被动回复、群聊 @ 被动回复、危险工具真实 QQ 场景均未验收 |
 | 工具调用 `Ctrl+O` 展开 | 未实现 | 默认摘要已完成；展开热键和原生 Windows 热键验收仍未做 |
-| 多轮 tool call 原生终端验收 | 未完成 | 核心回归已通过，但仍需在 cmd.exe/PowerShell 验证真实多轮工具链路不会被 UI 状态误导 |
+| 多轮 tool call 原生终端验收 | 完成 | 2026-06-10 用户确认 PowerShell/cmd.exe 多轮工具链路持续推进正常，未被 UI 状态中断 |
 | 可替换区域式 streaming | 未实现 | 结构化内容去重已基础收口；长期更稳的 streaming + final render 仍需设计 |
-| `/resume` 长列表重复渲染 | 代码实现和自动化通过；Windows 手工验收待补 | 已改固定 9 行窗口、单行预览和固定行数刷新；仍需真实 PowerShell/cmd.exe 长列表连续滚动记录 |
-| `/resume` 恢复后最近对话渲染 | 已写 spec/plan，未实现 | 恢复成功后展示最新 checkpoint 后的 user/assistant 对话，不展示 tool result 或 hidden prompt |
+| `/resume` 长列表重复渲染 | 完成 | 固定 9 行窗口、单行预览和固定行数刷新已通过 PowerShell/cmd.exe 长列表连续滚动验收 |
+| `/resume` 恢复后最近对话渲染 | 完成 | PowerShell/cmd.exe 已验收 checkpoint 后 replay、tool result 跳过和 hidden prompt 不泄露 |
 | task 面板持久展示 | 待后续迭代 | `task_create/update` auto-allow + 瞬时面板已完成；持久底部驻留展示未做 |
 | `/resume` last_user_input 不稳定 | 仅记录 | 同一 session 的预览文案随时间变化，用户难识别；后续可考虑首条输入或固定摘要 |
-| 原生 Windows E2E | 未完成 | 需要在 cmd.exe/PowerShell 验证完整交互 |
+| 原生 Windows E2E | 核心 CLI 完成；QQchat 待验收 | `/resume`、`/compact`、多轮 tool call 和 MCP 已通过；`/QQchat start` 与真实 QQ 平台仍待验收 |
 | Phase 5 | 整体冻结，MCP 小步例外 | 不全面扩展生态；MCP 仅允许按已写 spec/plan 做 stdio tools 安全接入和管理面迭代 |
 
 ## 26. 下一步
 
-1. 如进入 MCP Phase 2 实现，从 `task-01-mcp-state-store.md` 开始，按 TDD + task review 推进。
-2. 补 MCP Phase 1 原生 PowerShell/cmd.exe fake stdio server 验收记录，确认未信任不启动、trust/reload 后 connected、MCP tool 触发审批 UI、`/exit` 后子进程退出。
-3. 做原生 cmd.exe/PowerShell 交互验收，重点覆盖审批菜单、diff preview、工具摘要折叠、多轮 tool call、`/resume` 长列表方向键刷新、`/compact`。
-4. 按 `2026-06-09-resume-recent-conversation-rendering-plan.md` 实现 `/resume` 恢复后的最近对话渲染。
-5. 为 `/context` 增加 cost 估算，补齐 token 之外的费用视角。
-6. 为 `/QQchat` 补真实 PowerShell/cmd.exe 手工验收和 QQ 平台单聊/群聊被动回复验收；未完成前不要把 Phase 6 标记为完整完成。
+1. 为 `/context` 增加 cost 估算，补齐 token 之外的费用视角。
+2. 完成 `/QQchat init` + reload，并补真实 PowerShell/cmd.exe 手工验收和 QQ 平台单聊/群聊被动回复验收；未完成前不要把 Phase 6 标记为完整完成。

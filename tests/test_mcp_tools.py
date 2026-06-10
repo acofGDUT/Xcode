@@ -5,6 +5,7 @@ from pathlib import Path
 from xcode_cli.core.tool_registry import ToolRegistry
 from xcode_cli.mcp.config import MCPConfig, MCPServerConfig
 from xcode_cli.mcp.connection import MCPDiscoveredTool
+from xcode_cli.mcp.state import MCPProjectState, MCPServerState, MCPToolState
 from xcode_cli.mcp.tools import create_mcp_tool_defs
 
 
@@ -46,7 +47,7 @@ def _tool(name: str, schema: object | None = None) -> MCPDiscoveredTool:
 
 def test_mcp_tool_registers_with_prefixed_name() -> None:
     manager = FakeManager([_tool("read_file")])
-    tool_defs, warnings = create_mcp_tool_defs(
+    tool_defs, warnings, _ = create_mcp_tool_defs(
         connection_manager=manager,
         config=MCPConfig(servers=(_server(),)),
     )
@@ -58,7 +59,7 @@ def test_mcp_tool_registers_with_prefixed_name() -> None:
 
 
 def test_mcp_tools_default_to_not_read_only() -> None:
-    tool_defs, _ = create_mcp_tool_defs(
+    tool_defs, _, _ = create_mcp_tool_defs(
         connection_manager=FakeManager([_tool("read_file")]),
         config=MCPConfig(servers=(_server(),)),
     )
@@ -67,7 +68,7 @@ def test_mcp_tools_default_to_not_read_only() -> None:
 
 
 def test_read_only_tools_must_be_declared_in_config() -> None:
-    tool_defs, _ = create_mcp_tool_defs(
+    tool_defs, _, _ = create_mcp_tool_defs(
         connection_manager=FakeManager([_tool("read_file")]),
         config=MCPConfig(servers=(_server(read_only_tools=("read_file",)),)),
     )
@@ -76,7 +77,7 @@ def test_read_only_tools_must_be_declared_in_config() -> None:
 
 
 def test_allowlist_and_blocklist_filter_original_tool_names() -> None:
-    tool_defs, _ = create_mcp_tool_defs(
+    tool_defs, _, _ = create_mcp_tool_defs(
         connection_manager=FakeManager([_tool("read_file"), _tool("write_file"), _tool("delete")]),
         config=MCPConfig(servers=(_server(tool_allowlist=("read_file", "write_file"), tool_blocklist=("write_file",)),)),
     )
@@ -85,7 +86,7 @@ def test_allowlist_and_blocklist_filter_original_tool_names() -> None:
 
 
 def test_invalid_schema_is_skipped_with_warning() -> None:
-    tool_defs, warnings = create_mcp_tool_defs(
+    tool_defs, warnings, _ = create_mcp_tool_defs(
         connection_manager=FakeManager([_tool("bad", "not a schema")]),
         config=MCPConfig(servers=(_server(),)),
     )
@@ -96,7 +97,7 @@ def test_invalid_schema_is_skipped_with_warning() -> None:
 
 def test_tool_registry_execute_catches_manager_error() -> None:
     manager = FakeManager([_tool("read_file")], result={"isError": True, "content": [{"type": "text", "text": "Tool error: boom"}]})
-    tool_defs, _ = create_mcp_tool_defs(connection_manager=manager, config=MCPConfig(servers=(_server(),)))
+    tool_defs, _, _ = create_mcp_tool_defs(connection_manager=manager, config=MCPConfig(servers=(_server(),)))
     registry = ToolRegistry()
     registry.register(tool_defs[0])
 
@@ -108,7 +109,7 @@ def test_tool_registry_execute_catches_manager_error() -> None:
 
 def test_long_result_is_truncated_before_tool_output() -> None:
     manager = FakeManager([_tool("read_file")], result={"content": [{"type": "text", "text": "abcdef"}]})
-    tool_defs, _ = create_mcp_tool_defs(
+    tool_defs, _, _ = create_mcp_tool_defs(
         connection_manager=manager,
         config=MCPConfig(servers=(_server(),), max_mcp_output_chars=3),
     )
@@ -118,8 +119,38 @@ def test_long_result_is_truncated_before_tool_output() -> None:
     assert "[MCP output truncated: 6 -> 3 chars]" in output.content
 
 
+def test_per_tool_output_limit_overrides_global_config_before_tool_output() -> None:
+    manager = FakeManager([_tool("read_file")], result={"content": [{"type": "text", "text": "abcdef"}]})
+    state = MCPProjectState(
+        servers={"filesystem": MCPServerState(tools={"read_file": MCPToolState(max_output_chars=3)})}
+    )
+    tool_defs, _, catalog = create_mcp_tool_defs(
+        connection_manager=manager,
+        config=MCPConfig(servers=(_server(),), max_mcp_output_chars=100),
+        project_state=state,
+    )
+
+    output = tool_defs[0].execute(path="README.md")
+
+    assert "[MCP output truncated: 6 -> 3 chars]" in output.content
+    assert catalog[0].output_limit == 3
+    assert catalog[0].output_limit_source == "state"
+
+
+def test_many_enabled_mcp_tools_adds_warning_without_hiding_tools() -> None:
+    tools = [_tool(f"tool_{index}") for index in range(101)]
+
+    tool_defs, warnings, _ = create_mcp_tool_defs(
+        connection_manager=FakeManager(tools),
+        config=MCPConfig(servers=(_server(),)),
+    )
+
+    assert len(tool_defs) == 101
+    assert any("101" in warning and "100" in warning for warning in warnings)
+
+
 def test_existing_name_conflict_is_skipped() -> None:
-    tool_defs, warnings = create_mcp_tool_defs(
+    tool_defs, warnings, _ = create_mcp_tool_defs(
         connection_manager=FakeManager([_tool("read_file")]),
         config=MCPConfig(servers=(_server(),)),
         existing_names={"mcp__filesystem__read_file"},

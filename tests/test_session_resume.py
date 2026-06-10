@@ -40,6 +40,13 @@ def _write_checkpoint(store: SessionStore, session_id: str, summary: str) -> Non
     })
 
 
+def _write_events(path: Path, events: list[dict]) -> None:
+    path.write_text(
+        "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events),
+        encoding="utf-8",
+    )
+
+
 # ---------------------------------------------------------------------------
 # SessionResumeBuilder
 # ---------------------------------------------------------------------------
@@ -106,6 +113,130 @@ class TestResumeBuilderCheckpoint:
         assert "first summary" not in result.history[0]["content"]
         assert any(m.get("content") == "q2" for m in result.history)
         assert not any(m.get("content") == "q1" for m in result.history)
+
+
+class TestResumeReplayMessages:
+    def test_uses_messages_after_latest_checkpoint(self, tmp_path: Path) -> None:
+        from xcode_cli.core.session_resume import build_resume_replay_messages
+
+        transcript = tmp_path / "session.jsonl"
+        _write_events(transcript, [
+            {"type": "message", "role": "user", "content": "old user"},
+            {"type": "message", "role": "assistant", "content": "old assistant"},
+            {"type": "compaction_checkpoint", "summary": "summary 1"},
+            {"type": "message", "role": "user", "content": "new user"},
+            {"type": "message", "role": "assistant", "content": "new assistant"},
+            {"type": "compaction_checkpoint", "summary": "summary 2"},
+            {"type": "message", "role": "user", "content": "latest user"},
+            {"type": "message", "role": "assistant", "content": "latest assistant"},
+        ])
+
+        replay = build_resume_replay_messages(transcript)
+
+        assert [(m.role, m.content) for m in replay] == [
+            ("user", "latest user"),
+            ("assistant", "latest assistant"),
+        ]
+
+    def test_replays_all_user_assistant_messages_without_checkpoint(self, tmp_path: Path) -> None:
+        from xcode_cli.core.session_resume import build_resume_replay_messages
+
+        transcript = tmp_path / "session.jsonl"
+        _write_events(transcript, [
+            {"type": "message", "role": "user", "content": "q1"},
+            {"type": "message", "role": "assistant", "content": "a1"},
+            {"type": "message", "role": "user", "content": "q2"},
+        ])
+
+        replay = build_resume_replay_messages(transcript)
+
+        assert [(m.role, m.content) for m in replay] == [
+            ("user", "q1"),
+            ("assistant", "a1"),
+            ("user", "q2"),
+        ]
+
+    def test_skips_tool_system_audit_and_assistant_tool_call_only_messages(
+        self, tmp_path: Path
+    ) -> None:
+        from xcode_cli.core.session_resume import build_resume_replay_messages
+
+        transcript = tmp_path / "session.jsonl"
+        _write_events(transcript, [
+            {"type": "message", "role": "system", "content": "system summary"},
+            {"type": "skill_invocation", "skill": "review", "content": "audit"},
+            {"type": "message", "role": "user", "content": "read file"},
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"type": "message", "role": "tool", "tool_call_id": "c1", "content": "secret tool output"},
+            {"type": "message", "role": "assistant", "content": "final answer"},
+        ])
+
+        replay = build_resume_replay_messages(transcript)
+
+        assert [(m.role, m.content) for m in replay] == [
+            ("user", "read file"),
+            ("assistant", "final answer"),
+        ]
+        assert "secret tool output" not in repr(replay)
+        assert "system summary" not in repr(replay)
+        assert "audit" not in repr(replay)
+
+    def test_uses_display_content_for_skill_invocation_user_message(
+        self, tmp_path: Path
+    ) -> None:
+        from xcode_cli.core.session_resume import build_resume_replay_messages
+
+        transcript = tmp_path / "session.jsonl"
+        _write_events(transcript, [
+            {
+                "type": "message",
+                "role": "user",
+                "content": "/review src/foo.py",
+                "metadata": {"model_content": "FULL HIDDEN SKILL PROMPT"},
+            },
+            {"type": "message", "role": "assistant", "content": "review done"},
+        ])
+
+        replay = build_resume_replay_messages(transcript)
+
+        assert [(m.role, m.content) for m in replay] == [
+            ("user", "/review src/foo.py"),
+            ("assistant", "review done"),
+        ]
+        assert "FULL HIDDEN" not in repr(replay)
+
+    def test_missing_or_corrupt_transcript_returns_available_messages(
+        self, tmp_path: Path
+    ) -> None:
+        from xcode_cli.core.session_resume import build_resume_replay_messages
+
+        assert build_resume_replay_messages(tmp_path / "missing.jsonl") == []
+
+        transcript = tmp_path / "session.jsonl"
+        transcript.write_text(
+            '{"type": "message", "role": "user", "content": "ok"}\n'
+            '{broken json}\n'
+            '{"type": "message", "role": "assistant", "content": "done"}\n',
+            encoding="utf-8",
+        )
+
+        replay = build_resume_replay_messages(transcript)
+
+        assert [(m.role, m.content) for m in replay] == [
+            ("user", "ok"),
+            ("assistant", "done"),
+        ]
 
 
 class TestResumeBuilderNoCheckpoint:

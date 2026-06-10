@@ -11,19 +11,24 @@ from xcode_cli.core.context import ContextManager
 from xcode_cli.core.conversation.resume import ResumeCommandService
 from xcode_cli.core.session import SessionInfo
 from xcode_cli.core.session import SessionStore
+from xcode_cli.core.session_resume import ResumeReplayMessage
 from xcode_cli.core.session_resume import SessionResumeBuilder
 
 
 class _CaptureConsole:
     def __init__(self, width: int = 80) -> None:
         self.lines: list[str] = []
+        self.calls: list[tuple[str, dict]] = []
         self.size = SimpleNamespace(width=width)
 
     def print(self, *objects, **kwargs) -> None:
         if not objects:
             self.lines.append("")
+            self.calls.append(("", kwargs))
             return
-        self.lines.append(" ".join(str(obj) for obj in objects))
+        line = " ".join(str(obj) for obj in objects)
+        self.lines.append(line)
+        self.calls.append((line, kwargs))
 
 
 def _fake_session(idx: int, *, preview: str | None = None, checkpoint: bool = False) -> SessionInfo:
@@ -231,6 +236,86 @@ class TestResumeNonTTY:
                 # 验证 prompt 被调用（数字输入方式）
                 mock_prompt.prompt.assert_called_once()
                 assert result is not None
+
+
+class TestResumeRecentConversation:
+    def test_resume_success_renders_recent_conversation(self, monkeypatch):
+        import xcode_cli.core.conversation.resume as resume_mod
+
+        session = _fake_session(1, preview="latest")
+        mock_sessions = MagicMock()
+        mock_sessions.list_sessions.return_value = [session]
+        mock_context = MagicMock()
+        mock_context.max_tokens = 128000
+        mock_prompt = MagicMock()
+        mock_prompt.prompt.return_value = "1"
+        console = _CaptureConsole()
+        service = ResumeCommandService(mock_sessions, mock_context, console, mock_prompt)
+
+        class _Builder:
+            def __init__(self, context, token_budget) -> None:
+                self.context = context
+                self.token_budget = token_budget
+
+            def build(self, transcript_path):
+                return SimpleNamespace(
+                    history=[{"role": "user", "content": "hello"}],
+                    restored_from_checkpoint=False,
+                    message_count=1,
+                    estimated_tokens=100,
+                )
+
+        replay = [ResumeReplayMessage(role="user", content="hello")]
+        rendered: list[list[ResumeReplayMessage]] = []
+        monkeypatch.setattr(resume_mod, "SessionResumeBuilder", _Builder)
+        monkeypatch.setattr(resume_mod, "build_resume_replay_messages", lambda path: replay)
+        monkeypatch.setattr(service, "_render_recent_conversation", lambda messages: rendered.append(messages))
+
+        with patch("sys.stdin.isatty", return_value=False):
+            result = service.run()
+
+        assert result is not None
+        assert rendered == [replay]
+
+    def test_resume_cancel_does_not_render_recent_conversation(self, monkeypatch):
+        session = _fake_session(1, preview="latest")
+        mock_sessions = MagicMock()
+        mock_sessions.list_sessions.return_value = [session]
+        mock_context = MagicMock()
+        mock_context.max_tokens = 128000
+        mock_prompt = MagicMock()
+        mock_prompt.prompt.return_value = ""
+        console = _CaptureConsole()
+        service = ResumeCommandService(mock_sessions, mock_context, console, mock_prompt)
+        rendered: list[list[ResumeReplayMessage]] = []
+        monkeypatch.setattr(service, "_render_recent_conversation", lambda messages: rendered.append(messages))
+
+        with patch("sys.stdin.isatty", return_value=False):
+            result = service.run()
+
+        assert result is None
+        assert rendered == []
+
+    def test_render_recent_conversation_disables_markup_for_content(self):
+        console = _CaptureConsole()
+        service = ResumeCommandService(sessions=None, context=None, console=console, prompt=None)
+
+        service._render_recent_conversation([
+            ResumeReplayMessage(role="user", content="[red]show literally[/red]"),
+            ResumeReplayMessage(role="assistant", content="done"),
+        ])
+
+        output = "\n".join(console.lines)
+        assert "Recent conversation since checkpoint:" in output
+        assert "you" in output
+        assert "[red]show literally[/red]" in output
+        content_calls = [
+            kwargs
+            for line, kwargs in console.calls
+            if "[red]show literally[/red]" in line
+        ]
+        assert content_calls
+        assert all(kwargs.get("markup") is False for kwargs in content_calls)
 
 
 class TestReadKeyFunction:

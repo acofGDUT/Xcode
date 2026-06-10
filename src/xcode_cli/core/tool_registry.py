@@ -29,6 +29,17 @@ class ToolRegistry:
     def register(self, tool: ToolDef) -> None:
         self._tools[tool.name] = tool
 
+    def unregister(self, name: str) -> None:
+        self._tools.pop(name, None)
+
+    def unregister_prefix(self, prefix: str) -> list[str]:
+        removed: list[str] = []
+        for name in list(self._tools.keys()):
+            if name.startswith(prefix):
+                self.unregister(name)
+                removed.append(name)
+        return removed
+
     def get_openai_schemas(
         self,
         blocked_tools: set[str] | list[str] | None = None,

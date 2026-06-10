@@ -1,6 +1,6 @@
 # MCP Integration Phase 2 Design
 
-> 状态：设计完成，待实现。
+> 状态：代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 交互验收已完成。
 > 日期：2026-06-09
 > 风险层级：P0/P1。Phase 2 仍然处理外部 MCP server 暴露给模型的工具集合，涉及工具可见性、权限预期、动态 schema 更新、server 进程生命周期和真实 Windows 交互验收。
 
@@ -23,7 +23,7 @@ Phase 1 当前证据：
 
 - MCP 聚焦自动化矩阵：`57 passed`。
 - 全量测试：`432 passed`。
-- 原生 PowerShell/cmd.exe fake stdio server 验收：用户反馈已基本完成，待补具体记录。
+- 原生 PowerShell/cmd.exe fake stdio server 验收：2026-06-10 用户确认通过。
 
 因此 Phase 2 可以设计，但不能把 Phase 1 的“工具安全接入”直接扩大成完整生态扩展。
 

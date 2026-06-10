@@ -20,7 +20,7 @@
 
 ## Steps
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 覆盖：
 
@@ -31,7 +31,7 @@
 - `/mcp tools` 显示当前 output limit 来源。
 - enabled MCP tools 超过阈值时 status warning 可见。
 
-- [ ] **Step 2: 实现 output limit 优先级**
+- [x] **Step 2: 实现 output limit 优先级**
 
 优先级：
 
@@ -41,11 +41,11 @@ tool state max_output_chars > MCPConfig.max_mcp_output_chars > DEFAULT_MAX_MCP_O
 
 建议最大值：`200000`。超过时拒绝比静默 clamp 更可审计。
 
-- [ ] **Step 3: Adapter 使用 per-tool limit**
+- [x] **Step 3: Adapter 使用 per-tool limit**
 
 `_make_execute()` 需要拿到最终 max chars，而不是只使用 config 全局值。
 
-- [ ] **Step 4: 暴露面 warning**
+- [x] **Step 4: 暴露面 warning**
 
 建议默认 warning 阈值：`100` enabled MCP tools。Phase 2 只 warning，不自动禁用、不做 model tool search。
 
@@ -55,7 +55,7 @@ warning 出现在：
 - `/mcp tools`
 - `_mcp_tool_warnings`
 
-- [ ] **Step 5: 运行聚焦测试**
+- [x] **Step 5: 运行聚焦测试**
 
 Run:
 
@@ -65,7 +65,7 @@ pytest tests/test_mcp_state.py tests/test_mcp_tools.py tests/test_mcp_management
 
 Expected: PASS。
 
-- [ ] **Step 6: Codex review 检查点**
+- [x] **Step 6: Codex review 检查点**
 
 Review 重点：
 
@@ -73,3 +73,11 @@ Review 重点：
 - override 是否只写本机 state。
 - 大量 tools warning 是否不会自动放宽权限或隐藏工具。
 - 这一步是否没有实现 model-driven tool search。
+
+Review 记录（2026-06-10）：
+
+- 实现文件：`src/xcode_cli/mcp/catalog.py`、`src/xcode_cli/mcp/tools.py`、`src/xcode_cli/core/agent.py`。
+- 验证：`pytest tests\test_mcp_state.py tests\test_mcp_tools.py tests\test_mcp_management_command.py -q`：39 passed。
+- 验证：`pytest tests\test_mcp_state.py tests\test_mcp_catalog.py tests\test_mcp_tools.py tests\test_mcp_management_command.py tests\test_mcp_command.py tests\test_mcp_dynamic_refresh.py tests\test_mcp_connection.py tests\test_mcp_agent_integration.py -q`：84 passed。
+- 验证：`python -m py_compile src\xcode_cli\mcp\state.py src\xcode_cli\mcp\catalog.py src\xcode_cli\mcp\tools.py src\xcode_cli\core\agent.py`：通过。
+- Review 结论：通过。最终上限优先级为 tool state `max_output_chars` > `MCPConfig.max_mcp_output_chars`；adapter 把最终上限传给 `_make_execute()`，在 `render_mcp_tool_result()` 生成 `ToolOutput` 前截断；`/mcp output-limit` 仍只写本机 state；`/mcp tools` 显示 `value (state|config)`；enabled MCP tools 超过 100 只写 warning，不自动禁用、不隐藏工具、不实现 model-driven tool search。

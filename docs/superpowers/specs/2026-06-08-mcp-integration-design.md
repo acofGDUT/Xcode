@@ -1,6 +1,6 @@
 # MCP Integration Phase 1 Design
 
-> 状态：Phase 1 已实现并通过自动化回归；真实 Windows 手工验收待补具体记录。
+> 状态：Phase 1 已实现并通过自动化回归；2026-06-10 用户确认真实 PowerShell/cmd.exe 手工验收通过。
 > 日期：2026-06-08
 > 风险层级：P0。MCP 会把本地外部进程贡献的工具暴露给模型，涉及本地命令启动、权限、工具执行、输出进入 `_history`、Windows 进程生命周期和主循环稳定性。
 

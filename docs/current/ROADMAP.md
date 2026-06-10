@@ -2,35 +2,30 @@
 
 > 本文只记录未来计划、未完成能力和仍需验收的风险。已完成实现只保留状态索引；具体实现见 `ARCHITECTURE.md`，历史过程和验证证据见 `PROGRESS.md`，坑点和设计取舍见 `DEVNOTES.md`。
 
-最后更新：2026-06-09
+最后更新：2026-06-10
 
 ## 1. 当前状态
 
-Xcode v0.1.0 已完成 Phase 1-4、Phase 4.5 稳定化、AgentRuntime 两轮重构、Skills Phase 1-2、QQchat 第一版代码实现和 review 加固，以及 MCP Phase 1 stdio tools 安全接入代码实现。MCP 自动化回归已覆盖 trust gate、默认非只读、schema/result 防御、failed 状态、timeout cancellation cleanup 和 shutdown；真实 PowerShell/cmd.exe 交互验收用户反馈已基本完成，待补具体记录。MCP Phase 2 设计已完成，范围限定为 stdio tools 的管理面、动态工具刷新和可观测性，尚未实现。
+Xcode v0.1.0 已完成 Phase 1-4、Phase 4.5 稳定化、AgentRuntime 两轮重构、Skills Phase 1-2、QQchat 第一版代码实现和 review 加固，以及 MCP Phase 1/2。MCP Phase 1 的 trust gate、默认非只读、schema/result 防御、failed 状态、timeout cancellation cleanup、shutdown 和原生 PowerShell/cmd.exe fake stdio E2E 均已通过；Phase 2 管理面与动态工具刷新代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 交互验收也已完成。
 
 当前近期工作不应继续堆新大功能，而应优先收口：
 
-- 原生 Windows cmd.exe / PowerShell 端到端交互验收。
 - `/QQchat` 配置初始化、热部署 reload、真实 QQ 平台验收和文档最终验证。
-- `/resume` 恢复后最近对话渲染：已写 spec/plan，待实现。
 - `/context` cost 估算。
-- MCP Phase 1 stdio tools 原生 Windows 手工验收：代码和自动化已完成，用户反馈 fake stdio server、审批 UI 和 `/exit` 子进程退出基本验收完成，仍需补具体记录。
-- MCP Phase 2 管理面与动态工具刷新：已写 spec/plan/task，未实现。
 
-Phase 5 生态扩展整体继续冻结；MCP 只按已写 spec 小步解冻。当前 Phase 2 仍限制在 stdio tools 管理面，不包含 HTTP/OAuth/resources/prompts/MCP Apps。
+核心 CLI 的 `/resume`、`/compact`、多轮 tool call，以及 MCP Phase 1/2 原生 Windows 验收已经收口；剩余 Windows E2E 主要属于 QQchat。
+
+Phase 5 生态扩展整体继续冻结；MCP 只按已写 spec 小步解冻。当前 MCP Phase 2 仍限制在 stdio tools 管理面，不包含 HTTP/OAuth/resources/prompts/MCP Apps。
 
 ## 2. 近期优先级
 
 | 优先级 | 能力 | 状态 | 下一步 |
 |--------|------|------|--------|
-| P0 | 原生 Windows E2E 验收 | 未完成 | 在 cmd.exe/PowerShell 覆盖审批菜单、diff preview、工具摘要折叠、多轮 tool call、`/resume` 长列表刷新、`/compact`、`/QQchat start` |
+| P0 | QQchat 原生 Windows/真实平台 E2E | 未完成 | 在 cmd.exe/PowerShell 验证 `/QQchat start`，并完成真实 QQ 单聊和群聊 @ 回复验收 |
 | P1 | QQchat Task 7 文档和最终验证 | 待执行 | 收口 `ARCHITECTURE/DEVNOTES/PROGRESS/ROADMAP` 与验证证据；未做真实 QQ 验收前不得声称完整接入 |
 | P1 | QQchat Task 8：`/QQchat init` + reload | 已写 spec/plan，未实现 | 实现配置骨架初始化和热部署 reload，按 TDD 补测试 |
-| P1 | `/resume` 长列表重复渲染 | 代码实现和自动化通过；Windows 手工验收待补 | 在原生 PowerShell/cmd.exe 中补长列表、窄窗口、中文预览连续滚动记录 |
 | P1 | runtime status stale cleanup | 代码实现和自动化通过 | 后续 dashboard/list 如读取 runtime status 目录，应复用 `RuntimeStatusStore.prune_stale()` |
-| P1 | `/resume` 恢复后最近对话渲染 | 已写 spec/plan，未实现 | 恢复成功后渲染最新 checkpoint 后的 user/assistant 对话，不展示 tool result 或 hidden prompt |
-| P0 | MCP Phase 1：stdio tools 安全接入 | 代码实现和自动化通过；Windows 手工验收待补记录 | 补 PowerShell/cmd.exe fake stdio server、审批 UI 和 `/exit` shutdown 的具体验收记录 |
-| P0/P1 | MCP Phase 2：管理面与动态工具刷新 | 已写 spec/plan/task，未实现 | 按 `2026-06-09-mcp-phase2-plan.md` 从 state store 开始实现 |
+| P0/P1 | MCP Phase 2：管理面与动态工具刷新 | 代码实现、自动化回归和 Windows PTY 验收通过 | 已覆盖 PowerShell/cmd.exe 中 enable/disable、tool toggle、refresh、reconnect、events、output-limit、审批 UI 和 `/exit` |
 | P1 | `/context` cost 估算 | 未实现 | 在 token 统计外展示近似费用，未知模型显示 unknown |
 | P1 | 工具调用 UI 展开 | 基础完成，展开未做 | 设计并验证 `Ctrl+O` 展开摘要，重点看原生 Windows 热键兼容 |
 | P1 | task 面板持久展示 | 基础完成，待迭代 | 当前为瞬时渲染；后续评估底部驻留或 prompt_toolkit toolbar |
@@ -40,7 +35,7 @@ Phase 5 生态扩展整体继续冻结；MCP 只按已写 spec 小步解冻。�
 
 ## 3. P0：原生 Windows E2E 验收
 
-目标是在真实 cmd.exe / PowerShell 中验证关键交互，而不是只依赖 pytest 或 Git Bash。
+核心 CLI 验收已于 2026-06-10 由用户确认完成，覆盖：
 
 必须覆盖：
 
@@ -54,10 +49,15 @@ Phase 5 生态扩展整体继续冻结；MCP 只按已写 spec 小步解冻。�
   - Esc 取消不污染 `_history`。
 - `/compact` Rich Live 进度。
 - 多轮 tool call 不被 UI 状态打断。
-- `/QQchat status/start/stop` 与 prompt_toolkit 共存。
-- QQchat reload / init 完成后，还要补 `/QQchat init|reload`。
+- MCP fake stdio server 的 trust、reload、审批和 `/exit` shutdown。
 
-验收记录应写入 `PROGRESS.md` 或对应 task closeout。没有原生 Windows 证据时，不应声称终端交互“完成”。
+剩余未完成项：
+
+- `/QQchat status/start/stop` 与 prompt_toolkit 共存。
+- QQchat reload / init 完成后补 `/QQchat init|reload`。
+- 真实 QQ 单聊和群聊 @ 被动回复。
+
+核心 CLI 验收记录已写入 `PROGRESS.md` 和对应 task closeout。QQchat 未完成前，不应声称外部聊天入口的原生 Windows/真实平台 E2E 完成。
 
 ## 4. P1：QQchat 收口
 
@@ -255,7 +255,7 @@ Phase 5 整体仍冻结。MCP 是当前唯一按 spec 小步解冻的生态方�
 
 ### 12.1 MCP Phase 1：stdio tools 安全接入
 
-状态：代码实现和自动化回归已完成；真实 PowerShell/cmd.exe 手工验收用户反馈已基本完成，待补具体记录。
+状态：完成；代码实现、自动化回归和真实 PowerShell/cmd.exe 手工验收均已通过。
 
 设计文档：
 
@@ -288,7 +288,7 @@ Phase 1 不做：
 
 ### 12.2 MCP Phase 2：管理面与动态工具刷新
 
-状态：设计完成，待实现。
+状态：代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 交互验收已完成。
 
 设计文档：
 
@@ -299,10 +299,12 @@ Phase 1 不做：
 Phase 2 范围：
 
 - project-scoped 本机 `mcp_state.json`，保存 server/tool enable-disable 和 per-tool output limit，不写项目仓库。
-- `/mcp status --verbose`、`/mcp tools`、`/mcp enable|disable`、`/mcp tool enable|disable`、`/mcp refresh`、`/mcp reconnect`、`/mcp events`。
+- `/mcp status --verbose`、`/mcp tools`、`/mcp enable|disable`、`/mcp tool enable|disable`、`/mcp refresh`、`/mcp reconnect`、`/mcp events`、`/mcp output-limit`。
 - `notifications/tools/list_changed` 或等价 pending refresh event，在 AgentRuntime safe point 重建 MCP ToolDefs。
 - ToolRegistry mutation 只在主线程 safe point，background MCP thread 不直接改 schema。
 - lifecycle event ring buffer 和可观测 status，不泄露 env values。
+- per-tool output limit override，优先于全局 `max_mcp_output_chars`。
+- enabled MCP tools 超过 100 时 warning，用户通过 `/mcp tools` 和 `/mcp tool disable` 收敛。
 
 Phase 2 不做：
 
@@ -317,8 +319,8 @@ Phase 2 不做：
 
 | Task | 能力 | 备注 |
 |------|------|------|
-| 5.1 | MCP stdio tools | 代码实现和自动化通过；P0 安全接入，不含 resources/prompts/HTTP/SSE/OAuth；Windows 手工验收待补记录 |
-| 5.2 | MCP management + dynamic refresh | 已写设计和 task；只覆盖 stdio tools 管理面 |
+| 5.1 | MCP stdio tools | 代码实现、自动化和 PowerShell/cmd.exe E2E 通过；P0 安全接入，不含 resources/prompts/HTTP/SSE/OAuth |
+| 5.2 | MCP management + dynamic refresh | 代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 交互验收通过；只覆盖 stdio tools 管理面 |
 | 5.3 | WebFetch | 需要网络权限、安全边界和缓存策略 |
 | 5.4 | WebSearch | 需要 provider 抽象和引用展示 |
 | 5.5 | Cron / automation | 先明确本地线程、系统计划任务还是外部调度 |

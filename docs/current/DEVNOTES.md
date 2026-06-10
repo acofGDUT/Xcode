@@ -289,7 +289,7 @@ Review 注意：
 
 剩余风险：
 
-- 真实终端体验仍需结合 streaming、工具摘要显示、`/resume`、`/compact` 做原生 Windows E2E 验收。
+- 2026-06-10 用户已确认多轮 tool call、`/resume` 和 `/compact` 的原生 PowerShell/cmd.exe E2E 通过。
 - UI 仍没有显式 round 状态提示，用户在超长链路里不一定容易判断“还在继续推理”还是“真的停住”。
 
 ## 16. `/compact` 需要进度反馈
@@ -338,13 +338,22 @@ Review 注意：
 
 ## 18. `/resume` 恢复后最近对话 replay 边界
 
-**状态**：Open
+**状态**：Resolved
 **关联**：session resume 体验优化
 
 2026-06-09 已写设计和实现计划：
 
 - `docs/superpowers/specs/2026-06-09-resume-recent-conversation-rendering-design.md`
 - `docs/superpowers/plans/2026-06-09-resume-recent-conversation-rendering-plan.md`
+
+2026-06-10 已完成代码实现和自动化回归：
+
+- `build_resume_replay_messages()` 只读 transcript，不写 transcript。
+- 遇到最新 `compaction_checkpoint` 后清空 replay 缓冲，只展示 checkpoint 后的 user/assistant 文本；无 checkpoint 时展示 transcript 内 user/assistant 文本。
+- user replay 使用 transcript display content，不走 `_message_for_model_history()`，因此不会把 `metadata.model_content` 的 skill hidden prompt 刷给用户。
+- assistant tool_call-only 中间消息、tool result、system summary 和 `skill_invocation` audit event 都不展示。
+- `/resume` TTY 与非 TTY 成功路径共用 `_restore_selected_session()`；失败、取消、无 session 不渲染 replay。
+- Rich 输出对用户内容使用 `markup=False` / `highlight=False`。
 
 设计结论：
 
@@ -353,6 +362,8 @@ Review 注意：
 - user replay 必须使用 transcript display content，不能用 `metadata.model_content`，避免 skill hidden prompt 泄露给用户。
 - assistant replay 只展示有文本 `content` 的最终回复；tool_call-only assistant 中间消息、tool result、system summary 和 audit event 都不展示。
 - 第一版按用户要求展示 checkpoint 后全部 user/assistant 对话；如果后续发现过长影响终端体验，再单独设计折叠或配置。
+
+仍需补原生 PowerShell/cmd.exe 手工验收记录，尤其是多轮 checkpoint 后 replay、tool result 不显示、skill hidden prompt 不泄露，以及与长列表固定 9 行菜单连续操作共存。
 
 ## 19. 验收证据优先
 
@@ -602,7 +613,7 @@ Review 注意：
 **状态**：Mitigated
 **关联**：ROADMAP Phase 5.1 / MCP stdio tools
 
-2026-06-08 已完成 MCP Phase 1 设计和实施计划。2026-06-09 已完成代码实现和自动化回归；真实 PowerShell/cmd.exe fake stdio server 手工验收用户反馈已基本完成，待补具体记录。设计文档：
+2026-06-08 已完成 MCP Phase 1 设计和实施计划。2026-06-09 已完成代码实现和自动化回归；2026-06-10 用户确认真实 PowerShell/cmd.exe fake stdio server 手工验收完成。设计文档：
 
 - `docs/superpowers/specs/2026-06-08-mcp-integration-design.md`
 - `docs/superpowers/plans/2026-06-08-mcp-integration-plan.md`
@@ -614,7 +625,7 @@ Review 注意：
 - `MCPConnectionManager` 内部使用 async event loop/thread，外部向 `AgentRuntime` 暴露同步 `start_trusted_servers()`、`call_tool_sync()` 和 `shutdown()`。
 - `AgentRuntime` 初始化时加载配置、启动 trusted servers、注册 `mcp__<server>__<tool>`；`run_chat()` finally 中 shutdown。
 - `/mcp status|trust|untrust|reload` 是 side-effect command，不进入 LLM。
-- MCP 聚焦自动化矩阵当前为 `57 passed`；真实 Windows 交互验收用户反馈已基本完成，待补具体命令、现象和结果记录。
+- MCP 聚焦自动化矩阵为 `57 passed`；真实 Windows 交互验收覆盖 untrusted 不启动、trust/reload 后 connected、MCP tool 审批 UI 和 `/exit` 后子进程退出。
 
 设计结论：
 
@@ -647,7 +658,7 @@ Review 注意：
 **状态**：Open
 **关联**：ROADMAP Phase 5.2 / MCP management + dynamic refresh
 
-2026-06-09 已完成 MCP Phase 2 设计和实施计划。设计文档：
+2026-06-09 已完成 MCP Phase 2 设计和实施计划。2026-06-10 已完成代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 交互验收。设计文档：
 
 - `docs/superpowers/specs/2026-06-09-mcp-phase2-design.md`
 - `docs/superpowers/plans/2026-06-09-mcp-phase2-plan.md`
@@ -675,3 +686,17 @@ Review 注意：
 - 不要为了实现 list_changed 把 AgentRuntime 改成全局 async。
 - 不要把 per-tool output limit 做成项目共享配置；它是本机偏好。
 - 不要把 `/mcp` 管理命令做成全屏 TUI；先用普通表格，降低原生 Windows 交互风险。
+
+实现收口（2026-06-10）：
+
+- `MCPStateStore` 写入 `~/.xcode/projects/<project-key>/mcp_state.json`，只保存 server/tool enable-disable 和 per-tool output limit；损坏 JSON 返回 empty state + warning。
+- `MCPToolCatalog` 区分 registered、disabled_by_config、disabled_by_state、invalid_schema、name_conflict；disabled/invalid/conflict tools 不进入 OpenAI schema。
+- `AgentRuntime` 构造 effective MCP config 时只允许 local state 额外禁用；`enabled=false`、allowlist/blocklist 和 trust gate 仍是硬边界。
+- `MCPConnectionManager` 的 list_changed 路径由 SDK `message_handler` 或测试 fake manager 进入同一个 `mark_tools_changed()`，只写 pending refresh + event；`ToolRegistry` mutation 只在 `AgentRuntime` safe point 发生。
+- safe point 当前包括 `/mcp status/tools` 前、显式 `/mcp refresh` 后、`/mcp reconnect` 后、构建 LLM tool schema 前。
+- reconnect 会先关闭旧 session，再按 trust + effective enabled 重新 connect；失败时移除旧 tools，避免旧 schema 继续暴露。
+- per-tool output limit 在 `render_mcp_tool_result()` 生成 `ToolOutput` 前生效，优先级为 local state override > `max_mcp_output_chars`。
+- lifecycle events/status 对 env value、token、secret-like 文本做脱敏；`/mcp events` 只展示脱敏摘要。
+- 工具数量超过 100 只 warning，不自动隐藏、不自动禁用，也不实现 model-driven tool search。
+- PowerShell/cmd.exe 原生 PTY 验收覆盖 `/mcp` enable-disable、tool toggle、refresh 后工具集合变化、reconnect 旧进程退出与新进程启动、events 脱敏、output-limit、`/exit` shutdown，以及 `mcp__fake__echo` 走现有审批 UI 的冒烟验证。
+- Review follow-up：`call_tool_sync()` 的执行异常也必须走 server env/token 脱敏后再进入 tool result/history；动态 refresh 后 `_mcp_tool_warnings` 必须按当前 catalog 重算，不能保留已修复 schema 的旧 warning；`/mcp refresh` 和 `/mcp reconnect` 在 failed/untrusted/disabled 状态下只提示 requested 并引导查看 `/mcp status`。
