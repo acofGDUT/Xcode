@@ -128,6 +128,20 @@ C:\Users\%USERNAME%\.xcode\projects\D:\Xcode\memory\project_tech_stack.md
 - checkpoint summary 长度策略集中在 `ContextManager`，`max_summary_chars=None` 或 `0` 时关闭代码层截断。
 - 后续如重构 `agent.py`，应把 compaction/session resume glue 从主循环中继续拆出去。
 
+2026-06-08 新发现的 runtime status 清理边界：
+
+- `AgentRuntime.run_chat()` 在 `finally` 中调用 `RuntimeStatusStore.delete()`，因此普通 `/exit`、`quit`、可正常展开栈的异常退出会尝试删除 `~/.xcode/sessions/<pid>.json`。
+- 但强杀进程、断电、native crash、`os._exit()`、任务管理器结束进程等意外退出不会执行 Python `finally`，runtime status 文件会残留。
+- 当时 `RuntimeStatusStore` 没有 `prune_stale()` 或 pid liveness 检查；启动时不会清理历史遗留的 `<pid>.json`。
+- runtime status 不是 resume 的历史来源，所以残留文件不应影响 `/resume` 恢复正确性，但会污染“当前活跃进程”视图，后续若 dashboard/监控读取该目录会误报在线会话。
+
+2026-06-09 收口：
+
+- `RuntimeStatusStore.create()` 写入当前状态前调用 `prune_stale()`，扫描 `~/.xcode/sessions/*.json`。
+- dead pid 文件删除；alive/current pid 文件保留；pid liveness 无法可靠判断时使用 24 小时 TTL 兜底。
+- 损坏 JSON 和删除失败被当作可恢复状态处理，不影响主 REPL 启动。
+- 回归覆盖 dead pid、alive pid、unknown liveness + TTL、损坏 JSON、正常 `create/update/update_session_id/delete` 生命周期。
+
 ## 8. memory 自管理权限缺口
 
 **状态**：Resolved
@@ -202,8 +216,8 @@ Review 结论：第一轮通过，`pytest -q` 为 `184 passed`。已补多轮 to
 
 ## 11. 不引入 asyncio
 
-**状态**：Resolved
-**关联**：当前同步架构约束
+**状态**：Mitigated
+**关联**：当前同步架构约束 / MCP Phase 1
 
 当前项目保持同步调用链。子 Agent 并发使用 `ThreadPoolExecutor`。
 
@@ -212,6 +226,8 @@ Review 结论：第一轮通过，`pytest -q` 为 `184 passed`。已补多轮 to
 - LLM 调用是 I/O 密集，线程池已经足够。
 - 引入 asyncio 会传染 `complete()`、`_run_llm_loop()`、`run_chat()` 整条调用链。
 - 当前规模下，同步模型更容易 review 和调试。
+
+2026-06-08 MCP 设计例外：用户已同意 `MCPConnectionManager` 内部使用 async。该例外只允许发生在 `xcode_cli.mcp` 子系统内部：connection manager 可以启动 background event loop/thread，并通过同步 wrapper 向 `AgentRuntime` 暴露 `start_trusted_servers()`、`call_tool_sync()` 和 `shutdown()`。Phase 1 不把 `AgentRuntime`、`LLMClient.complete()`、`ToolCallExecutor.execute()` 或 REPL 主循环改成 async；后续若逐步 async 化，需要单独写 spec 和回归计划。
 
 ## 12. 子 Agent 不递归派发
 
@@ -306,7 +322,39 @@ Review 注意：
 - 非 TTY 环境回退到 `_run_number_input()`，行为与旧版数字输入一致。
 - 取消时返回 `None`，不污染 `_history` 和 runtime status。
 
-## 18. 验收证据优先
+2026-06-08 新发现的遗留缺陷：
+
+- 当 `/resume` 可选 session 很多时，方向键上下选择可能出现重复渲染或旧行残留。
+- 触发条件包括：session 列表高度超过终端可视区域、`last_user_input` 在窄终端或中文宽字符下换行、Rich 实际渲染行数和 `_refresh_session_list()` 手写 ANSI 清理行数不一致。
+- 当时 `_refresh_session_list()` 按 `len(sessions) + 1` 假设每个 session 只占一行，然后整体上移、清行、重绘；一旦某一项实际占用两行或列表滚出屏幕，旧内容就可能没有被清干净。
+
+2026-06-09 收口：
+
+- `/resume` 菜单已改为固定 9 行窗口，只显示当前选中项附近的若干条，并显示 `current/total`。
+- 预览先单行化，再按显示宽度截断；窄窗口下 checkpoint 标记可缩短，减少换行污染。
+- `_refresh_session_list()` 固定清理 `header + visible rows + footer` 行，不再用 session 总数推断清理高度。
+- 自动化已覆盖窗口计算、长列表只渲染可见窗口、固定行数刷新、预览单行化和非 TTY fallback。
+- 真实 PowerShell/cmd.exe 手工验收仍需补记录，至少覆盖长 session 列表、窄窗口、中文预览、连续方向键滚动。
+
+## 18. `/resume` 恢复后最近对话 replay 边界
+
+**状态**：Open
+**关联**：session resume 体验优化
+
+2026-06-09 已写设计和实现计划：
+
+- `docs/superpowers/specs/2026-06-09-resume-recent-conversation-rendering-design.md`
+- `docs/superpowers/plans/2026-06-09-resume-recent-conversation-rendering-plan.md`
+
+设计结论：
+
+- replay 是 `/resume` 成功后的用户可见提示，不参与 LLM `_history`，也不写回 transcript。
+- 数据边界是最新 `compaction_checkpoint` 之后的 transcript events；无 checkpoint 时使用 transcript 中已有 user/assistant 对话。
+- user replay 必须使用 transcript display content，不能用 `metadata.model_content`，避免 skill hidden prompt 泄露给用户。
+- assistant replay 只展示有文本 `content` 的最终回复；tool_call-only assistant 中间消息、tool result、system summary 和 audit event 都不展示。
+- 第一版按用户要求展示 checkpoint 后全部 user/assistant 对话；如果后续发现过长影响终端体验，再单独设计折叠或配置。
+
+## 19. 验收证据优先
 
 **状态**：Open
 **关联**：所有开发和 review 流程
@@ -323,7 +371,7 @@ python -c "from xcode_cli.core.agent import AgentRuntime; print('ok')"
 
 涉及 prompt_toolkit、审批菜单、方向键交互时，必须补原生 cmd.exe/PowerShell 手工验收记录。
 
-## 19. Windows subprocess 解码问题
+## 20. Windows subprocess 解码问题
 
 **状态**：Resolved
 **关联**：`run_shell` 工具 / 中文 Windows 控制台
@@ -340,7 +388,7 @@ python -c "from xcode_cli.core.agent import AgentRuntime; print('ok')"
 
 Review 注意：这次修复只覆盖 `run_shell`。其他使用 `subprocess.run(..., text=True)` 的工具如果后续也在 Windows 下读取非默认编码输出，需要单独审查，不要默认已经一起解决。
 
-## 20. Task 工具免审与 UI 展示
+## 21. Task 工具免审与 UI 展示
 
 **状态**：Resolved
 **关联**：task 工具 / 权限系统 / 输出渲染
@@ -374,7 +422,7 @@ Review 注意：这次修复只覆盖 `run_shell`。其他使用 `subprocess.run
 - 或者在每次新一轮 Thinking/输出前做轻量刷新，让用户一眼看到当前 task 状态而不用回滚。
 - 优先在原生 Windows cmd.exe/PowerShell 验证热键和固定区域的行为之后再决定方案。
 
-## 21. `/resume` 的 last_user_input 预览不稳定
+## 22. `/resume` 的 last_user_input 预览不稳定
 
 **状态**：Open
 **关联**：`/resume` 选择体验
@@ -386,7 +434,7 @@ Review 注意：这次修复只覆盖 `run_shell`。其他使用 `subprocess.run
 - 可以考虑记录 session 的"简要摘要"或"第一条用户输入"作为不变标识，而非动态变化的最后一条消息。
 - 或者在 session 创建时让用户起名。
 
-## 22. 开发流程与测试分层规范
+## 23. 开发流程与测试分层规范
 
 **状态**：Resolved
 **关联**：项目协作流程 / review 标准 / 测试基线
@@ -420,7 +468,7 @@ Review 注意：
 - P0/P1 改动如果没有测试，需要明确解释为什么只能用手工验收覆盖。
 - 终端交互类改动不能只靠 pytest 结论收口，必须记录原生 Windows 验收情况。
 
-## 23. AgentRuntime 第二轮重构边界
+## 24. AgentRuntime 第二轮重构边界
 
 **状态**：Resolved
 **关联**：AgentRuntime Refactor Round 2 / skills 功能前置解耦
@@ -448,7 +496,7 @@ Review 结果：
 - Coding Agent 分三步完成 `SkillCommandService`、`SlashCommandDispatcher`、`_run_user_turn()`，每步均经过 Codex review。
 - 最终验证记录见 `PROGRESS.md` 的 AgentRuntime Refactor Round 2 章节。
 
-## 24. Skills As Prompt Commands 边界
+## 25. Skills As Prompt Commands 边界
 
 **状态**：Resolved
 **关联**：P1 Skills As Prompt Commands / skill package 设计
@@ -483,7 +531,7 @@ Review 结果：
 - Task 1-8 均按 TDD/聚焦验证完成，并逐 task review。
 - 最终验证记录见 `PROGRESS.md` 的 Skills As Prompt Commands 章节。
 
-## 25. Model-Invocable Skills / SkillTool 边界
+## 26. Model-Invocable Skills / SkillTool 边界
 
 **状态**：Resolved
 **关联**：P1 Model-Invocable Skills / `SkillTool`
@@ -508,7 +556,7 @@ Review 注意：
 - `skill_invocation` audit event 只记录 source、skill、args、source_path、skill_source_hash 等审计字段，不记录 `model_content`。
 - resume/compact 不需要重新展开 skill；只要 history 中保留 SkillTool 的 tool message loaded marker 即可。
 
-## 26. QQ 外部聊天入口边界
+## 27. QQ 外部聊天入口边界
 
 **状态**：Mitigated
 **关联**：ROADMAP Phase 6 / `/QQchat`
@@ -548,3 +596,82 @@ Review 注意：
 - 被动回复要按 `msg_id + msg_seq` 去重，防止 QQ 重复投递导致重复回复。
 - 群聊被动回复窗口只有 5 分钟，长时间 coding 任务不适合直接在 QQ 群里跑。
 - QQchat 相关测试应覆盖 service queue、headless external loop、只读 tool scope、配置策略、gateway reconnect/status；不能只测 happy path payload。
+
+## 28. MCP Phase 1 安全接入边界
+
+**状态**：Mitigated
+**关联**：ROADMAP Phase 5.1 / MCP stdio tools
+
+2026-06-08 已完成 MCP Phase 1 设计和实施计划。2026-06-09 已完成代码实现和自动化回归；真实 PowerShell/cmd.exe fake stdio server 手工验收用户反馈已基本完成，待补具体记录。设计文档：
+
+- `docs/superpowers/specs/2026-06-08-mcp-integration-design.md`
+- `docs/superpowers/plans/2026-06-08-mcp-integration-plan.md`
+- `docs/superpowers/plans/2026-06-08-mcp-integration/`
+
+当前实现：
+
+- `.xcode/mcp.json` 只作为项目建议配置；trust gate 仍在本机 `~/.xcode/mcp_trust.json`。
+- `MCPConnectionManager` 内部使用 async event loop/thread，外部向 `AgentRuntime` 暴露同步 `start_trusted_servers()`、`call_tool_sync()` 和 `shutdown()`。
+- `AgentRuntime` 初始化时加载配置、启动 trusted servers、注册 `mcp__<server>__<tool>`；`run_chat()` finally 中 shutdown。
+- `/mcp status|trust|untrust|reload` 是 side-effect command，不进入 LLM。
+- MCP 聚焦自动化矩阵当前为 `57 passed`；真实 Windows 交互验收用户反馈已基本完成，待补具体命令、现象和结果记录。
+
+设计结论：
+
+- Phase 1 只做 stdio tools，不做 resources、prompts、HTTP、SSE、OAuth、`list_changed` 或 MCP Apps。
+- `.xcode/mcp.json` 是项目建议配置，不是信任凭证。它可能来自仓库，因此必须视为不可信输入。
+- trust gate 必须先于进程启动。未信任 server、hash 变化 server、disabled server 都不得 spawn subprocess。
+- trust 写入用户本机 `~/.xcode/mcp_trust.json`，不写项目目录。
+- trust fingerprint 绑定 `project_key + server_name + type + command + args + resolved cwd + sorted env keys`；env value 不进入 hash，避免 secret 落盘。代价是 env value 改变不会触发重新信任，文档和 status 必须说明。
+- `npx -y`、`npm exec`、`pnpm dlx`、`uvx`、`docker run` 等命令可能下载或执行外部代码；Phase 1 不禁止，但 `/mcp trust` 必须展示 command/args/cwd/env keys 并提示风险。
+- server trust 和 tool permission 是两层权限。信任 server 只表示允许启动本地 provider，不表示允许调用 provider 的所有工具。
+- MCP tool 注册到 `ToolDef` 时默认 `is_read_only=False`。只有 `.xcode/mcp.json` 的 `read_only_tools` 显式声明才可改为 `True`；MCP server 自己的 annotations 只能作为不可信提示。
+- MCP tool 命名使用 `mcp__<server>__<tool>`，sanitize 后必须防冲突。Phase 1 遇到冲突应 skip + warning，不静默覆盖内置工具。
+- MCP `inputSchema` 不可靠。schema 转换失败只能跳过对应 tool 并记录 warning，不能让 `ToolRegistry.get_openai_schemas()` 或 Agent 启动崩溃。
+- MCP tool result 进入 `_history` 前必须文本化并按 `max_mcp_output_chars` 截断；二进制、图片、resource 在 Phase 1 只写 omitted 占位。
+- 某个 MCP server failed 只能体现在 `/mcp status failed`，不能导致 Xcode 启动失败。
+- `MCPConnectionManager` 内部允许 async event loop/thread，但必须向当前同步 `AgentRuntime` 提供带 timeout 的 sync wrapper，并在 `/exit`/runtime finally 中 shutdown。
+- 连接/初始化 timeout 必须等待 coroutine cancellation cleanup；`SDKStdioSession.open()` 在 `CancelledError` 路径也必须关闭已进入的 async context，避免 stdio 子进程或 stream 资源残留。
+
+Review 注意：
+
+- 不要把 MCP 做成“配置存在就自动启动任意命令”的后门。
+- 不要把 trust store 放进项目或允许仓库携带 trust。
+- 不要因为 server 是 trusted 就绕过 `PermissionManager`。
+- 不要把 MCP prompts 现在注册为 slash commands；这不属于 Phase 2 管理面设计，应作为后续 resources/prompts phase 单独设计。
+- 不要把 MCP SDK 的 async 传染进主 REPL；Phase 1 只允许 `xcode_cli.mcp` 内部 async。
+- 不要只用“能跑通 filesystem server”作为验收结论；必须覆盖未信任不启动、hash 变化 untrusted、默认非只读、call_tool 错误捕获、output 截断和 `/mcp status`。
+
+## 29. MCP Phase 2 管理面设计边界
+
+**状态**：Open
+**关联**：ROADMAP Phase 5.2 / MCP management + dynamic refresh
+
+2026-06-09 已完成 MCP Phase 2 设计和实施计划。设计文档：
+
+- `docs/superpowers/specs/2026-06-09-mcp-phase2-design.md`
+- `docs/superpowers/plans/2026-06-09-mcp-phase2-plan.md`
+- `docs/superpowers/plans/2026-06-09-mcp-phase2/`
+
+本轮选择：
+
+- Phase 2 不做 HTTP/OAuth/resources/prompts/MCP Apps，而是先把 stdio tools 的管理面、动态刷新和可观测性补齐。
+- 主流 MCP 客户端普遍有 server/tool 管理能力；Xcode 应先具备本机 state store、tool toggle、refresh/reconnect/events，再进入远程 transport 或资源/prompt 形态。
+
+设计边界：
+
+- 本机 MCP state store 应写入 project-scoped `~/.xcode/projects/<project-key>/mcp_state.json` 或等价本机路径，不能写项目仓库。
+- `.xcode/mcp.json` 的 `enabled=false`、`tool_allowlist`、`tool_blocklist` 是硬边界；本机 state 不能越权启用。
+- server trust、server enabled、tool enabled、tool permission 是四层独立状态；enable/reconnect 不得绕过 trust gate。
+- `notifications/tools/list_changed` 只能产生 pending refresh event；background MCP thread 不得直接修改 `ToolRegistry`。
+- ToolRegistry mutation 必须在 AgentRuntime safe point 发生，例如构建 LLM schema 前、`/mcp status/tools` 前或显式 refresh/reconnect 后。
+- disabled/removed/invalid/conflicting tools 必须从 LLM schema 中消失；模型调用旧 tool 时只能返回 unknown tool，不应崩溃。
+- lifecycle events/status 不能泄露 env values、Authorization header、token 或完整 secret。
+- Phase 2 只 warning 工具数量过多，不实现 model-driven tool search / lazy schema loading。
+
+Review 注意：
+
+- 不要因为“tool 已禁用”就改变 PermissionManager 语义；禁用是暴露面控制，不是权限授权。
+- 不要为了实现 list_changed 把 AgentRuntime 改成全局 async。
+- 不要把 per-tool output limit 做成项目共享配置；它是本机偏好。
+- 不要把 `/mcp` 管理命令做成全屏 TUI；先用普通表格，降低原生 Windows 交互风险。

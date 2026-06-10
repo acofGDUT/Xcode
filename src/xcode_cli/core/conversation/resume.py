@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -10,6 +11,9 @@ from prompt_toolkit.formatted_text import ANSI
 
 from xcode_cli.core.session_resume import SessionResumeBuilder
 from xcode_cli.core.tooling.approval import read_key
+
+
+VISIBLE_RESUME_ROWS = 9
 
 
 @dataclass
@@ -95,9 +99,13 @@ class ResumeCommandService:
         self.console.print("Recent sessions:")
         for i, s in enumerate(sessions, 1):
             ts = datetime.utcfromtimestamp(s.updated_at).strftime("%Y-%m-%d %H:%M")
-            preview = s.last_user_input[:60] if s.last_user_input else "(empty)"
-            cp_mark = " \\[checkpoint]" if s.has_checkpoint else ""
-            self.console.print(f"  {i}. {s.session_id[:8]}...  {ts}  {preview}{cp_mark}")
+            preview = self._single_line_preview(s.last_user_input, max_chars=60)
+            cp_mark = " [checkpoint]" if s.has_checkpoint else ""
+            self.console.print(
+                f"  {i}. {s.session_id[:8]}...  {ts}  {preview}{cp_mark}",
+                markup=False,
+                highlight=False,
+            )
 
         choice = self.prompt.prompt(
             ANSI("\x1b[96mSelect session number (empty to cancel)\x1b[0m ▸ ")
@@ -142,23 +150,111 @@ class ResumeCommandService:
 
     def _render_session_list(self, sessions, selected: int) -> None:
         """渲染 session 列表"""
-        self.console.print("[bold]Select session to resume:[/bold] [dim](↑/↓, Enter, Esc)[/dim]")
-        for idx, s in enumerate(sessions):
-            ts = datetime.utcfromtimestamp(s.updated_at).strftime("%Y-%m-%d %H:%M")
-            preview = s.last_user_input[:60] if s.last_user_input else "(empty)"
-            cp_mark = " [checkpoint]" if s.has_checkpoint else ""
+        total = len(sessions)
+        start, end = self._visible_window(total, selected)
+        self.console.print(f"Select session to resume: {selected + 1}/{total}", style="bold", markup=False)
 
+        for idx in range(start, end):
+            s = sessions[idx]
+            ts = datetime.utcfromtimestamp(s.updated_at).strftime("%Y-%m-%d %H:%M")
+            cp_mark = self._checkpoint_mark(s.has_checkpoint)
+            preview = self._single_line_preview(
+                s.last_user_input,
+                max_chars=self._preview_width_budget(checkpoint_mark=cp_mark),
+            )
             prefix = ">" if idx == selected else " "
             style = "bold cyan" if idx == selected else "dim"
-            self.console.print(f"  {prefix} {ts}  {preview}{cp_mark}", style=style)
+            self.console.print(
+                f"  {prefix} {ts}  {preview}{cp_mark}",
+                style=style,
+                markup=False,
+                highlight=False,
+            )
+
+        for _ in range(VISIBLE_RESUME_ROWS - (end - start)):
+            self.console.print("")
+
+        self.console.print("↑/↓ move · Enter resume · Esc cancel", style="dim", markup=False)
 
     def _refresh_session_list(self, sessions, selected: int) -> None:
         """刷新 session 列表显示"""
-        count = len(sessions) + 1  # header line + N items
+        count = self._resume_menu_line_count()
+        self._clear_rendered_session_list(count)
+        self._render_session_list(sessions, selected)
+
+    def _clear_rendered_session_list(self, count: int) -> None:
         sys.stdout.write(f"\x1b[{count}A")
         for _ in range(count):
             sys.stdout.write("\x1b[2K")
             sys.stdout.write("\x1b[1B")
         sys.stdout.write(f"\x1b[{count}A")
         sys.stdout.flush()
-        self._render_session_list(sessions, selected)
+
+    @staticmethod
+    def _visible_window(total: int, selected: int, limit: int = VISIBLE_RESUME_ROWS) -> tuple[int, int]:
+        if total <= 0 or limit <= 0:
+            return 0, 0
+        if total <= limit:
+            return 0, total
+        selected = max(0, min(selected, total - 1))
+        half = limit // 2
+        start = max(0, selected - half)
+        start = min(start, total - limit)
+        return start, start + limit
+
+    @staticmethod
+    def _single_line_preview(text: str | None, max_chars: int = 60) -> str:
+        normalized = " ".join(str(text or "").split())
+        if not normalized:
+            return "(empty)"
+        return ResumeCommandService._truncate_display_width(normalized, max_chars)
+
+    @staticmethod
+    def _truncate_display_width(text: str, max_width: int) -> str:
+        if max_width <= 0:
+            return ""
+        if ResumeCommandService._display_width(text) <= max_width:
+            return text
+        ellipsis = "..."
+        if max_width <= len(ellipsis):
+            return ellipsis[:max_width]
+        target_width = max_width - len(ellipsis)
+        result: list[str] = []
+        current_width = 0
+        for char in text:
+            char_width = ResumeCommandService._char_display_width(char)
+            if current_width + char_width > target_width:
+                break
+            result.append(char)
+            current_width += char_width
+        return "".join(result).rstrip() + ellipsis
+
+    @staticmethod
+    def _display_width(text: str) -> int:
+        return sum(ResumeCommandService._char_display_width(char) for char in text)
+
+    @staticmethod
+    def _char_display_width(char: str) -> int:
+        if unicodedata.combining(char):
+            return 0
+        return 2 if unicodedata.east_asian_width(char) in {"F", "W"} else 1
+
+    @staticmethod
+    def _resume_menu_line_count(limit: int = VISIBLE_RESUME_ROWS) -> int:
+        return limit + 2
+
+    def _checkpoint_mark(self, has_checkpoint: bool) -> str:
+        if not has_checkpoint:
+            return ""
+        return " [checkpoint]" if self._console_width() >= 48 else " [cp]"
+
+    def _preview_width_budget(self, *, checkpoint_mark: str) -> int:
+        width = self._console_width()
+        reserved_width = len("  > ") + len("YYYY-MM-DD HH:MM") + len("  ") + len(checkpoint_mark)
+        return max(0, min(60, width - reserved_width - 1))
+
+    def _console_width(self) -> int:
+        raw_width = getattr(getattr(self.console, "size", None), "width", None)
+        if isinstance(raw_width, int):
+            return max(raw_width, 20)
+        return 80

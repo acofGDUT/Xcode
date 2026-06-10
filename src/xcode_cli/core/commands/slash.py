@@ -71,6 +71,7 @@ COMMANDS = {
     "/memory": "Memory status and auto-memory toggle",
     "/resume": "List and resume previous sessions",
     "/compact": "Compress current conversation context",
+    "/mcp": "Manage MCP servers (status/trust/untrust/reload)",
     "/QQchat": "Start, stop, or inspect QQ chat bridge",
     "/exit": "Exit chat",
 }
@@ -135,6 +136,17 @@ class SlashCompleter(Completer):
             ]:
                 if cmd.lower().startswith(text.lower()):
                     yield Completion(cmd, start_position=-len(text), display=f"{cmd} - {desc}")
+            return
+
+        if text.startswith("/mcp"):
+            for cmd, desc in [
+                ("/mcp status", "Inspect MCP servers"),
+                ("/mcp trust ", "Trust an MCP server config"),
+                ("/mcp untrust ", "Remove trust for an MCP server"),
+                ("/mcp reload", "Reload MCP config and trusted servers"),
+            ]:
+                if cmd.startswith(text):
+                    yield Completion(cmd, start_position=-len(text), display=f"{cmd} — {desc}")
             return
 
         for cmd, desc in self._commands.items():

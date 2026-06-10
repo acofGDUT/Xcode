@@ -168,6 +168,20 @@ def test_llm_loop_empty_response_returns_readable_fallback(tmp_path: Path, monke
     assert result == "No response."
 
 
+def test_llm_loop_converts_unexpected_llm_exception_to_error_text(tmp_path: Path, monkeypatch) -> None:
+    agent = _make_agent(tmp_path, monkeypatch)
+
+    def fail_complete(**kwargs):
+        raise RuntimeError("transport exploded")
+
+    agent.llm.complete = fail_complete
+
+    result = agent._run_llm_loop([], "system")
+
+    assert result.startswith("[v0] LLM request failed:")
+    assert "transport exploded" in result
+
+
 def test_llm_loop_buffer_then_render_prints_final_answer(tmp_path: Path, monkeypatch) -> None:
     agent = _make_agent(tmp_path, monkeypatch)
     cfg = agent.config_store.load()

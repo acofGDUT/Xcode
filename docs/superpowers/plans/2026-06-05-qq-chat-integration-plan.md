@@ -51,6 +51,7 @@
 - [Task 5: QQChatService 和 `/QQchat`](2026-06-05-qq-chat-integration/task-05-service-slash-command.md)
 - [Task 6: 权限、审计和 Windows 回归](2026-06-05-qq-chat-integration/task-06-security-audit-windows.md)
 - [Task 7: 文档和最终验证](2026-06-05-qq-chat-integration/task-07-docs-final-verification.md)
+- [Task 8: `/QQchat init` 与热部署 reload](2026-06-08-qqchat-init-reload-task.md)
 
 ## 执行约束
 

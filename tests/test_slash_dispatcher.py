@@ -143,6 +143,15 @@ class TestDispatchSideEffectCommands:
         assert result.kind == "handled"
         assert calls == [["/QQchat", "status"]]
 
+    def test_mcp_dispatch_is_side_effect_command(self) -> None:
+        calls = []
+        dispatcher = _make_dispatcher(mcp_handler=lambda parts: calls.append(parts))
+
+        result = dispatcher.dispatch("/mcp status")
+
+        assert result.kind == "handled"
+        assert calls == [["/mcp", "status"]]
+
 
 # ------------------------------------------------------------------
 # unknown command

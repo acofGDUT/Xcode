@@ -99,36 +99,40 @@ class LLMClient:
         reasoning_parts: list[str] = []
         tool_calls_acc: dict[int, dict[str, str]] = {}
 
-        for chunk in stream:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
+        try:
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
 
-            if delta.content:
-                content_parts.append(delta.content)
-                if on_text_token:
-                    on_text_token(delta.content)
+                if delta.content:
+                    content_parts.append(delta.content)
+                    if on_text_token:
+                        on_text_token(delta.content)
 
-            # Some OpenAI-compatible providers (e.g. DeepSeek reasoning models)
-            # stream chain-of-thought in `reasoning_content` and require that it is
-            # passed back verbatim in subsequent turns.
-            rc = getattr(delta, "reasoning_content", None)
-            if rc:
-                reasoning_parts.append(rc)
-                if on_reasoning_token:
-                    on_reasoning_token(rc)
+                # Some OpenAI-compatible providers (e.g. DeepSeek reasoning models)
+                # stream chain-of-thought in `reasoning_content` and require that it is
+                # passed back verbatim in subsequent turns.
+                rc = getattr(delta, "reasoning_content", None)
+                if rc:
+                    reasoning_parts.append(rc)
+                    if on_reasoning_token:
+                        on_reasoning_token(rc)
 
-            if delta.tool_calls:
-                for tc in delta.tool_calls:
-                    idx = tc.index or 0
-                    if idx not in tool_calls_acc:
-                        tool_calls_acc[idx] = {"id": "", "name": "", "args": ""}
-                    if tc.id:
-                        tool_calls_acc[idx]["id"] = tc.id
-                    if tc.function and tc.function.name:
-                        tool_calls_acc[idx]["name"] = tc.function.name
-                    if tc.function and tc.function.arguments:
-                        tool_calls_acc[idx]["args"] += tc.function.arguments
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        idx = tc.index or 0
+                        if idx not in tool_calls_acc:
+                            tool_calls_acc[idx] = {"id": "", "name": "", "args": ""}
+                        if tc.id:
+                            tool_calls_acc[idx]["id"] = tc.id
+                        if tc.function and tc.function.name:
+                            tool_calls_acc[idx]["name"] = tc.function.name
+                        if tc.function and tc.function.arguments:
+                            tool_calls_acc[idx]["args"] += tc.function.arguments
+        except Exception as exc:
+            friendly = _friendly_llm_error(exc)
+            return LLMResponse(content=f"[v0] LLM request failed: {friendly}", tool_calls=[])
 
         tool_calls: list[ToolCall] = []
         for tc_dict in tool_calls_acc.values():

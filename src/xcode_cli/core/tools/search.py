@@ -57,7 +57,13 @@ def grep(
     args.extend([pattern, str(resolved_path)])
 
     try:
-        proc = subprocess.run(args, capture_output=True, text=True)
+        proc = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
     except FileNotFoundError:
         return "Error: rg (ripgrep) is not installed. Install it from https://github.com/BurntSushi/ripgrep"
     except Exception as exc:

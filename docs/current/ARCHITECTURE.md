@@ -524,7 +524,7 @@ runtime status 写入：
 ~/.xcode/sessions/<pid>.json
 ```
 
-该文件只表示当前活跃进程，退出时删除。
+该文件只表示当前活跃进程，退出时删除。`RuntimeStatusStore.create()` 写入当前进程状态前会调用 `prune_stale()` 扫描 `~/.xcode/sessions/*.json`：dead pid 文件会删除，alive/current pid 文件保留，pid liveness 无法可靠判断时使用 24 小时 TTL 兜底；损坏 JSON 和删除失败不影响主 REPL 启动。
 
 ### `/compact`
 
@@ -538,7 +538,7 @@ runtime status 写入：
 
 ### `/resume`
 
-`/resume` 是当前恢复入口。TTY 环境下通过方向键 ↑/↓ 浏览 + Enter 确认 + Esc 取消选择 session（复用 `approval.py` 的 `read_key()` 和 ANSI 光标刷新模式），列表项显示时间、最近输入预览和 checkpoint 标记。非 TTY 环境回退到数字输入。选中 session 后，`SessionResumeBuilder` 读取 transcript 并构造 budgeted history。
+`/resume` 是当前恢复入口。TTY 环境下通过方向键 ↑/↓ 浏览 + Enter 确认 + Esc 取消选择 session（复用 `approval.py` 的 `read_key()` 和 ANSI 光标刷新模式）。TTY 菜单采用固定 9 行窗口，只渲染当前选中项附近的 session，header 显示 `current/total`；列表项显示时间、单行化后的最近输入预览和 checkpoint 标记，刷新时固定清理 `header + visible rows + footer` 行。非 TTY 环境回退到数字输入。选中 session 后，`SessionResumeBuilder` 读取 transcript 并构造 budgeted history。
 
 恢复规则：
 
@@ -685,7 +685,48 @@ Layer 4: permissions + remote_approval (execution.py + permissions.py)
 
 所有 gateway 错误、断线、重连状态都通过 `on_status` 进入 `QQChatService.last_error`，由 `/QQchat status` 展示。AccessToken 会在 gateway 错误字符串中脱敏。
 
-## 13. 当前文件职责
+## 13. MCP stdio tools 接入
+
+MCP Phase 1 已实现为 `xcode_cli.mcp` 子系统，只支持 `.xcode/mcp.json` 中的 stdio tools。它不是完整生态扩展：当前不支持 resources、prompts、HTTP、SSE、OAuth、`list_changed`、marketplace 或自动安装。
+
+数据流：
+
+```text
+.xcode/mcp.json
+  -> load_mcp_config()
+  -> MCPTrustStore(~/.xcode/mcp_trust.json)
+  -> MCPConnectionManager.start_trusted_servers()
+  -> tools/list
+  -> create_mcp_tool_defs()
+  -> ToolRegistry.register(mcp__server__tool)
+  -> ToolCallExecutor + PermissionManager
+  -> MCPConnectionManager.call_tool_sync()
+  -> render_mcp_tool_result(max_mcp_output_chars)
+```
+
+关键边界：
+
+- trust gate 先于 stdio server 启动；未信任、hash 变化或 disabled server 不会 spawn subprocess。
+- trust fingerprint 绑定 project key、server name、type、command、args、resolved cwd 和 env keys；env values 不写入 hash 或 trust store。
+- MCP tool 命名为 `mcp__<server>__<tool>`，server/tool 原名先 sanitize；冲突 tool 会 skip + warning，不覆盖内置工具。
+- MCP tool 默认 `is_read_only=False`；只有 `.xcode/mcp.json` 的 `read_only_tools` 显式声明才可变为只读，且显式 `deny` 仍优先。
+- MCP `inputSchema` 防御式转换；不兼容 schema 会 skip 对应 tool，不打崩 AgentRuntime。
+- MCP `tools/call` result 一律文本化；image/audio/resource 只写 omitted 占位；进入 tool message 前按 `max_mcp_output_chars` 截断。
+- `MCPConnectionManager` 内部使用 async event loop/thread，但 `AgentRuntime`、`_run_llm_loop()`、`ToolCallExecutor` 仍保持同步外观。
+- 某个 server 启动或 `tools/list` 失败只进入 `/mcp status failed`，不阻止 Xcode 启动。
+
+`/mcp` 是 side-effect slash command：
+
+| 命令 | 行为 |
+|------|------|
+| `/mcp` / `/mcp status` | 展示 server 状态、tool count、短 hash、错误和 warning |
+| `/mcp trust <server>` | 展示 command、args、cwd、env keys、hash 和高风险命令提示，确认后写入本机 trust store |
+| `/mcp untrust <server>` | 删除本机 trust record，reload 后停止暴露该 server tools |
+| `/mcp reload` | shutdown 当前 manager，重新读取配置/trust，启动 trusted servers 并注册工具 |
+
+当前自动化覆盖已完成；原生 PowerShell/cmd.exe fake stdio server、审批 UI 和 `/exit` 子进程退出手工验收仍未执行。
+
+## 14. 当前文件职责
 
 | 文件 | 职责 |
 |------|------|
@@ -712,7 +753,7 @@ Layer 4: permissions + remote_approval (execution.py + permissions.py)
 | `src/xcode_cli/core/context.py` | token 估算和历史压缩 |
 | `src/xcode_cli/core/session.py` | transcript、history.jsonl 和 session listing |
 | `src/xcode_cli/core/session_resume.py` | transcript 到可恢复 history 的构造 |
-| `src/xcode_cli/core/runtime_status.py` | 当前活跃进程状态文件 |
+| `src/xcode_cli/core/runtime_status.py` | 当前活跃进程状态文件和 stale status 清理 |
 | `src/xcode_cli/core/memory.py` | memory 路径、读取和 prompt context 注入 |
 | `src/xcode_cli/core/turn.py` | `UserTurnInput`，区分 UI 展示内容、模型可见内容和当前 turn metadata |
 | `src/xcode_cli/core/prompting.py` | base system prompt 和 memory 规则 |
@@ -724,6 +765,14 @@ Layer 4: permissions + remote_approval (execution.py + permissions.py)
 | `src/xcode_cli/core/task_tracker.py` | task CRUD 和 task 工具工厂 |
 | `src/xcode_cli/core/sub_agent.py` | 子 Agent 执行 |
 | `src/xcode_cli/ui/renderer.py` | Rich Markdown / diff 渲染 |
+| `src/xcode_cli/mcp/config.py` | `.xcode/mcp.json` 加载、校验、变量展开和输出长度配置 |
+| `src/xcode_cli/mcp/trust.py` | MCP server fingerprint 和本机 trust store |
+| `src/xcode_cli/mcp/naming.py` | `mcp__server__tool` 名称 sanitize 和冲突检测 |
+| `src/xcode_cli/mcp/schema.py` | MCP `inputSchema` 防御式转换 |
+| `src/xcode_cli/mcp/result.py` | MCP `tools/call` result 文本化和截断 |
+| `src/xcode_cli/mcp/status.py` | MCP server/tool 状态模型 |
+| `src/xcode_cli/mcp/connection.py` | 内部 async 的 MCP stdio connection manager 和同步 wrapper |
+| `src/xcode_cli/mcp/tools.py` | MCP discovered tools 到 `ToolDef` 的 adapter |
 | `src/xcode_cli/qqchat/config.py` | QQchat 配置加载、项目级非敏感配置和 secret 安全摘要 |
 | `src/xcode_cli/qqchat/auth.py` | QQ AccessToken 获取、缓存、刷新和错误脱敏 |
 | `src/xcode_cli/qqchat/events.py` | QQ C2C/group 事件归一化和 conversation key |
@@ -732,9 +781,9 @@ Layer 4: permissions + remote_approval (execution.py + permissions.py)
 | `src/xcode_cli/qqchat/gateway.py` | QQ WebSocket identify/heartbeat/resume/reconnect、gateway 状态回传 |
 | `src/xcode_cli/qqchat/service.py` | `/QQchat` service 生命周期、配置策略、queue worker、external runner 和 reply 编排 |
 
-## 14. 当前架构边界
+## 15. 当前架构边界
 
-- 不引入 `asyncio`。
+- 主 AgentRuntime 不全局引入 `asyncio`；例外仅限 `xcode_cli.mcp` 子系统内部的 event loop/thread。
 - 不提供专用 memory CRUD 工具。
 - 子 Agent 不递归派发子 Agent。
 - 配置主要来自 `~/.xcode/config.json`，项目级配置合并尚未完成。

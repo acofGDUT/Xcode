@@ -30,7 +30,7 @@ from xcode_cli.core.ui.streaming import StreamingTurnRenderer
 from xcode_cli.core.context import ContextManager
 from xcode_cli.core.dashboard import Dashboard
 from xcode_cli.core.external_turn import ExternalTurnRunner, ToolScope
-from xcode_cli.core.llm import LLMClient
+from xcode_cli.core.llm import LLMClient, _friendly_llm_error
 from xcode_cli.core.memory import MemoryManager
 from xcode_cli.core.planning import PlanMode, write_plan_file
 from xcode_cli.core.prompting import build_skill_listing_section, build_system_prompt
@@ -43,6 +43,10 @@ from xcode_cli.core.tools import ALL_TOOLS
 from xcode_cli.core.tools.agent_tool import create_dispatch_agent_tool
 from xcode_cli.core.tools.skill_tool import create_skill_tool
 from xcode_cli.core.turn import UserTurnInput, coerce_user_turn_input
+from xcode_cli.mcp.config import MCPConfig, MCPServerConfig, load_mcp_config
+from xcode_cli.mcp.connection import MCPConnectionManager
+from xcode_cli.mcp.tools import create_mcp_tool_defs
+from xcode_cli.mcp.trust import MCPTrustStore, compute_server_fingerprint
 from xcode_cli.qqchat.auth import QQAuthClient
 from xcode_cli.qqchat.config import load_qqchat_config
 from xcode_cli.qqchat.gateway import QQGatewayClient
@@ -59,6 +63,11 @@ class AgentRuntime:
         self.console = Console()
         self.cwd = str(resolve_project_root(os.getcwd()))
         self.sessions = SessionStore(cwd=self.cwd)
+        self._project_key = self.sessions.project_key()
+        self.mcp_config: MCPConfig = load_mcp_config(self.cwd, env=os.environ)
+        self.mcp_trust = MCPTrustStore()
+        self.mcp_manager: MCPConnectionManager | None = None
+        self._mcp_tool_warnings: list[str] = []
         self._runtime_status = RuntimeStatusStore()
         self.skill_loader = SkillLoader(self.cwd)
         self._skill_load_result = self.skill_loader.load()
@@ -112,6 +121,8 @@ class AgentRuntime:
             self.tools.register(extra_tool)
         if self._skill_catalog.model_invocable_skills():
             self.tools.register(create_skill_tool(self._skill_invocation))
+        self._initialize_mcp_manager()
+        self._register_mcp_tools()
         self.tool_display_state = ToolDisplayState(expanded=False)
         self.tool_display = ToolCallDisplay(self.tool_display_state)
         self.tool_executor = ToolCallExecutor(
@@ -142,6 +153,7 @@ class AgentRuntime:
             resume_handler=self._handle_resume_command,
             compact_handler=self._handle_compact_command,
             qqchat_handler=self._handle_qqchat_command,
+            mcp_handler=self._handle_mcp_command,
             registry=self._command_registry,
         )
 
@@ -224,6 +236,7 @@ class AgentRuntime:
 
                 self._run_user_turn(user_input)
         finally:
+            self._shutdown_mcp_manager()
             self._runtime_status.delete()
 
     def _render_welcome(self) -> None:
@@ -334,6 +347,154 @@ class AgentRuntime:
             table.add_row("execution_allowlist", ", ".join(str(x) for x in tool_scope.get("execution_allowlist", [])))
             table.add_row("remote_approval", str(tool_scope.get("remote_approval")))
         self.console.print(table)
+
+    def _handle_mcp_command(self, parts: list[str]) -> None:
+        action = parts[1].lower() if len(parts) > 1 else "status"
+        if action == "status":
+            self._print_mcp_status()
+            return
+        if action == "reload":
+            self._reload_mcp_servers()
+            self._print_mcp_status()
+            return
+        if action == "trust":
+            if len(parts) < 3:
+                self.console.print("Usage: /mcp trust <server>", markup=False, highlight=False)
+                return
+            self._trust_mcp_server(parts[2])
+            return
+        if action == "untrust":
+            if len(parts) < 3:
+                self.console.print("Usage: /mcp untrust <server>", markup=False, highlight=False)
+                return
+            self.mcp_trust.untrust(self._project_key, parts[2])
+            self._reload_mcp_servers()
+            self.console.print(f"MCP server '{parts[2]}' untrusted.")
+            return
+        self.console.print("Usage: /mcp status|trust <server>|untrust <server>|reload", markup=False, highlight=False)
+
+    def _print_mcp_status(self) -> None:
+        table = Table(title="MCP")
+        table.add_column("Server")
+        table.add_column("Status")
+        table.add_column("Tools")
+        table.add_column("Hash")
+        table.add_column("Error / warnings")
+
+        statuses = self.mcp_manager.statuses() if self.mcp_manager is not None else []
+        seen = set()
+        for status in statuses:
+            seen.add(status.name)
+            details = []
+            if status.error_summary:
+                details.append(status.error_summary)
+            details.extend(status.warnings)
+            table.add_row(
+                status.name,
+                status.status,
+                str(status.tool_count),
+                _short_fingerprint(status.fingerprint),
+                "\n".join(details),
+            )
+
+        for server in self.mcp_config.servers:
+            if server.name in seen:
+                continue
+            fingerprint = compute_server_fingerprint(self._project_key, server)
+            status = "disabled" if not server.enabled else "untrusted"
+            table.add_row(server.name, status, "0", _short_fingerprint(fingerprint), "")
+
+        for warning in [*self.mcp_config.warnings, *self._mcp_tool_warnings]:
+            table.add_row("(warning)", "", "", "", warning)
+        self.console.print(table)
+
+    def _trust_mcp_server(self, server_name: str) -> None:
+        server = self._find_mcp_server(server_name)
+        if server is None:
+            self.console.print(f"Unknown MCP server: {server_name}")
+            return
+        fingerprint = compute_server_fingerprint(self._project_key, server)
+        self.console.print(f"MCP server: {server.name}", markup=False, highlight=False)
+        self.console.print(f"command: {server.command}", markup=False, highlight=False)
+        self.console.print(f"args: {' '.join(server.args)}", markup=False, highlight=False)
+        self.console.print(f"cwd: {server.cwd}", markup=False, highlight=False)
+        self.console.print(f"env keys: {', '.join(sorted(server.env.keys())) or '(none)'}", markup=False, highlight=False)
+        self.console.print(f"hash: {fingerprint}", markup=False, highlight=False)
+        if _mcp_command_is_risky(server):
+            self.console.print(
+                "Warning: this MCP command may download or execute external code. Confirm the source is trusted.",
+                markup=False,
+                highlight=False,
+            )
+        if not self._confirm_mcp_trust(server):
+            self.console.print("MCP trust cancelled.")
+            return
+        self.mcp_trust.trust(self._project_key, server)
+        self.console.print(f"MCP server '{server.name}' trusted.")
+        self._reload_mcp_servers()
+
+    def _confirm_mcp_trust(self, server: MCPServerConfig) -> bool:
+        try:
+            answer = input(f"Trust MCP server '{server.name}'? [y/N] ").strip().lower()
+        except EOFError:
+            return False
+        return answer in {"y", "yes"}
+
+    def _find_mcp_server(self, server_name: str) -> MCPServerConfig | None:
+        for server in self.mcp_config.servers:
+            if server.name == server_name:
+                return server
+        return None
+
+    def _reload_mcp_servers(self) -> None:
+        self._shutdown_mcp_manager()
+        self.mcp_config = load_mcp_config(self.cwd, env=os.environ)
+        self._mcp_tool_warnings = []
+        self._remove_mcp_tools()
+        self._initialize_mcp_manager()
+        self._register_mcp_tools()
+
+    def _initialize_mcp_manager(self) -> None:
+        if not self.mcp_config.servers:
+            self.mcp_manager = None
+            return
+        try:
+            self.mcp_manager = MCPConnectionManager(
+                config=self.mcp_config,
+                trust_store=self.mcp_trust,
+                project_key=self._project_key,
+            )
+            self.mcp_manager.start_trusted_servers()
+        except Exception as exc:
+            self.mcp_manager = None
+            self._mcp_tool_warnings.append(f"MCP initialization failed: {exc}")
+
+    def _register_mcp_tools(self) -> None:
+        if self.mcp_manager is None:
+            return
+        tool_defs, warnings = create_mcp_tool_defs(
+            connection_manager=self.mcp_manager,
+            config=self.mcp_config,
+            existing_names=set(self.tools.list_names()),
+        )
+        self._mcp_tool_warnings.extend(warnings)
+        for tool in tool_defs:
+            self.tools.register(tool)
+
+    def _remove_mcp_tools(self) -> None:
+        for name in list(self.tools.list_names()):
+            if name.startswith("mcp__"):
+                self.tools._tools.pop(name, None)
+
+    def _shutdown_mcp_manager(self) -> None:
+        if self.mcp_manager is None:
+            return
+        try:
+            self.mcp_manager.shutdown()
+        except Exception as exc:
+            self.console.print(f"MCP shutdown warning: {exc}", markup=False, highlight=False)
+        finally:
+            self.mcp_manager = None
 
     def _handle_env_command(self, parts: list[str]) -> None:
         from xcode_cli.core.ui.env_dashboard import EnvDashboard
@@ -704,6 +865,10 @@ class AgentRuntime:
                 if render_output:
                     self.console.print("[dim]Interrupted.[/dim]")
                 return "Interrupted."
+            except Exception as exc:
+                stop_thinking()
+                friendly = _friendly_llm_error(exc)
+                return f"[v0] LLM request failed: {friendly}"
             finally:
                 stop_thinking()
             if update_runtime_stats:
@@ -754,3 +919,24 @@ class AgentRuntime:
                         transcript_session_id,
                         {"type": "skill_invocation", **invocation},
                     )
+
+
+def _short_fingerprint(fingerprint: str) -> str:
+    if fingerprint.startswith("sha256:"):
+        return fingerprint[:19]
+    return fingerprint[:16]
+
+
+def _mcp_command_is_risky(server: MCPServerConfig) -> bool:
+    command = server.command.lower()
+    args = [arg.lower() for arg in server.args]
+    joined = " ".join([command, *args])
+    if command in {"uvx"}:
+        return True
+    if command in {"npx", "pnpm"} and ("-y" in args or "dlx" in args):
+        return True
+    if command == "npm" and "exec" in args:
+        return True
+    if command == "docker" and "run" in args:
+        return True
+    return any(pattern in joined for pattern in ("pnpm dlx", "docker run", "npx -y"))

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -8,8 +9,32 @@ import pytest
 
 from xcode_cli.core.context import ContextManager
 from xcode_cli.core.conversation.resume import ResumeCommandService
+from xcode_cli.core.session import SessionInfo
 from xcode_cli.core.session import SessionStore
 from xcode_cli.core.session_resume import SessionResumeBuilder
+
+
+class _CaptureConsole:
+    def __init__(self, width: int = 80) -> None:
+        self.lines: list[str] = []
+        self.size = SimpleNamespace(width=width)
+
+    def print(self, *objects, **kwargs) -> None:
+        if not objects:
+            self.lines.append("")
+            return
+        self.lines.append(" ".join(str(obj) for obj in objects))
+
+
+def _fake_session(idx: int, *, preview: str | None = None, checkpoint: bool = False) -> SessionInfo:
+    return SessionInfo(
+        session_id=f"session-{idx:02d}",
+        path=Path(f"session-{idx:02d}.jsonl"),
+        updated_at=1717000000 + idx,
+        last_user_input=preview if preview is not None else f"session-{idx}-preview",
+        message_count=1,
+        has_checkpoint=checkpoint,
+    )
 
 
 class TestResumeTTY:
@@ -56,6 +81,45 @@ class TestResumeTTY:
                             # 验证渲染被调用
                             mock_render.assert_called_once()
                             assert result is not None
+
+    def test_visible_window_centers_selected_when_possible(self):
+        assert ResumeCommandService._visible_window(total=30, selected=0, limit=9) == (0, 9)
+        assert ResumeCommandService._visible_window(total=30, selected=15, limit=9) == (11, 20)
+        assert ResumeCommandService._visible_window(total=30, selected=29, limit=9) == (21, 30)
+
+    def test_preview_is_single_line(self):
+        preview = ResumeCommandService._single_line_preview("第一行\n第二行\t第三行", max_chars=40)
+
+        assert "\n" not in preview
+        assert "\t" not in preview
+        assert "第一行 第二行 第三行" in preview
+
+    def test_long_list_render_only_prints_visible_window(self):
+        console = _CaptureConsole()
+        service = ResumeCommandService(sessions=None, context=None, console=console, prompt=None)
+        sessions = [_fake_session(i) for i in range(30)]
+
+        service._render_session_list(sessions, selected=15)
+
+        output = "\n".join(console.lines)
+        assert "16/30" in output
+        assert "session-15-preview" in output
+        assert "session-0-preview" not in output
+        assert "session-29-preview" not in output
+        assert len(console.lines) == service._resume_menu_line_count()
+
+    def test_refresh_uses_fixed_rendered_line_count(self, monkeypatch):
+        console = _CaptureConsole()
+        service = ResumeCommandService(sessions=None, context=None, console=console, prompt=None)
+        sessions = [_fake_session(i) for i in range(30)]
+        cleared: list[int] = []
+
+        monkeypatch.setattr(service, "_clear_rendered_session_list", lambda count: cleared.append(count))
+
+        service._refresh_session_list(sessions, selected=15)
+
+        assert cleared == [service._resume_menu_line_count()]
+        assert cleared[0] < len(sessions)
 
     def test_tty_escape_cancels(self):
         """TTY 环境下 Esc 取消"""
