@@ -60,6 +60,7 @@ Root-level `ARCHITECTURE.md`, `ROADMAP.md`, `PROGRESS.md`, `DEVNOTES.md`, and `�
 
 Current reference notes:
 
+- [docs/reference/qqchat-setup-guide.md](docs/reference/qqchat-setup-guide.md): QQ Chat 配置教程，面向 pull 项目后想要使用 QQ Chat 功能的用户。
 - [docs/reference/qq-bot-integration-guide.md](docs/reference/qq-bot-integration-guide.md): QQ bot API v2 investigation and target `/QQchat` usage guide.
 
 ## 中文文档导航
@@ -86,6 +87,7 @@ Current reference notes:
 
 当前参考文档：
 
+- [docs/reference/qqchat-setup-guide.md](docs/reference/qqchat-setup-guide.md)：QQ Chat 配置教程，面向 pull 项目后想要使用 QQ Chat 功能的用户。
 - [docs/reference/qq-bot-integration-guide.md](docs/reference/qq-bot-integration-guide.md)：QQ 机器人 API v2 调研与 `/QQchat` 目标接入教程。
 
 ## Development Workflow
