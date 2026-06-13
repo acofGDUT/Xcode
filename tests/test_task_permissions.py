@@ -72,3 +72,30 @@ def test_is_read_only_explicit_ask_overrides(tmp_path: Path) -> None:
     )
     pm = PermissionManager(str(tmp_path))
     assert pm.check("task_list", is_read_only=True) == "ask"
+
+
+def test_dispatch_agent_default_allow(tmp_path: Path) -> None:
+    pm = PermissionManager(str(tmp_path))
+    assert pm.check("dispatch_agent") == "allow"
+
+
+def test_dispatch_agent_deny_override(tmp_path: Path) -> None:
+    settings_dir = tmp_path / ".xcode"
+    settings_dir.mkdir()
+    (settings_dir / "settings.json").write_text(
+        json.dumps({"permissions": {"dispatch_agent": "deny"}}),
+        encoding="utf-8",
+    )
+    pm = PermissionManager(str(tmp_path))
+    assert pm.check("dispatch_agent") == "deny"
+
+
+def test_dispatch_agent_explicit_ask_override(tmp_path: Path) -> None:
+    settings_dir = tmp_path / ".xcode"
+    settings_dir.mkdir()
+    (settings_dir / "settings.json").write_text(
+        json.dumps({"permissions": {"dispatch_agent": "ask"}}),
+        encoding="utf-8",
+    )
+    pm = PermissionManager(str(tmp_path))
+    assert pm.check("dispatch_agent") == "ask"

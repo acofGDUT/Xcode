@@ -325,12 +325,15 @@ class TestCompactCommand:
         fake_result = CompressionResult(
             messages=[
                 agent._history[0],
+                {"role": "system", "content": "Compact boundary: earlier conversation has been summarized below."},
                 {"role": "system", "content": "Conversation summary checkpoint:\nfake summary"},
                 agent._history[-2],
                 agent._history[-1],
             ],
             summary="fake summary",
             checkpoint_message={"role": "system", "content": "Conversation summary checkpoint:\nfake summary"},
+            boundary_message={"role": "system", "content": "Compact boundary: earlier conversation has been summarized below."},
+            protected_tail_messages=2,
         )
         monkeypatch.setattr(agent.context, "compress", lambda *a, **kw: fake_result)
 
@@ -350,8 +353,11 @@ class TestCompactCommand:
         assert "message" in msg_types
         assert "compaction_checkpoint" in msg_types
         cp = next(e for e in events if e.get("type") == "compaction_checkpoint")
-        assert cp["summary_format"] == "xcode.v1"
+        assert cp["summary_format"] == "xcode.v2"
         assert cp["source_message_count"] == 4
+        assert cp["protected_tail_messages"] == 2
+        assert cp["micro_compacted_tool_results"] == 0
+        assert cp["rejected_summary"] is False
         assert isinstance(cp["summary"], str) and len(cp["summary"]) > 0
 
     def test_compact_preserves_tail_messages(self, tmp_path: Path, monkeypatch) -> None:

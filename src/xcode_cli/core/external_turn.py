@@ -124,7 +124,7 @@ class ExternalTurnRunner:
             session_id=state.session_id,
         )
 
-        if _is_llm_error(final_text):
+        if _is_external_turn_failure(final_text):
             return ExternalTurnResult(text=final_text, session_id=state.session_id, error=final_text)
 
         self._session_store.append_message(state.session_id, {"role": "assistant", "content": final_text})
@@ -153,9 +153,10 @@ def _tool_scope_metadata(tool_scope: ToolScope) -> dict[str, object]:
     }
 
 
-def _is_llm_error(text: str) -> bool:
+def _is_external_turn_failure(text: str) -> bool:
     return (
-        text.startswith("[v0] LLM request failed:")
+        text == "No response."
+        or text.startswith("[v0] LLM request failed:")
         or text.startswith("[v0] Missing API key")
         or text.startswith("[v0] openai package not installed")
     )

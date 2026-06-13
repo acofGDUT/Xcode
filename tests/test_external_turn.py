@@ -130,6 +130,31 @@ def test_qq_turn_never_allows_dangerous_tools_even_if_config_attempts_to_add_the
     assert tool_scope.remote_approval is False
 
 
+def test_qq_turn_filters_dispatch_agent_even_if_config_attempts_to_add_it():
+    sessions = FakeSessionStore()
+    loop = FakeLoop()
+    runner = ExternalTurnRunner(
+        session_store=sessions,
+        run_llm_loop=loop,
+        build_system_prompt=lambda: "system",
+        default_tool_scope=ToolScope(
+            source="qqchat",
+            visible_tools=("read_file", "dispatch_agent"),
+            execution_allowlist=("read_file", "dispatch_agent"),
+            remote_approval=True,
+        ),
+    )
+
+    runner.run("qq:c2c:user-a", UserTurnInput("QQ: inspect", "inspect"))
+
+    tool_scope = loop.calls[0][2]
+    assert tool_scope.visible_tools == ("read_file",)
+    assert tool_scope.execution_allowlist == ("read_file",)
+    assert tool_scope.remote_approval is False
+    assert "dispatch_agent" not in tool_scope.visible_tools
+    assert "dispatch_agent" not in tool_scope.execution_allowlist
+
+
 def test_qq_turn_falls_back_to_safe_tools_if_config_only_lists_dangerous_tools():
     sessions = FakeSessionStore()
     loop = FakeLoop()
@@ -198,3 +223,34 @@ def test_metadata_is_written_without_secret():
     assert user_message["metadata"]["external_source"] == "qq"
     for key in ("access_token", "client_secret", "authorization", "Authorization", "app_secret", "AppSecret"):
         assert key not in user_message["metadata"]
+
+
+def test_no_response_returns_error_without_persisting_assistant_history():
+    sessions = FakeSessionStore()
+    runner = ExternalTurnRunner(
+        session_store=sessions,
+        run_llm_loop=lambda **kwargs: "No response.",
+        build_system_prompt=lambda: "system",
+    )
+
+    result = runner.run("qq:c2c:user-a", UserTurnInput("QQ: hi", "hi"), tool_scope=READ_ONLY_SCOPE)
+
+    assert result.error == "No response."
+    assert result.text == "No response."
+    assert sessions.messages[result.session_id] == [
+        {
+            "role": "user",
+            "content": "QQ: hi",
+            "metadata": {
+                "entry_tool_scope": {
+                    "source": "qqchat",
+                    "visible_tools": ["read_file", "grep", "glob", "task_list"],
+                    "execution_allowlist": ["read_file", "grep", "glob", "task_list"],
+                    "remote_approval": False,
+                },
+                "model_content": "hi",
+            },
+        }
+    ]
+    state = runner._conversations["qq:c2c:user-a"]
+    assert state.history == [{"role": "user", "content": "hi"}]

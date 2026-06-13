@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from xcode_cli.core.context import ContextManager
+from xcode_cli.core.message_history import sanitize_model_messages
 
 
 @dataclass(frozen=True)
@@ -78,7 +79,9 @@ class SessionResumeBuilder:
 
         history: list[dict[str, Any]] = [checkpoint_msg]
         history.extend(post_messages)
+        history = sanitize_model_messages(history)
         history = self._trim_to_budget(history, keep_first=1)
+        history = sanitize_model_messages(history)
         estimated = self._context.estimate_tokens(history)
         tail_count = len(history) - 1
 
@@ -100,7 +103,9 @@ class SessionResumeBuilder:
                 except json.JSONDecodeError:
                     continue
 
-        history = self._trim_tail_to_budget(build_model_history_from_events(events))
+        history = sanitize_model_messages(build_model_history_from_events(events))
+        history = self._trim_tail_to_budget(history)
+        history = sanitize_model_messages(history)
         estimated = self._context.estimate_tokens(history)
 
         return ResumeResult(

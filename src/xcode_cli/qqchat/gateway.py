@@ -273,6 +273,8 @@ class QQGatewayClient:
                 try:
                     ws.send(json.dumps(build_heartbeat_payload(self._seq)))
                 except Exception as exc:
+                    if self._is_expected_heartbeat_close(exc):
+                        return
                     self._emit_status(f"QQ gateway heartbeat failed: {self._sanitize(str(exc))}")
                     return
 
@@ -291,6 +293,12 @@ class QQGatewayClient:
             self._websocket_app.close()
         except Exception as exc:
             self._emit_status(f"QQ gateway close failed: {self._sanitize(str(exc))}")
+
+    def _is_expected_heartbeat_close(self, exc: Exception) -> bool:
+        if not (self._stop_event.is_set() or self._reconnect_requested):
+            return False
+        lowered = str(exc).lower()
+        return "connection is already closed" in lowered or "already closed" in lowered
 
     def _safe_reason(self, body: object) -> str:
         if isinstance(body, Mapping):

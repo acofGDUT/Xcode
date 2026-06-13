@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from xcode_cli.core.conversation.compaction import ConversationCompactor
+from xcode_cli.core.context import ContextManager
 
 
 class TestCompactHistoryProgress:
@@ -120,3 +121,56 @@ class TestCompactHistoryProgress:
         compactor.compact_history(history)
 
         assert any("<xcode_loaded_skill name=\"review\"" in str(message) for message in captured["history"])
+
+    def test_rejected_summary_returns_none_and_preserves_history(self):
+        class BadSummaryLLM:
+            def complete(self, system_prompt, messages, tool_schemas):
+                return type("Response", (), {"content": "<tool_call>{}</tool_call>"})()
+
+        history = [{"role": "user", "content": f"msg {index}"} for index in range(30)]
+        original = [dict(message) for message in history]
+        compactor = ConversationCompactor(ContextManager(), BadSummaryLLM(), MagicMock(), MagicMock())
+
+        with patch('xcode_cli.core.conversation.compaction.Live') as mock_live_cls:
+            mock_live = MagicMock()
+            mock_live_cls.return_value = mock_live
+
+            result = compactor.compact_history(history)
+
+            assert result is None
+            assert history == original
+            mock_live.start.assert_called_once()
+            mock_live.stop.assert_called_once()
+
+    def test_write_checkpoint_records_boundary_and_v2_metadata(self):
+        mock_sessions = MagicMock()
+        outcome = MagicMock(
+            messages=[
+                {"role": "user", "content": "first"},
+                {"role": "system", "content": "Compact boundary: earlier conversation has been summarized below."},
+                {"role": "system", "content": "Conversation summary checkpoint:\nsummary"},
+                {"role": "user", "content": "latest"},
+            ],
+            summary="summary",
+            boundary_message={"role": "system", "content": "Compact boundary: earlier conversation has been summarized below."},
+            checkpoint_message={"role": "system", "content": "Conversation summary checkpoint:\nsummary"},
+            before_messages=20,
+            after_messages=4,
+            before_tokens=1000,
+            after_tokens=200,
+            protected_tail_messages=1,
+            micro_compacted_tool_results=0,
+        )
+        compactor = ConversationCompactor(MagicMock(), MagicMock(), mock_sessions, MagicMock())
+
+        compactor.write_checkpoint("session-1", outcome)
+
+        assert mock_sessions.append_message.call_args_list[0].args == ("session-1", outcome.boundary_message)
+        assert mock_sessions.append_message.call_args_list[1].args == ("session-1", outcome.checkpoint_message)
+        event = mock_sessions.append_event.call_args.args[1]
+        assert event["summary_format"] == "xcode.v2"
+        assert event["source_message_count"] == 20
+        assert event["remaining_message_count"] == 4
+        assert event["protected_tail_messages"] == 1
+        assert event["micro_compacted_tool_results"] == 0
+        assert event["rejected_summary"] is False

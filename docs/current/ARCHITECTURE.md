@@ -110,7 +110,7 @@ sequenceDiagram
     R->>C: should_compress(history)
     alt 需要压缩
         R->>C: ConversationCompactor.compact_history(history)
-        R->>S: append(message system summary + compaction_checkpoint)
+        R->>S: append(boundary system + summary system + compaction_checkpoint)
     end
     R->>L: complete(stream=True, tools=schema)
     alt 无 tool_calls
@@ -410,8 +410,11 @@ session rule > project .xcode/settings.json > global ~/.xcode/settings.json > de
 | 工具 | 默认权限 |
 |------|----------|
 | `read_file`, `grep`, `glob` | `allow` |
+| `task_create`, `task_update`, `dispatch_agent` | `allow` |
 | `write_file`, `edit_file`, `run_shell` | `ask` |
 | 其他工具 | `ask` |
+
+`dispatch_agent` 仍注册为非只读工具，因为它会执行本地编排并消耗模型/工具工作；本地 REPL turn 中只是在 `PermissionManager` 默认策略层面允许它免审批。显式 session/project/global `deny` 或 `ask` 规则仍优先于默认值。QQchat 等外部入口继续通过 `ToolScope` 过滤 `dispatch_agent`。
 
 当权限为 `ask` 时，`ToolCallExecutor` 会在执行前展示工具调用信息。对 `write_file` / `edit_file`，还会先读取旧内容并渲染 diff preview，再通过 `ToolApprovalController` 出现审批 UI。
 
@@ -486,9 +489,12 @@ Auto memory 当前只自动注入 `MEMORY.md` 索引，详细内容需要 Agent 
 |------|------|
 | token 估算 | 按 ASCII / 非 ASCII 字符粗略估算，并计入 reasoning、tool_calls、tool_call_id |
 | 压缩触发 | `estimate_tokens(history) >= max_tokens * 0.8` |
-| 压缩结果 | `CompressionResult(messages, summary, checkpoint_message)` |
-| 压缩方式 | 保留第一条 user message、写入 system checkpoint summary、保留最近 8 条 |
+| 压缩结果 | `CompressionResult(messages, summary, checkpoint_message, boundary_message, protected_tail_messages, micro_compacted_tool_results)` |
+| 压缩方式 | 保留第一条 user message、写入 compact boundary、写入 system checkpoint summary、保留 pair-safe protected tail |
 | 累积摘要 | 有 previous summary 时，生成“旧 summary + 新内容”的累积 summary |
+| summary 请求 | `LLMClient.complete(tool_schemas=[])` 不发送 `tools` / `tool_choice` |
+| summary 质量门 | 拒绝空摘要、`<tool_call>`、tool/function-call JSON 泄漏和大上下文下过短摘要 |
+| tool result micro-compact | protected tail 外足够旧且超过阈值的大型 tool result 会替换为短占位，保留 `tool_call_id` |
 | 摘要语言 | 英文压缩提示词，摘要内容可保留用户原语言 |
 | `/context` | 展示当前估算、预算、阈值、消息数量 |
 
@@ -510,8 +516,9 @@ transcript 是 JSONL，每行是一个 event。当前主要 event：
 {"type":"message","role":"user","content":"...","ts":"..."}
 {"type":"message","role":"assistant","content":"...","tool_calls":[...],"ts":"..."}
 {"type":"message","role":"tool","tool_call_id":"call_123","content":"...","ts":"..."}
+{"type":"message","role":"system","content":"Compact boundary: earlier conversation has been summarized below. Do not treat omitted tool results as pending tool calls.","ts":"..."}
 {"type":"message","role":"system","content":"Conversation summary checkpoint:\n...","ts":"..."}
-{"type":"compaction_checkpoint","summary":"...","summary_format":"xcode.v1","source_message_count":120,"ts":"..."}
+{"type":"compaction_checkpoint","summary":"...","summary_format":"xcode.v2","source_message_count":120,"protected_tail_messages":8,"micro_compacted_tool_results":1,"rejected_summary":false,"ts":"..."}
 ```
 
 轻量用户输入历史写入：
@@ -533,8 +540,15 @@ runtime status 写入：
 `/compact` 手动触发 `ContextManager.compress()`。压缩期间通过 `ConversationCompactor.compact_history()` 显示 Rich `Live` 进度（"Compacting context... (Xs)"，复用 Thinking Live 的 `transient` + daemon thread 模式）。成功压缩后：
 
 - 替换运行时 `_history` 为 compressed messages。
-- 写入一条 `message(system)`，内容为 checkpoint summary。
-- 写入一条 `compaction_checkpoint` event，包含 summary 和压缩元数据。
+- 写入一条 compact boundary `message(system)`，提醒模型前文已摘要且被省略的 tool result 不是待执行工具调用。
+- 写入一条 checkpoint summary `message(system)`。
+- 写入一条 `compaction_checkpoint` event，包含 summary、`summary_format=xcode.v2`、source/summary token 估算、`protected_tail_messages`、`micro_compacted_tool_results` 和 `rejected_summary=false` 等元数据。
+
+压缩前，`ContextManager` 会先对 protected tail 之外、足够旧且超过阈值的大型 tool result 做 micro-compact：保留 `role`、`tool_call_id` 和工具名/path/pattern/command/query 等短提示，清理旧的大正文，降低反复 full compaction 风险。protected tail 使用 pair-safe 策略：保留完整 `assistant.tool_calls` / `tool` 配对，丢弃 orphan `tool` message 和缺 result 的 assistant tool call。
+
+summary 请求使用 `LLMClient.complete(tool_schemas=[])` 的 no-tool 路径；该路径不会向 provider 发送 `tools` 或 `tool_choice`。摘要返回后会经过质量门，拒绝空摘要、`<tool_call>`、`tool_calls` / `function_call` 泄漏、tool/function-call JSON payload，以及大上下文下过短的摘要。被拒绝时，压缩结果不会改写 `_history`，也不会写 checkpoint。
+
+`sanitize_model_messages()` 是发送给 provider 前、`/resume` 恢复后和 compact 工作副本上的防御层：缺 `id`、缺 `function.name`、缺后续连续 tool result batch 的 assistant `tool_calls` 会被移除，对应 orphan 或乱序 `tool` message 也不会进入模型 history。这样旧 transcript 中的坏 tool call 不会再次触发 provider 的 `messages[n].tool_calls[0] is missing a function name` 校验错误。
 
 如果当前消息太少或没有可压缩中间内容，则显示 `Nothing to compact.`，不写 checkpoint。
 
@@ -583,9 +597,10 @@ QQChatService
 - `QQGatewayClient` 的 WebSocket 依赖在 `start()` 内延迟导入；普通 CLI 启动不依赖真实 QQ 网络。
 - WebSocket 回调只把 dispatch payload 交给 `QQChatService.handle_gateway_event()` 入队；`qqchat-worker` 串行执行 runner 和 reply，避免 gateway 线程被 LLM/tool loop 阻塞。
 - QQ external turn 走 `_run_external_llm_loop()`，该路径调用普通 `_run_llm_loop()` 的 headless 模式：不创建 streaming renderer、不启动 Rich Live、不打印工具摘要、不更新本地 bottom toolbar 工具计数。
+- `ExternalTurnRunner` 将 `No response.`、`[v0]...` 和 LLM 异常视为 external turn failure：保留本轮 user message，不把失败 assistant 文本写入外部会话 history。QQchat 收到该错误后发送安全中文 fallback，不把 raw provider/protocol 文本回传给远程用户。
 - `QQChatConfig` 在 normalize 后、dedupe 前执行：`enabled`、`enable_c2c`、`enable_group_at`、`group_allowlist`、`owner_openids`、`group_turn_timeout_seconds`、`c2c_turn_timeout_seconds` 都会影响消息是否进入 runner。
 - `max_reply_chars` 在发送前截断被动回复，避免长回复直接打到 QQ HTTP 接口限制。
-- Gateway status 通过 `on_status -> QQChatService.handle_gateway_status()` 进入 service，`/QQchat status` 可看到最近断线、重连、heartbeat 或 gateway 错误。
+- Gateway status 通过 `on_status -> QQChatService.handle_gateway_status()` 进入 service，`/QQchat status` 可看到最近断线、重连、heartbeat 或 gateway 错误。reconnect/stop 期间的 `Connection is already closed.` heartbeat close 被视为 benign lifecycle noise，不覆盖真实 runner/LLM 错误；unexpected heartbeat failure 仍会报告。
 - AppSecret、AccessToken 和完整 Authorization header 不写入项目配置、session transcript metadata 或错误输出。
 
 ### 12.1 QQchat 运行时数据流
@@ -775,6 +790,7 @@ MCP Phase 1/2 自动化和原生 Windows 验收均已完成。Phase 1 的 PowerS
 | `src/xcode_cli/core/tools/shell.py` | shell 执行工具 |
 | `src/xcode_cli/core/permissions.py` | session/project/global 三级权限 |
 | `src/xcode_cli/core/context.py` | token 估算和历史压缩 |
+| `src/xcode_cli/core/message_history.py` | OpenAI-compatible message history 清洗；移除 malformed tool_calls 和 orphan tool messages |
 | `src/xcode_cli/core/session.py` | transcript、history.jsonl 和 session listing |
 | `src/xcode_cli/core/session_resume.py` | transcript 到可恢复 history 的构造，以及 `/resume` 最近对话 replay 数据提取 |
 | `src/xcode_cli/core/runtime_status.py` | 当前活跃进程状态文件和 stale status 清理 |

@@ -15,6 +15,13 @@ from xcode_cli.qqchat.dedupe import QQMessageDedupe
 from xcode_cli.qqchat.events import QQEventNormalizer, QQIncomingMessage
 
 
+EXTERNAL_TURN_ERROR_FALLBACK = (
+    "模型本轮没有返回内容，Xcode 已保留当前会话。"
+    "请重试，或让我先压缩/恢复上下文。"
+)
+EXTERNAL_TURN_EMPTY_RESPONSE_ERROR = "模型本轮没有返回内容；会话已保留，可重试或先压缩/恢复上下文。"
+
+
 @dataclass(frozen=True)
 class _QueuedQQMessage:
     message: QQIncomingMessage
@@ -112,6 +119,8 @@ class QQChatService:
             self._last_error = _safe_error(exc)
 
     def handle_gateway_status(self, message: str) -> None:
+        if _is_benign_gateway_status(message):
+            return
         self._last_error = message[:200]
 
     def wait_until_idle(self, *, timeout: float = 1.0) -> bool:
@@ -164,7 +173,10 @@ class QQChatService:
             result = self._runner.run(message.conversation_key, turn, tool_scope=tool_scope)
             self._handled_messages += 1
 
-            content = _truncate_reply(result.text, self._config.max_reply_chars)
+            reply_text = EXTERNAL_TURN_ERROR_FALLBACK if result.error else result.text
+            if result.error:
+                self._last_error = _external_turn_error_summary(result.error)
+            content = _truncate_reply(reply_text, self._config.max_reply_chars)
             if content:
                 self._reply_client.send_text_reply(
                     message.reply_target,
@@ -253,6 +265,17 @@ def _tool_scope_summary(tool_scope: ToolScope) -> dict[str, object]:
 
 def _safe_error(exc: Exception) -> str:
     return str(exc)[:200]
+
+
+def _external_turn_error_summary(error: str) -> str:
+    if error == "No response.":
+        return EXTERNAL_TURN_EMPTY_RESPONSE_ERROR
+    return f"模型调用失败：{error}"[:200]
+
+
+def _is_benign_gateway_status(message: str) -> bool:
+    lowered = message.lower()
+    return "heartbeat failed" in lowered and "connection is already closed" in lowered
 
 
 def _truncate_reply(content: str, max_chars: int) -> str:

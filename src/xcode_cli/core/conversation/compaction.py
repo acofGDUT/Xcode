@@ -13,11 +13,14 @@ from rich.text import Text
 class CompactOutcome:
     messages: list[dict[str, Any]]
     summary: str
+    boundary_message: dict[str, Any]
     checkpoint_message: dict[str, Any]
     before_messages: int
     after_messages: int
     before_tokens: int
     after_tokens: int
+    protected_tail_messages: int = 0
+    micro_compacted_tool_results: int = 0
 
 
 class ConversationCompactor:
@@ -78,20 +81,28 @@ class ConversationCompactor:
         return CompactOutcome(
             messages=result.messages,
             summary=result.summary,
+            boundary_message=result.boundary_message,
             checkpoint_message=result.checkpoint_message,
             before_messages=before_messages,
             after_messages=after_messages,
             before_tokens=before_tokens,
             after_tokens=after_tokens,
+            protected_tail_messages=result.protected_tail_messages,
+            micro_compacted_tool_results=result.micro_compacted_tool_results,
         )
 
     def write_checkpoint(self, session_id: str, outcome: CompactOutcome) -> None:
+        if outcome.boundary_message:
+            self.sessions.append_message(session_id, outcome.boundary_message)
         self.sessions.append_message(session_id, outcome.checkpoint_message)
         self.sessions.append_event(session_id, {
             "type": "compaction_checkpoint",
             "summary": outcome.summary,
-            "summary_format": "xcode.v1",
+            "summary_format": "xcode.v2",
             "source_message_count": outcome.before_messages,
             "source_token_estimate": outcome.before_tokens,
             "remaining_message_count": outcome.after_messages,
+            "protected_tail_messages": outcome.protected_tail_messages,
+            "micro_compacted_tool_results": outcome.micro_compacted_tool_results,
+            "rejected_summary": False,
         })

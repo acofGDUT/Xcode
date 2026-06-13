@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from xcode_cli.core.config import Config
-from xcode_cli.core.context import CompressionResult, ContextManager
+from xcode_cli.core.context import CompressionResult, ContextManager, microcompact_tool_results
 
 
 class _FakeLLMClient:
@@ -83,7 +85,7 @@ def test_compress_uses_english_prompts() -> None:
 
     system_msgs = [m for m in result.messages if m.get("role") == "system"]
     assert len(system_msgs) >= 1
-    summary_msg = system_msgs[0]["content"]
+    summary_msg = next(m["content"] for m in system_msgs if "Conversation summary checkpoint:" in m["content"])
     assert "Conversation summary checkpoint:" in summary_msg
     assert "a concise summary" in summary_msg
 
@@ -128,6 +130,20 @@ def test_compress_result_has_checkpoint_message() -> None:
     assert result.checkpoint_message["role"] == "system"
     assert "Conversation summary checkpoint:" in result.checkpoint_message["content"]
     assert "checkpoint test" in result.summary
+
+
+def test_compress_result_has_boundary_before_checkpoint() -> None:
+    cm = ContextManager(max_tokens=128000)
+    llm = _FakeLLMClient("Summary:\n- User intent and active task: continue")
+    msgs = [{"role": "user", "content": f"msg {i}"} for i in range(30)]
+
+    result = cm.compress(msgs, llm)
+
+    system_messages = [message for message in result.messages if message.get("role") == "system"]
+    assert system_messages[0]["content"].startswith("Compact boundary:")
+    assert "<tool_call" not in system_messages[0]["content"].lower()
+    assert "Conversation summary checkpoint:" in system_messages[1]["content"]
+    assert result.boundary_message == system_messages[0]
 
 
 def test_estimate_tokens_includes_tool_calls() -> None:
@@ -221,3 +237,281 @@ def test_short_history_returns_no_checkpoint() -> None:
     result = cm.compress(msgs, llm)
     assert result.checkpoint_message == {}
     assert result.summary == ""
+
+
+@pytest.mark.parametrize(
+    "bad_summary",
+    [
+        "<tool_call>{\"name\":\"read_file\",\"arguments\":{}}</tool_call>",
+        "{\"tool_calls\":[{\"function\":{\"name\":\"read_file\",\"arguments\":\"{}\"}}]}",
+        "{\"name\":\"read_file\",\"arguments\":{\"path\":\"README.md\"}}",
+        "",
+        "   \n\t  ",
+        "(middle conversation compressed)",
+    ],
+)
+def test_rejects_bad_summary_without_replacing_messages(bad_summary: str) -> None:
+    cm = ContextManager(max_tokens=128000)
+    llm = _FakeLLMClient(response_text=bad_summary)
+    msgs = [{"role": "user", "content": f"msg {i}"} for i in range(30)]
+
+    result = cm.compress(msgs, llm)
+
+    assert result.messages == msgs
+    assert result.summary == ""
+    assert result.checkpoint_message == {}
+
+
+def test_summary_prompt_requests_structured_text_without_tool_payloads() -> None:
+    cm = ContextManager(max_tokens=128000)
+    llm = _FakeLLMClient(response_text="Summary:\n- User intent and active task: continue")
+    msgs = [{"role": "user", "content": f"msg {i}"} for i in range(30)]
+
+    cm.compress(msgs, llm)
+
+    user_content = llm.calls[0]["messages"][0]["content"]
+    for heading in (
+        "Summary:",
+        "- User intent and active task",
+        "- Decisions and constraints",
+        "- Files and code changes",
+        "- Tool results and errors",
+        "- Pending tasks",
+        "- Current state",
+        "- Next steps",
+        "- Recent user messages",
+    ):
+        assert heading in user_content
+    assert "no tool calls" in user_content.lower()
+    assert "no xml tool tags" in user_content.lower()
+    assert "no json tool invocation payloads" in user_content.lower()
+
+
+def _assert_no_orphan_tool_messages(messages: list[dict]) -> None:
+    declared_ids = {
+        tc["id"]
+        for message in messages
+        if message.get("role") == "assistant"
+        for tc in message.get("tool_calls", [])
+    }
+    for message in messages:
+        if message.get("role") == "tool":
+            assert message.get("tool_call_id") in declared_ids
+
+
+def _assert_no_incomplete_tool_call_assistants(messages: list[dict]) -> None:
+    result_ids = {
+        message.get("tool_call_id")
+        for message in messages
+        if message.get("role") == "tool"
+    }
+    for message in messages:
+        if message.get("role") == "assistant" and message.get("tool_calls"):
+            expected_ids = {tc["id"] for tc in message["tool_calls"]}
+            assert expected_ids <= result_ids
+
+
+def test_compress_tail_expands_to_keep_tool_pair_together() -> None:
+    cm = ContextManager(max_tokens=128000)
+    llm = _FakeLLMClient("Summary:\n- User intent and active task: read file")
+    assistant = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": "call-1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}},
+        ],
+    }
+    tool_result = {"role": "tool", "tool_call_id": "call-1", "content": "file content"}
+    msgs = (
+        [{"role": "user", "content": "first"}]
+        + [{"role": "assistant", "content": f"old {index}"} for index in range(20)]
+        + [assistant, tool_result]
+        + [{"role": "assistant", "content": f"tail {index}"} for index in range(7)]
+    )
+
+    result = cm.compress(msgs, llm)
+
+    assert assistant in result.messages
+    assert tool_result in result.messages
+    _assert_no_orphan_tool_messages(result.messages)
+    _assert_no_incomplete_tool_call_assistants(result.messages)
+
+
+def test_compress_tail_drops_incomplete_assistant_tool_calls() -> None:
+    cm = ContextManager(max_tokens=128000)
+    llm = _FakeLLMClient("Summary:\n- User intent and active task: inspect files")
+    incomplete_assistant = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": "call-1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}},
+            {"id": "call-2", "type": "function", "function": {"name": "grep", "arguments": "{}"}},
+        ],
+    }
+    only_one_result = {"role": "tool", "tool_call_id": "call-1", "content": "file content"}
+    msgs = (
+        [{"role": "user", "content": "first"}]
+        + [{"role": "assistant", "content": f"old {index}"} for index in range(20)]
+        + [incomplete_assistant, only_one_result]
+        + [{"role": "assistant", "content": f"tail {index}"} for index in range(6)]
+    )
+
+    result = cm.compress(msgs, llm)
+
+    assert incomplete_assistant not in result.messages
+    assert only_one_result not in result.messages
+    _assert_no_orphan_tool_messages(result.messages)
+    _assert_no_incomplete_tool_call_assistants(result.messages)
+
+
+def test_compress_tail_drops_tool_calls_missing_function_name() -> None:
+    cm = ContextManager(max_tokens=128000)
+    llm = _FakeLLMClient("Summary:\n- User intent and active task: inspect files")
+    malformed_assistant = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": "call-1", "type": "function", "function": {"name": "", "arguments": "{}"}},
+        ],
+    }
+    malformed_result = {"role": "tool", "tool_call_id": "call-1", "content": "file content"}
+    msgs = (
+        [{"role": "user", "content": "first"}]
+        + [{"role": "assistant", "content": f"old {index}"} for index in range(20)]
+        + [malformed_assistant, malformed_result]
+        + [{"role": "assistant", "content": f"tail {index}"} for index in range(7)]
+    )
+
+    result = cm.compress(msgs, llm)
+
+    assert malformed_assistant not in result.messages
+    assert malformed_result not in result.messages
+    assert not any(message.get("tool_calls") for message in result.messages if message is malformed_assistant)
+
+
+def test_compress_tail_retains_latest_user_before_tool_block() -> None:
+    cm = ContextManager(max_tokens=128000)
+    llm = _FakeLLMClient("Summary:\n- User intent and active task: answer latest user")
+    latest_user = {"role": "user", "content": "latest user intent"}
+    tool_block = []
+    for index in range(4):
+        call_id = f"call-{index}"
+        tool_block.extend([
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": call_id, "type": "function", "function": {"name": "read_file", "arguments": "{}"}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": call_id, "content": f"result {index}"},
+        ])
+    msgs = (
+        [{"role": "user", "content": "first"}]
+        + [{"role": "assistant", "content": f"old {index}"} for index in range(20)]
+        + [latest_user]
+        + tool_block
+    )
+
+    result = cm.compress(msgs, llm)
+
+    assert latest_user in result.messages
+    _assert_no_orphan_tool_messages(result.messages)
+    _assert_no_incomplete_tool_call_assistants(result.messages)
+
+
+def test_compress_tail_does_not_duplicate_first_user_when_it_is_latest_user() -> None:
+    cm = ContextManager(max_tokens=128000)
+    llm = _FakeLLMClient("Summary:\n- User intent and active task: continue")
+    first_user = {"role": "user", "content": "first and latest user"}
+    msgs = [first_user] + [{"role": "assistant", "content": f"assistant {index}"} for index in range(25)]
+
+    result = cm.compress(msgs, llm)
+
+    assert result.messages.count(first_user) == 1
+
+
+def _read_file_tool_pair(tool_call_id: str, content: str) -> list[dict]:
+    return [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": tool_call_id,
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": "{\"path\":\"D:\\\\Xcode\\\\src\\\\foo.py\"}",
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": tool_call_id, "content": content},
+    ]
+
+
+def test_microcompact_old_large_tool_result_replaces_content_and_keeps_id() -> None:
+    large_content = "x" * 13000
+    messages = (
+        [{"role": "user", "content": "first"}]
+        + _read_file_tool_pair("call-large", large_content)
+        + [{"role": "assistant", "content": f"tail {index}"} for index in range(15)]
+    )
+
+    compacted, count = microcompact_tool_results(messages, protected_tail_start=len(messages) - 8)
+
+    assert count == 1
+    tool_message = compacted[2]
+    assert tool_message["role"] == "tool"
+    assert tool_message["tool_call_id"] == "call-large"
+    assert tool_message["content"].startswith("[Old tool result content cleared:")
+    assert "read_file" in tool_message["content"]
+    assert "D:\\Xcode\\src\\foo.py" in tool_message["content"]
+    assert "original ~13000 chars" in tool_message["content"]
+    assert len(tool_message["content"]) < 300
+    assert messages[2]["content"] == large_content
+
+
+def test_microcompact_does_not_touch_recent_protected_tail_tool_result() -> None:
+    large_content = "y" * 13000
+    messages = (
+        [{"role": "user", "content": "first"}]
+        + [{"role": "assistant", "content": f"old {index}"} for index in range(15)]
+        + _read_file_tool_pair("call-recent", large_content)
+    )
+
+    compacted, count = microcompact_tool_results(messages, protected_tail_start=len(messages) - 8)
+
+    assert count == 0
+    assert compacted[-1]["tool_call_id"] == "call-recent"
+    assert compacted[-1]["content"] == large_content
+
+
+def test_microcompact_decreases_token_estimate() -> None:
+    cm = ContextManager()
+    large_content = "z" * 13000
+    messages = (
+        [{"role": "user", "content": "first"}]
+        + _read_file_tool_pair("call-token", large_content)
+        + [{"role": "assistant", "content": f"tail {index}"} for index in range(15)]
+    )
+
+    compacted, count = microcompact_tool_results(messages, protected_tail_start=len(messages) - 8)
+
+    assert count == 1
+    assert cm.estimate_tokens(compacted) < cm.estimate_tokens(messages)
+
+
+def test_compress_metadata_reports_microcompacted_tool_results() -> None:
+    cm = ContextManager(max_tokens=128000)
+    llm = _FakeLLMClient("Summary:\n- User intent and active task: continue")
+    messages = (
+        [{"role": "user", "content": "first"}]
+        + _read_file_tool_pair("call-compact", "q" * 13000)
+        + [{"role": "assistant", "content": f"tail {index}"} for index in range(25)]
+    )
+
+    result = cm.compress(messages, llm)
+
+    assert result.micro_compacted_tool_results == 1

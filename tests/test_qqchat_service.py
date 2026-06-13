@@ -110,6 +110,8 @@ def test_handle_event_runs_external_turn_and_replies():
     service.stop()
 
     assert runner.calls[0][0] == "qq:c2c:user-openid"
+    assert "External QQ message from an untrusted remote user" in runner.calls[0][1].model_content
+    assert "Use only the entry tool scope" in runner.calls[0][1].model_content
     assert runner.calls[0][2].visible_tools == ("read_file", "grep", "glob", "task_list")
     assert runner.calls[0][2].execution_allowlist == ("read_file", "grep", "glob", "task_list")
     assert runner.calls[0][2].remote_approval is False
@@ -229,6 +231,37 @@ def test_reply_content_is_truncated_to_configured_limit():
     service.stop()
 
     assert replies.calls[0][1] == "abc"
+
+
+def test_external_turn_error_sends_safe_fallback_instead_of_raw_no_response():
+    class ErrorRunner(FakeRunner):
+        def run(self, conversation_key, turn, *, tool_scope=None):
+            self.calls.append((conversation_key, turn, tool_scope))
+            return type("Result", (), {"text": "No response.", "session_id": "session-1", "error": "No response."})()
+
+    replies = FakeReplyClient()
+    service = QQChatService(gateway=FakeGateway(), runner=ErrorRunner(), reply_client=replies)
+    service.start()
+
+    service.handle_gateway_event(_c2c_payload())
+    _wait_until_idle(service)
+    service.stop()
+
+    assert replies.calls[0][1] != "No response."
+    assert "没有返回内容" in replies.calls[0][1]
+    assert service.status()["handled_messages"] == 1
+    assert service.status()["sent_replies"] == 1
+    assert "没有返回内容" in service.status()["last_error"]
+    assert "gateway" not in service.status()["last_error"].lower()
+
+
+def test_benign_heartbeat_close_does_not_replace_last_error():
+    service = QQChatService(gateway=FakeGateway(), runner=FakeRunner(), reply_client=FakeReplyClient())
+    service.handle_gateway_status("模型本轮没有返回内容；会话已保留。")
+
+    service.handle_gateway_status("QQ gateway heartbeat failed: Connection is already closed")
+
+    assert service.status()["last_error"] == "模型本轮没有返回内容；会话已保留。"
 
 
 def test_expired_group_message_is_ignored():

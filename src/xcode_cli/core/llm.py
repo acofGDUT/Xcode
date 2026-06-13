@@ -22,6 +22,7 @@ def _friendly_llm_error(exc: Exception) -> str:
     return f"请求失败：{raw[:180]}"
 
 from xcode_cli.core.config import ConfigStore
+from xcode_cli.core.message_history import sanitize_model_messages
 
 
 @dataclass
@@ -80,17 +81,19 @@ class LLMClient:
         client = OpenAI(**client_kwargs)
 
         try:
-            stream = client.chat.completions.create(
-                model=model,
-                messages=[
+            request_kwargs: dict[str, Any] = {
+                "model": model,
+                "messages": [
                     {"role": "system", "content": system_prompt},
-                    *messages,
+                    *sanitize_model_messages(messages),
                 ],
-                tools=tool_schemas,
-                tool_choice="auto",
-                temperature=0.2,
-                stream=True,
-            )
+                "temperature": 0.2,
+                "stream": True,
+            }
+            if tool_schemas:
+                request_kwargs["tools"] = tool_schemas
+                request_kwargs["tool_choice"] = "auto"
+            stream = client.chat.completions.create(**request_kwargs)
         except Exception as exc:
             friendly = _friendly_llm_error(exc)
             return LLMResponse(content=f"[v0] LLM request failed: {friendly}", tool_calls=[])
@@ -136,6 +139,8 @@ class LLMClient:
 
         tool_calls: list[ToolCall] = []
         for tc_dict in tool_calls_acc.values():
+            if not tc_dict["id"] or not tc_dict["name"]:
+                continue
             try:
                 args = json.loads(tc_dict["args"]) if tc_dict["args"] else {}
             except json.JSONDecodeError:

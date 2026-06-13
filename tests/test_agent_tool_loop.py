@@ -355,3 +355,127 @@ def test_qq_tool_scope_rejects_non_read_only_allowlisted_tools(tmp_path: Path, m
 
     assert result == "blocked"
     assert agent.task_tracker.list_all() == []
+
+
+def test_dispatch_agent_default_allow_skips_approval_prompt(tmp_path: Path, monkeypatch) -> None:
+    agent = _make_agent(tmp_path, monkeypatch)
+    calls = [0]
+    approvals: list[str] = []
+    executed: list[dict] = []
+
+    def fake_complete(**kwargs):
+        calls[0] += 1
+        if calls[0] == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_dispatch",
+                        name="dispatch_agent",
+                        args={"agent_type": "explore", "prompt": "Inspect README.md"},
+                    )
+                ],
+            )
+        return LLMResponse(content="continued after dispatch", tool_calls=[])
+
+    agent.llm.complete = fake_complete
+    monkeypatch.setattr(
+        agent.approval,
+        "prompt",
+        lambda tool_name, scope: approvals.append(f"{tool_name}:{scope}") or "no",
+    )
+    agent.tools._tools["dispatch_agent"].execute = (
+        lambda **kwargs: executed.append(kwargs) or "sub-agent result"
+    )
+
+    result = agent._run_llm_loop([], "system")
+
+    assert result == "continued after dispatch"
+    assert approvals == []
+    assert executed == [{"agent_type": "explore", "prompt": "Inspect README.md"}]
+
+
+def test_dispatch_agent_explicit_deny_blocks_execution(tmp_path: Path, monkeypatch) -> None:
+    agent = _make_agent(tmp_path, monkeypatch)
+    settings_dir = Path(agent.cwd) / ".xcode"
+    settings_dir.mkdir(exist_ok=True)
+    (settings_dir / "settings.json").write_text(
+        json.dumps({"permissions": {"dispatch_agent": "deny"}}),
+        encoding="utf-8",
+    )
+    calls = [0]
+    executed: list[dict] = []
+
+    def fake_complete(**kwargs):
+        calls[0] += 1
+        if calls[0] == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_dispatch",
+                        name="dispatch_agent",
+                        args={"agent_type": "explore", "prompt": "Inspect README.md"},
+                    )
+                ],
+            )
+        assert any(
+            m.get("role") == "tool"
+            and "Permission denied for tool: dispatch_agent" in str(m.get("content", ""))
+            for m in kwargs["messages"]
+        )
+        return LLMResponse(content="continued without dispatch", tool_calls=[])
+
+    agent.llm.complete = fake_complete
+    agent.tools._tools["dispatch_agent"].execute = (
+        lambda **kwargs: executed.append(kwargs) or "sub-agent result"
+    )
+
+    result = agent._run_llm_loop([], "system")
+
+    assert result == "continued without dispatch"
+    assert executed == []
+
+
+def test_dispatch_agent_explicit_ask_still_prompts(tmp_path: Path, monkeypatch) -> None:
+    agent = _make_agent(tmp_path, monkeypatch)
+    settings_dir = Path(agent.cwd) / ".xcode"
+    settings_dir.mkdir(exist_ok=True)
+    (settings_dir / "settings.json").write_text(
+        json.dumps({"permissions": {"dispatch_agent": "ask"}}),
+        encoding="utf-8",
+    )
+    calls = [0]
+    approvals: list[str] = []
+
+    def fake_complete(**kwargs):
+        calls[0] += 1
+        if calls[0] == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_dispatch",
+                        name="dispatch_agent",
+                        args={"agent_type": "explore", "prompt": "Inspect README.md"},
+                    )
+                ],
+            )
+        assert any(
+            m.get("role") == "tool"
+            and "User denied tool: dispatch_agent" in str(m.get("content", ""))
+            for m in kwargs["messages"]
+        )
+        return LLMResponse(content="continued after prompt", tool_calls=[])
+
+    agent.llm.complete = fake_complete
+    monkeypatch.setattr(
+        agent.approval,
+        "prompt",
+        lambda tool_name, scope: approvals.append(f"{tool_name}:{scope}") or "no",
+    )
+
+    result = agent._run_llm_loop([], "system")
+
+    assert result == "continued after prompt"
+    assert approvals == ["dispatch_agent:dispatch_agent"]

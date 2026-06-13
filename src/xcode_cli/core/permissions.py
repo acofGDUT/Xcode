@@ -68,7 +68,7 @@ class PermissionManager:
         return cleaned
 
     def _default_level(self, tool_name: str) -> str:
-        if tool_name in {"task_create", "task_update"}:
+        if tool_name in {"task_create", "task_update", "dispatch_agent"}:
             return "allow"
         if tool_name == "run_shell":
             return "ask"

@@ -24,6 +24,16 @@ class FakeWebSocket:
         self.closed += 1
 
 
+class FailingSendWebSocket:
+    def __init__(self, message):
+        self.message = message
+        self.sent = 0
+
+    def send(self, _payload):
+        self.sent += 1
+        raise RuntimeError(self.message)
+
+
 def test_group_and_c2c_intents_bitmask():
     assert GROUP_AND_C2C_INTENTS == 1 << 25
 
@@ -186,3 +196,37 @@ def test_run_forever_reconnects_after_unexpected_return():
 
     assert len(created_apps) == 2
     assert any("reconnect" in status.lower() for status in statuses)
+
+
+def test_heartbeat_closed_connection_during_reconnect_is_quiet():
+    statuses = []
+    client = QQGatewayClient(
+        access_token_getter=lambda: "token",
+        transport=FakeGatewayTransport(),
+        on_status=statuses.append,
+    )
+    client._reconnect_requested = True
+    websocket = FailingSendWebSocket("Connection is already closed")
+
+    client._start_heartbeat(websocket, 0.001)
+    client._heartbeat_thread.join(timeout=1)
+
+    assert websocket.sent == 1
+    assert statuses == []
+
+
+def test_heartbeat_unexpected_failure_is_reported():
+    statuses = []
+    client = QQGatewayClient(
+        access_token_getter=lambda: "token",
+        transport=FakeGatewayTransport(),
+        on_status=statuses.append,
+    )
+    websocket = FailingSendWebSocket("network exploded")
+
+    client._start_heartbeat(websocket, 0.001)
+    client._heartbeat_thread.join(timeout=1)
+
+    assert websocket.sent == 1
+    assert any("heartbeat failed" in status.lower() for status in statuses)
+    assert any("network exploded" in status for status in statuses)

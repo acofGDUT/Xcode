@@ -238,6 +238,21 @@ Review 结论：第一轮通过，`pytest -q` 为 `184 passed`。已补多轮 to
 
 原因：递归派发会让成本、延迟和状态变得不可控。当前子 Agent 更适合做探索、规划和局部分析。
 
+### dispatch_agent default approval boundary
+
+**状态**：Resolved
+**关联**：SubAgentExecutor / permission defaults / QQchat external tool scope
+
+`dispatch_agent` 被视为本地编排工具：默认权限为 `allow`，因此正常模型驱动的子 Agent 分派不会在 REPL 中反复打断用户审批。这不表示该工具是只读工具；它仍保持 `is_read_only=False`。显式 `deny` 和显式 `ask` 规则仍优先，QQchat 继续过滤 `dispatch_agent`，EXPLORE / PLAN 子 Agent 也仍只获得读取和搜索工具。
+
+设计、计划与回归：
+
+- `docs/superpowers/specs/2026-06-11-dispatch-agent-auto-allow-design.md`
+- `docs/superpowers/plans/2026-06-11-dispatch-agent-auto-allow.md`
+- `tests/test_task_permissions.py`
+- `tests/test_agent_tool_loop.py`
+- `tests/test_external_turn.py`
+
 ## 13. 项目级配置仍不完整
 
 **状态**：Resolved
@@ -608,7 +623,60 @@ Review 注意：
 - 群聊被动回复窗口只有 5 分钟，长时间 coding 任务不适合直接在 QQ 群里跑。
 - QQchat 相关测试应覆盖 service queue、headless external loop、只读 tool scope、配置策略、gateway reconnect/status；不能只测 happy path payload。
 
-## 28. MCP Phase 1 安全接入边界
+## 28. Compact/QQchat `No response.` 雪崩风险
+
+**状态**：代码和自动化回归已缓解；真实 QQ 平台验收由用户接手
+**关联**：`/compact` / QQchat external turn / session transcript / ROADMAP compact 可靠性重设计
+
+2026-06-11 复核用户提供的 QQchat session：
+
+```text
+C:\Users\LONG\.xcode\projects\D--MusicChatAgent\sessions\4f6d33a4-d1b1-4a90-9778-3c027910f844.jsonl
+```
+
+当时确认 compact 失败不是 QQ gateway 主动关闭导致的。Gateway heartbeat 的 `Connection is already closed.` 属于连接生命周期噪声；同一 session 中后续 QQ 消息仍能进入 Xcode，说明外部入口仍在处理消息。
+
+当时的实际风险链：
+
+- 第一次 `compaction_checkpoint` summary 出现 `<tool_call> ... </tool_call>` 样式文本，坏摘要被当作正常 system checkpoint 注入 history。
+- 后续多次 compaction 把上下文反复压回 `first user + checkpoint + last 8 messages`，中间任务边界和工具调用语义持续丢失。
+- 大工具结果和坏 summary 让 `source_token_estimate` 在少量消息下仍保持很高，继续触发压缩。
+- 压缩后模型可能返回空 assistant message：没有 `content`，也没有合法 `tool_calls`。
+- `AgentRuntime._run_llm_loop()` 将空 assistant message 兜底成 `No response.`。
+- `ExternalTurnRunner` 当时没有把 `No response.` 视为 LLM 错误，导致它被写入 session/history，形成后续 QQ turn 的上下文污染。
+
+设计文档：
+
+- `docs/superpowers/specs/2026-06-11-compact-reliability-design.md`
+- `docs/superpowers/plans/2026-06-11-compact-reliability-plan.md`
+- `docs/superpowers/plans/2026-06-11-compact-reliability/`
+
+Review 注意：
+
+- `No response.` 对 QQchat/external turn 是错误边界，不是正常 assistant 文本；不能持久化为成功回复。
+- summary LLM request 必须真正无工具；`tool_schemas=[]` 不应继续传空 `tools` 或残留 `tool_choice=auto`。
+- compact summary 必须有质量门，拒绝 `<tool_call>`、JSON tool/function call、空摘要和 provider/protocol 泄漏。
+- compact tail 必须保持 OpenAI-compatible 工具配对，不保留 orphan `tool` message，也不保留缺 result 的 assistant `tool_calls`。
+- `ARCHITECTURE.md` 应描述当前 `xcode.v2` compact 架构，并明确 PowerShell/cmd.exe 原生 PTY `/compact` handler 验收不等同于真实 QQ 平台验收。
+
+2026-06-12 实现收口：
+
+- `ExternalTurnRunner` 已把 `No response.` 视为 external turn failure；用户消息保留，空 assistant fallback 不进入 assistant history。
+- QQchat external turn error 会发送安全中文 fallback，并把 last_error 设置为可读错误摘要，不回传 raw `No response.`。
+- `LLMClient.complete(tool_schemas=[])` 不再发送 `tools` 和 `tool_choice=auto`，summary 请求保持 no-tool。
+- `ContextManager.compress()` 已加入结构化 summary prompt 和质量门；空摘要、`<tool_call>`、`tool_calls` / `function_call` 泄漏、tool/function-call JSON payload 和过短大上下文摘要都会被拒绝，拒绝时保留原 history。
+- compact tail 使用 pair-safe 策略，保护完整 assistant/tool 配对，并丢弃 orphan tool 或缺 result 的 assistant tool call。
+- compact checkpoint 使用 boundary system message + summary system message + `compaction_checkpoint` event；event 的 `summary_format` 为 `xcode.v2`，并记录 `protected_tail_messages`、`micro_compacted_tool_results` 和 `rejected_summary=false`。
+- 旧的大型 tool result 在 protected tail 之外 micro-compact，只保留 `role`、`tool_call_id`、工具名和 path/pattern/command/query 等短提示。
+- QQ gateway reconnect/stop 期间的 benign heartbeat close 会降噪；真实 unexpected heartbeat failure 仍进入 status。
+- 2026-06-12/13 follow-up：发现旧 session 中存在 `id=""` / `function.name=""` 的 malformed assistant `tool_calls`，provider 会以 `messages[n].tool_calls[0] is missing a function name` 拒绝请求。已新增 `sanitize_model_messages()`，在 LLM 请求边界、resume 恢复和 compact 工作副本中移除 malformed tool call batch 及对应 orphan/乱序 tool message；该清洗层按 assistant 后面的连续 tool result batch 校验配对，不用全局同名 result 误判完整性。LLM streaming 解析出口也不再返回空 tool name 的 `ToolCall`。
+
+仍未关闭的验收缺口：
+
+- PowerShell/cmd.exe 原生 PTY `/compact` handler 验收已覆盖 `summary_format=xcode.v2`、boundary、metadata、no-tool summary request 和 no orphan tool messages。
+- 真实 QQ 单聊/群聊平台回归由用户接手；本轮只声明 compact 可靠性功能代码和本地/原生终端证据完成，不把 `/QQchat` 整体标记为完整真实接入完成。
+
+## 29. MCP Phase 1 安全接入边界
 
 **状态**：Mitigated
 **关联**：ROADMAP Phase 5.1 / MCP stdio tools
@@ -653,7 +721,7 @@ Review 注意：
 - 不要把 MCP SDK 的 async 传染进主 REPL；Phase 1 只允许 `xcode_cli.mcp` 内部 async。
 - 不要只用“能跑通 filesystem server”作为验收结论；必须覆盖未信任不启动、hash 变化 untrusted、默认非只读、call_tool 错误捕获、output 截断和 `/mcp status`。
 
-## 29. MCP Phase 2 管理面设计边界
+## 30. MCP Phase 2 管理面设计边界
 
 **状态**：Open
 **关联**：ROADMAP Phase 5.2 / MCP management + dynamic refresh
@@ -700,3 +768,38 @@ Review 注意：
 - 工具数量超过 100 只 warning，不自动隐藏、不自动禁用，也不实现 model-driven tool search。
 - PowerShell/cmd.exe 原生 PTY 验收覆盖 `/mcp` enable-disable、tool toggle、refresh 后工具集合变化、reconnect 旧进程退出与新进程启动、events 脱敏、output-limit、`/exit` shutdown，以及 `mcp__fake__echo` 走现有审批 UI 的冒烟验证。
 - Review follow-up：`call_tool_sync()` 的执行异常也必须走 server env/token 脱敏后再进入 tool result/history；动态 refresh 后 `_mcp_tool_warnings` 必须按当前 catalog 重算，不能保留已修复 schema 的旧 warning；`/mcp refresh` 和 `/mcp reconnect` 在 failed/untrusted/disabled 状态下只提示 requested 并引导查看 `/mcp status`。
+
+## 31. Compact v3 现场恢复与 checkpoint 链路设计边界
+
+**状态**：Open
+**关联**：ROADMAP compact 现场恢复 / `/compact` / `/resume` / QQchat external turn / session transcript
+
+2026-06-12 已完成设计和实施计划，代码未实现：
+
+- `docs/superpowers/specs/2026-06-12-compact-state-restoration-design.md`
+- `docs/superpowers/plans/2026-06-12-compact-state-restoration-plan.md`
+
+设计目标是在现有 `xcode.v2` compact 可靠性基线之上增加两类能力：
+
+- compact 后注入 deterministic、bounded 的 `Compact restored context` system message，恢复 active file、recent read file excerpts/hash、latest diagnostics、latest build/test、current plan 和 invoked skill metadata。
+- checkpoint metadata 升级到兼容的 `xcode.v3`，记录 `checkpoint_id`、`parent_checkpoint_id`、summary/restored-context hash、累计 checkpoint index 和可选 message range。
+
+设计边界：
+
+- `WorkStateTracker` 是 in-memory 现场状态层，状态更新应发生在 tool loop、plan mode 和 skill invocation 等边界；compact 不应重新解析整段 transcript 来猜当前现场。
+- summary 和 restored context 分工不同：summary 负责历史脉络，restored context 负责继续工作所需的当前现场。
+- restored context 必须有硬上限和裁剪顺序；优先保留 active file、diagnostics、latest failed build/test、current plan，再保留 recent files、invoked skills 和 searches。
+- `run_shell` diagnostics/build/test 解析第一版只做启发式提取；解析失败时保留 command status 和短 output excerpt，不阻断主循环。
+- secret redaction 是 P0 要求。Authorization header、access token、client secret、api key 等不得进入 restored context、checkpoint metadata 或测试快照。
+- 本地 REPL work state 和 QQchat/external conversation work state 必须隔离；不同 QQ conversation 之间也必须隔离。
+- summary rejection 仍然不能写 checkpoint、不能改写 `_history`、不能插入 restored context。
+- `xcode.v3` transcript 必须兼容旧 session；旧 `xcode.v1/v2` checkpoint 不迁移，继续按现有 resume 逻辑工作。
+- `/resume` 对 `xcode.v3` 应恢复 boundary + summary + restored context；metadata/message ids 不得进入模型 history。
+- 实现完成前不要修改 `ARCHITECTURE.md` 把 v3 描述成当前机制；只在代码和验证落地后同步当前架构。
+
+Review 注意：
+
+- 不要把 restored context 做成“把最近文件全文塞回模型”；必须保留 hash/excerpt/omitted count。
+- 不要把 tool result message 改造成状态载体；工具返回给模型的协议消息必须保持原有 OpenAI-compatible 配对。
+- 不要把 QQchat compact 的现场和本地 REPL 当前正在编辑的文件混在一起。
+- 不要只检查 summary 是否累计；还要检查 checkpoint parent/hash 链路是否可审计、resume 是否能拿回 restored context。

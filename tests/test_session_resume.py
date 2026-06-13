@@ -362,3 +362,25 @@ class TestToolPairProtection:
                     for am in assistant_msgs
                 )
                 assert matching, f"No matching assistant for tool {tm['tool_call_id']}"
+
+    def test_malformed_tool_call_is_not_restored(self, tmp_path: Path, monkeypatch) -> None:
+        store = _make_store(tmp_path, monkeypatch)
+        sid = store.new_session_id()
+        _write_messages(store, sid, [
+            {"role": "user", "content": "resume bad session"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "", "type": "function", "function": {"name": "", "arguments": "{}"}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "", "content": "bad result"},
+            {"role": "assistant", "content": "after bad call"},
+        ])
+
+        ctx = ContextManager(max_tokens=128000)
+        result = SessionResumeBuilder(ctx, token_budget=100000).build(store.transcript_path(sid))
+
+        assert not any(message.get("role") == "tool" for message in result.history)
+        assert not any(message.get("tool_calls") for message in result.history)
