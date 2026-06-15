@@ -1,175 +1,118 @@
 # Xcode 路线图
 
-> 本文只记录未来计划、未完成能力和仍需验收的风险。已完成实现只保留状态索引；具体实现见 `ARCHITECTURE.md`，历史过程和验证证据见 `PROGRESS.md`，坑点和设计取舍见 `DEVNOTES.md`。
+> 本文只记录未来计划、未完成能力和仍需验收的风险。已完成实现请看 `PROGRESS.md`，当前实现细节请看 `ARCHITECTURE.md`，坑点和设计取舍请看 `DEVNOTES.md`。
 
-最后更新：2026-06-13
+最后更新：2026-06-14
 
-## 1. 当前状态
+## 1. 当前焦点
 
-Xcode v0.1.0 已完成 Phase 1-4、Phase 4.5 稳定化、AgentRuntime 两轮重构、Skills Phase 1-2、QQchat 第一版代码实现和 review 加固，以及 MCP Phase 1/2。MCP Phase 1 的 trust gate、默认非只读、schema/result 防御、failed 状态、timeout cancellation cleanup、shutdown 和原生 PowerShell/cmd.exe fake stdio E2E 均已通过；Phase 2 管理面与动态工具刷新代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 交互验收也已完成。
+Xcode v0.1.0 的核心 CLI、session/resume、compact v2 可靠性、Skills Phase 1-2、MCP Phase 1/2 和本地主会话 `dispatch_agent` 免审已经收口。compact v3 现场恢复代码和自动化回归已落地，但原生 Windows/QQchat 手工验收仍未收口。后续 roadmap 不再展开已完成项，只保留仍需实现或仍需真实平台验收的工作。
 
-当前近期工作不应继续堆新大功能，而应优先收口：
+近期优先级：
 
-- compact 可靠性重设计：代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY `/compact` handler 验收已完成；真实 QQ 平台验收由用户接手。
-- `/QQchat` 配置初始化、热部署 reload、真实 QQ 平台验收和文档最终验证。
-- `dispatch_agent` 本地主会话免审优化已完成代码实现和聚焦回归；explicit deny/ask 与 QQchat 远程过滤边界已覆盖。
-- `/context` cost 估算。
+- 完成 `/QQchat init`、`/QQchat reload` 和真实 QQ 单聊/群聊平台验收。
+- 为 `/context` 增加费用估算，而不只是 token 统计。
+- 补齐 compact v3 现场恢复与 `xcode.v3` checkpoint 链路的 PowerShell/cmd.exe 原生 PTY 和 QQchat 平台手工验收。
+- 继续收口工具调用展开、task 面板持久展示、对话回退/分叉和渲染模式。
 
-核心 CLI 的 `/resume`、`/compact` Live 进度、多轮 tool call，以及 MCP Phase 1/2 原生 Windows 验收已经收口；2026-06-12 compact 可靠性已完成代码修复、自动化回归和 PowerShell/cmd.exe 原生 PTY `/compact` handler 验收。剩余 Windows/真实平台 E2E 主要属于 QQchat。
-
-Phase 5 生态扩展整体继续冻结；MCP 只按已写 spec 小步解冻。当前 MCP Phase 2 仍限制在 stdio tools 管理面，不包含 HTTP/OAuth/resources/prompts/MCP Apps。
+Phase 5 生态扩展整体继续冻结。MCP 目前只完成 stdio tools 的安全接入和管理面；HTTP/SSE/OAuth/resources/prompts/MCP Apps、WebFetch、WebSearch、hooks、remote skills 等仍不得无 spec 铺开。
 
 ## 2. 近期优先级
 
 | 优先级 | 能力 | 状态 | 下一步 |
 |--------|------|------|--------|
-| P0/P1 | compact 可靠性重设计 | 代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY `/compact` handler 验收完成；真实 QQ 验收由用户接手 | 进入后续真实平台观察 |
-| P0 | QQchat 原生 Windows/真实平台 E2E | 未完成 | 在 cmd.exe/PowerShell 验证 `/QQchat start`，并完成真实 QQ 单聊和群聊 @ 回复验收 |
-| P1 | QQchat compact resilience 文档和最终验证 | 自动化回归完成；真实 QQ 验收由用户接手 | 后续观察真实 QQ 单聊/群聊回归 |
-| P1 | QQchat Task 8：`/QQchat init` + reload | 已写 spec/plan，未实现 | 实现配置骨架初始化和热部署 reload，按 TDD 补测试 |
-| P0/P1 | `dispatch_agent` 本地主会话免审 | 代码实现并通过聚焦回归 | 后续只观察真实长任务中的审批体验，不扩大到 QQchat 远程入口 |
-| P1 | runtime status stale cleanup | 代码实现和自动化通过 | 后续 dashboard/list 如读取 runtime status 目录，应复用 `RuntimeStatusStore.prune_stale()` |
-| P0/P1 | MCP Phase 2：管理面与动态工具刷新 | 代码实现、自动化回归和 Windows PTY 验收通过 | 已覆盖 PowerShell/cmd.exe 中 enable/disable、tool toggle、refresh、reconnect、events、output-limit、审批 UI 和 `/exit` |
-| P1 | `/context` cost 估算 | 未实现 | 在 token 统计外展示近似费用，未知模型显示 unknown |
-| P1 | 工具调用 UI 展开 | 基础完成，展开未做 | 设计并验证 `Ctrl+O` 展开摘要，重点看原生 Windows 热键兼容 |
-| P1 | task 面板持久展示 | 基础完成，待迭代 | 当前为瞬时渲染；后续评估底部驻留或 prompt_toolkit toolbar |
+| P0 | QQchat 原生 Windows/真实平台 E2E | 未完成 | 在 PowerShell/cmd.exe 验证 `/QQchat start|stop|status` 与 prompt_toolkit 共存，并完成真实 QQ 单聊和群聊 @ 回复验收 |
+| P0/P1 | compact 现场恢复与 checkpoint 链路 | 代码实现和自动化回归已完成；手工验收未执行/未记录 | 在 PowerShell/cmd.exe 验证 restored-context `/compact` 和 v3 `/resume`，并完成 QQchat same-conversation continuation/isolation 平台验收 |
+| P1 | `/QQchat init` + reload | 已写 spec/plan，未实现 | 实现配置骨架初始化和热部署 reload，项目级配置不能写 secret |
+| P1 | `/context` cost 估算 | 未实现 | 在 token 统计外展示近似费用，未知模型显示 `unknown` |
+| P1 | 工具调用 UI 展开 | 默认摘要已完成，展开未做 | 设计并验证 `Ctrl+O` 展开摘要，重点看原生 Windows 热键兼容 |
+| P1 | task 面板持久展示 | 瞬时面板已完成，持久展示未做 | 评估 bottom toolbar 或固定区域，并验证与 Rich Live、streaming、审批菜单共存 |
 | P1 | 对话回退 / 分叉 | 未实现 | 设计 fork-based rollback，避免破坏原 session |
 | P1 | 渲染模式完善 | 部分实现 | 明确 streaming、buffer、可替换区域式 final render 的边界 |
 | P2 | skills 后续生态 | 冻结候选 | fork skill runtime、hooks、paths 自动激活、remote skills、skill search 暂不进入近期默认开发 |
 
-### 2.1 Compact 可靠性重设计
+## 3. 当前阻塞和遗留
 
-状态：代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY `/compact` handler 验收已完成；真实 QQ 平台验收由用户接手。
+本表是当前 backlog 的单一入口。`PROGRESS.md` 只保留历史和验收证据，不再维护另一份遗留清单。
 
-文档：
+| 项目 | 状态 | 说明 |
+|------|------|------|
+| CLI `--resume` / `--continue` | 延后 | 当前只做交互内 `/resume`，CLI 恢复入口后续如有明确需求再设计 |
+| `/context` cost | 未实现 | 当前只有 token 估算，没有价格估算 |
+| compact 现场恢复与 checkpoint 链路 | 代码实现和自动化回归已完成；手工验收未执行/未记录 | `xcode.v3` restored context、checkpoint lineage metadata、v3 resume 和 external work-state isolation 已有自动化覆盖；仍需原生 Windows/QQchat 手工验收 |
+| `/QQchat init` + reload | 已写 spec/plan，未实现 | 需要实现配置文件骨架初始化和热部署 reload；项目级 config 不能写 secret |
+| `/QQchat` 最终验证 | 未完成 | 需要记录真实 QQ/Windows 验收；自动化通过不能替代真实平台接入完成 |
+| QQ 真实平台验收 | 未完成 | 单聊被动回复、群聊 @ 被动回复、危险工具真实 QQ 场景均未验收 |
+| 工具调用 `Ctrl+O` 展开 | 未实现 | 默认摘要已完成；展开热键和原生 Windows 热键验收仍未做 |
+| 可替换区域式 streaming | 未实现 | 结构化内容去重已基础收口；长期更稳的 streaming + final render 仍需设计 |
+| task 面板持久展示 | 待后续迭代 | `task_create/update` auto-allow + 瞬时面板已完成；持久底部驻留展示未做 |
+| `/resume` last_user_input 不稳定 | 仅记录 | 同一 session 的预览文案随时间变化，用户难识别；后续可考虑首条输入或固定摘要 |
+| 原生 Windows E2E | 核心 CLI 完成；QQchat 待验收 | `/resume`、`/compact`、多轮 tool call 和 MCP 已通过；`/QQchat start` 与真实 QQ 平台仍待验收 |
+| Phase 5 | 整体冻结，MCP 小步例外 | 不全面扩展生态；MCP 仅允许按已写 spec/plan 小步推进 |
 
-- `docs/superpowers/specs/2026-06-11-compact-reliability-design.md`
-- `docs/superpowers/plans/2026-06-11-compact-reliability-plan.md`
-- `docs/superpowers/plans/2026-06-11-compact-reliability/`
+## 4. P0/P1：QQchat 收口
 
-已完成范围：
+QQchat 第一版代码已实现 `/QQchat start|stop|status`，并已完成自动化和 review 加固；仍不能标记为完整完成，因为真实 QQ 平台和原生 Windows 手工验收尚未完成。
 
-1. `No response.` 在 QQchat/external turn 边界视为 LLM 错误，不写入 assistant history。
-2. summary LLM request 在 `tool_schemas=[]` 时进入真正 no-tool 请求。
-3. structured summary prompt + quality gate，拒绝 `<tool_call>`、JSON tool/function call、空摘要和协议泄漏。
-4. pair-safe tail、compact boundary、`summary_format=xcode.v2` metadata、old tool result micro-compact 已落地。
-5. QQchat 对 external turn 错误发送安全中文 fallback，gateway reconnect/stop 中的 benign heartbeat close 不再覆盖真实错误。
+近期只做：
 
-后续观察：
+- `/QQchat init`
+- `/QQchat reload`
+- 真实 QQ 单聊被动回复验收
+- 真实 QQ 群聊 @ 被动回复验收
+- 原生 PowerShell/cmd.exe 中 `/QQchat start|stop|status` 与 prompt_toolkit 并存验收
 
-- 真实 QQ 平台单聊/群聊回归，确认 compact 后错误 fallback、历史隔离和 heartbeat 降噪符合预期。
+暂不做：
 
-## 3. P0：原生 Windows E2E 验收
+- Webhook
+- 富媒体
+- 频道消息
+- 主动推送
+- 远程危险工具审批
+- 多 IM connector 抽象
 
-核心 CLI 验收已于 2026-06-10 由用户确认完成，覆盖：
+核心安全边界保持不变：
 
-必须覆盖：
+- QQ 消息是外部不可信输入。
+- QQ turn 使用独立 session/history，不复用本地 REPL `_history`。
+- QQ turn 默认只读 `ToolScope`。
+- 远程 QQ 用户不能审批危险工具。
+- AppSecret、AccessToken、Authorization header 不得进入项目配置、session transcript、audit event、错误输出或测试快照。
 
-- prompt_toolkit 主输入循环。
-- 审批方向键菜单：↑/↓、Enter、Esc、`y/n/a`。
-- diff preview + 审批菜单共存。
-- `/resume`：
-  - 普通短列表选择。
-  - 长列表连续方向键滚动。
-  - 窄窗口和中文预览。
-  - Esc 取消不污染 `_history`。
-- `/compact` Rich Live 进度。
-- 多轮 tool call 不被 UI 状态打断。
-- MCP fake stdio server 的 trust、reload、审批和 `/exit` shutdown。
+## 5. P0/P1：compact 现场恢复与 checkpoint 链路
 
-剩余未完成项：
-
-- `/QQchat status/start/stop` 与 prompt_toolkit 共存。
-- QQchat reload / init 完成后补 `/QQchat init|reload`。
-- 真实 QQ 单聊和群聊 @ 被动回复。
-
-核心 CLI 验收记录已写入 `PROGRESS.md` 和对应 task closeout。QQchat 未完成前，不应声称外部聊天入口的原生 Windows/真实平台 E2E 完成。
-
-## 4. P1：QQchat 收口
-
-QQchat 第一版代码已实现 `/QQchat start|stop|status`，并在 2026-06-08 做过 review 加固。当前仍不能标记为完整完成，因为真实 QQ 平台和原生 Windows 手工验收尚未执行。
-
-### 4.1 Task 7：文档和最终验证
-
-目标：
-
-- 同步 `ARCHITECTURE.md`、`DEVNOTES.md`、`PROGRESS.md`、`ROADMAP.md`。
-- 跑 QQchat 聚焦测试、`py_compile` 和 `git diff --check`。
-- 明确记录未执行的真实 QQ 验收，不把自动化通过写成真实平台接入完成。
-
-建议验证：
-
-```powershell
-python -m py_compile src\xcode_cli\core\agent.py src\xcode_cli\core\external_turn.py src\xcode_cli\core\commands\dispatcher.py src\xcode_cli\core\commands\slash.py src\xcode_cli\qqchat\config.py src\xcode_cli\qqchat\auth.py src\xcode_cli\qqchat\message_client.py src\xcode_cli\qqchat\events.py src\xcode_cli\qqchat\dedupe.py src\xcode_cli\qqchat\gateway.py src\xcode_cli\qqchat\service.py
-pytest tests\test_qqchat_config.py tests\test_qqchat_auth.py tests\test_qqchat_events.py tests\test_qqchat_message_client.py tests\test_qqchat_gateway.py tests\test_qqchat_service.py tests\test_external_turn.py tests\test_slash_dispatcher.py tests\test_agent_tool_loop.py -q
-git diff --check
-```
-
-### 4.2 Task 8：`/QQchat init` 与热部署 reload
-
-目标：
-
-- `/QQchat init` 幂等创建：
-  - `<project>/.xcode/config.json`
-  - `~/.xcode/qqchat.json`
-- 项目级 config 只写非敏感字段；`client_secret` 只允许用户级配置或环境变量。
-- `/QQchat reload` 重新加载配置；service 已运行时 stop 旧实例、重建、再 start。
-- reload 失败不崩主 REPL，不泄露 secret。
+状态：代码实现和自动化回归已完成；PowerShell/cmd.exe 原生 PTY restored-context `/compact`、v3 `/resume` 和 QQchat 平台手工验收未执行/未记录。
 
 文档：
 
-- `docs/superpowers/specs/2026-06-08-qqchat-init-reload-design.md`
-- `docs/superpowers/plans/2026-06-08-qqchat-init-reload-task.md`
+- `docs/superpowers/specs/2026-06-12-compact-state-restoration-design.md`
+- `docs/superpowers/plans/2026-06-12-compact-state-restoration-plan.md`
 
-## 5. P1：`/resume` 长列表重复渲染
+目标是在现有 compact v2 可靠性基线之上继续增强两件事：
 
-状态：代码实现和自动化验证已通过；原生 PowerShell/cmd.exe 手工验收仍需补记录。
+1. compact 后注入 bounded `Compact restored context` system message，恢复 active file、最近读过的文件 excerpt/hash、latest diagnostics、latest build/test、current plan 和 invoked skill metadata。
+2. checkpoint 从 `xcode.v2` 演进到兼容的 `xcode.v3` lineage metadata，记录 `checkpoint_id`、`parent_checkpoint_id`、summary/restored-context hash、累计序号和可选 message range。
 
-当前实现：
+已落地范围：
 
-- `/resume` TTY 菜单改为固定高度窗口，每次最多显示 9 条 session。
-- header 显示 `current/total`。
-- 每条预览先单行化，并按显示宽度截断；窄窗口下 checkpoint 标记使用短标记。
-- refresh 固定清理 `header + visible rows + footer` 行，不再按 `len(sessions) + 1` 清理。
+- `WorkStateTracker` 记录 bounded active/recent files、shell diagnostics、search summary 和 skill metadata，并在 tool loop 中 best-effort 更新。
+- compact 成功后插入 `Compact restored context` system message；summary rejection 时不写 restored context。
+- compact 运行时 `_history` 不再固定保留第一条 user message；第一条用户意图和约束由累计 summary 承担，latest user 仍由 pair-safe tail 保护。
+- restored context 的 secret redaction 已扩展到 QQBot/Basic/Token Authorization、JSON/YAML/冒号/等号形式 token、CLI secret 参数和 `QQ_BOT_CLIENT_SECRET` 等常见形态；`xcodebuild test`/`swift test`/JS test 命令归入 latest tests，plan-mode 会写入 current plan。
+- checkpoint metadata 使用兼容的 `summary_format=xcode.v3`，记录 checkpoint id、parent id、summary/restored-context hash、checkpoint index 和 restored-context sections。
+- `/resume` 对 v3 checkpoint 恢复 boundary + summary + restored context；旧 v1/v2 checkpoint 继续兼容。
+- 本地 REPL 和 QQchat/external conversation 的 work state 使用独立 tracker。
 
-文档：
+下一步：补齐 PowerShell/cmd.exe 原生 PTY `/compact` with restored context、v3 `/resume`、QQchat same-conversation continuation 和 conversation isolation 手工验收；真实 QQ 平台验收未完成前，本项仍保留在 ROADMAP。
 
-- `docs/superpowers/specs/2026-06-08-resume-menu-rendering-fix-design.md`
-- `docs/superpowers/plans/2026-06-08-resume-menu-rendering-fix-plan.md`
+约束：
 
-已验证：
+- 不引入 asyncio、embedding、vector DB 或后台索引服务。
+- 不把完整文件、完整 shell 输出、secret、skill body 或 MCP secret 写入 restored context。
+- 本地 REPL 和 QQchat/external conversation 的 work state 必须隔离。
+- summary rejection 仍然不能写 checkpoint、不能改写 `_history`、不能插入 restored context。
 
-- `python -m py_compile src\xcode_cli\core\conversation\resume.py src\xcode_cli\core\runtime_status.py src\xcode_cli\core\agent.py`
-- `pytest tests\test_agent_resume_command.py tests\test_resume.py tests\test_runtime_status.py -q`：44 passed
-
-仍需手工验收：
-
-- PowerShell 和 cmd.exe 中构造 30 条以上 session，连续按 ↑/↓ 不残留旧行。
-- 窄窗口和中文长预览不换行污染菜单。
-
-## 6. P1：runtime status stale cleanup
-
-状态：代码实现和自动化验证已通过。
-
-当前模型：
-
-- `RuntimeStatusStore` 写入 `~/.xcode/sessions/<pid>.json`。
-- 正常退出时 `AgentRuntime.run_chat()` 的 `finally` 会调用 `delete()`。
-- 强杀进程、断电、native crash、`os._exit()` 等意外退出不会执行 `finally`，会留下 stale status 文件。
-
-当前实现：
-
-- `RuntimeStatusStore.create()` 写入当前状态前调用 `prune_stale()` 扫描 `~/.xcode/sessions/*.json`。
-- 保留仍存活 pid，删除已死亡 pid。
-- 无法可靠判断 liveness 时使用 24 小时 TTL 兜底。
-- 损坏 JSON、权限错误、删除失败都不会影响主 REPL 启动。
-
-已验证：
-
-- dead pid 文件删除、alive pid 文件保留、未知 liveness 的 TTL 兜底、损坏 JSON 不崩溃。
-- `create/update/update_session_id/delete` 生命周期仍通过。
-
-## 7. P1：`/context` cost 估算
+## 6. P1：`/context` cost 估算
 
 目标是在 `/context` 中展示近似费用，而不只是 token 数。
 
@@ -190,9 +133,9 @@ output_cost_per_1m: float | None = None
 - 已知模型显示 input/output/total 估算。
 - 文案明确是 estimate，不是账单。
 
-## 8. P1：工具调用 UI 和渲染体验
+## 7. P1：工具调用 UI 和渲染体验
 
-### 8.1 工具调用展开
+### 7.1 工具调用展开
 
 当前默认已折叠为工具摘要，但 `Ctrl+O` 展开尚未实现和验收。
 
@@ -203,7 +146,7 @@ output_cost_per_1m: float | None = None
 - diff preview 和审批菜单不能被折叠隐藏。
 - 原生 Windows 中验证热键不干扰 prompt 输入。
 
-### 8.2 渲染模式完善
+### 7.2 渲染模式完善
 
 当前已支持：
 
@@ -216,7 +159,7 @@ output_cost_per_1m: float | None = None
 - 结构化内容何时停止 raw streaming。
 - 是否采用可替换区域式 streaming + final render，彻底避免重复输出。
 
-## 9. P1：对话回退和分叉
+## 8. P1：对话回退和分叉
 
 目标：支持用户回到某一轮对话继续，但不破坏原始 session。
 
@@ -243,7 +186,7 @@ output_cost_per_1m: float | None = None
 - turn 优先按 user/assistant pair 展示，不把每条 tool message 暴露给用户。
 - 普通文本恢复可以先做；结构化 tool history fork 要依赖现有 transcript schema，小步验证。
 
-## 10. P1：task 面板持久展示
+## 9. P1：task 面板持久展示
 
 当前 task 面板已经能在工具执行后瞬时渲染，但不会像 Claude Code 一样持续驻留底部。
 
@@ -253,155 +196,18 @@ output_cost_per_1m: float | None = None
 - 验证与 Rich Live、streaming、审批菜单共存。
 - 原生 Windows 验收优先于视觉增强。
 
-## 11. 已完成归档
+## 10. Phase 5：生态扩展候选
 
-下列能力已完成或基础收口，未来 roadmap 不再保留详细实现设计。需要实现细节请看 `ARCHITECTURE.md`，需要过程和证据请看 `PROGRESS.md`。
-
-| 能力 | 状态 |
-|------|------|
-| Phase 1-4 基础 agent、工具协议、权限、上下文 | 完成 |
-| Phase 4.5 memory/path/context 稳定化 | 完成 |
-| session resume 基础：UUID transcript、checkpoint + recent tail、`/compact`、`/resume` | 完成；CLI resume 延后 |
-| `/compact` Rich Live 进度 | 完成 |
-| `/resume` 方向键菜单基础版 | 完成；长列表渲染另列 bugfix |
-| `/init` prompt command | 完成 |
-| memory 自管理权限 | 完成 |
-| 项目级 `.xcode/config.json` merge 和 `/env` TUI | 完成 |
-| AgentRuntime Refactor Round 1-2 | 完成；`_run_llm_loop()` 仍暂不大动 |
-| Skills As Prompt Commands | 完成 |
-| Model-Invocable Skills / `SkillTool` | 完成；fork/hooks/remote/search 未包含 |
-| Task 工具免审和瞬时 task 面板 | 基础完成 |
-| 工具调用多轮不中断 | 核心完成；真实终端验收仍需补 |
-| 流式输出重复显示 | 基础收口；可替换区域式 streaming 未实现 |
-| QQchat 第一版代码和 review 加固 | 自动化通过；真实 QQ 和 Windows 手工验收未完成 |
-| compact 可靠性自动化基线 | 代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY `/compact` handler 验收完成；真实 QQ 验收由用户接手 |
-
-## 12. Phase 5：生态扩展候选
-
-Phase 5 整体仍冻结。MCP 是当前唯一按 spec 小步解冻的生态方向；它不是完整生态扩展，而是从 stdio tool provider 的安全接入逐步推进到管理面和动态刷新。
-
-### 12.1 MCP Phase 1：stdio tools 安全接入
-
-状态：完成；代码实现、自动化回归和真实 PowerShell/cmd.exe 手工验收均已通过。
-
-设计文档：
-
-- `docs/superpowers/specs/2026-06-08-mcp-integration-design.md`
-- `docs/superpowers/plans/2026-06-08-mcp-integration-plan.md`
-- `docs/superpowers/plans/2026-06-08-mcp-integration/`
-
-Phase 1 范围：
-
-- 只做 `.xcode/mcp.json` 中的 stdio servers。
-- trust gate 必须先于 server 启动；trust 绑定配置 hash，写入 `~/.xcode/mcp_trust.json`。
-- MCP tool 命名为 `mcp__<server>__<tool>`，sanitize 后防冲突。
-- MCP tool 默认 `is_read_only=False`，继续走 `PermissionManager` 和审批 UI。
-- `MCPConnectionManager` 内部允许 async event loop/thread；`AgentRuntime` Phase 1 保持同步 wrapper，后续再逐步 async 化。
-- `tools/list` schema 不兼容时跳过 tool 并记录 warning，不打崩 Agent。
-- `tools/call` 结果进入 `_history` 前按 `max_mcp_output_chars` 截断。
-- `/mcp status` 显示 connected/failed/untrusted/disabled、tool count 和 error summary。
-
-Phase 1 不做：
-
-- resources/prompts/HTTP/SSE/OAuth/list_changed。
-- MCP prompts 转 slash commands。
-- 自动下载/安装 MCP server 或 marketplace。
-- tool search / lazy schema loading。
-- 子 Agent 独立 MCP scope。
-
-验收重点不是“能跑 filesystem server”，而是证明 Xcode 能安全、可审计、可失败恢复地把 trusted MCP stdio server 变成外部工具来源。
-
-后续如果解冻其他 Phase 5 能力，必须逐项设计、逐项验收，不一次性铺开。
-
-### 12.2 MCP Phase 2：管理面与动态工具刷新
-
-状态：代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 交互验收已完成。
-
-设计文档：
-
-- `docs/superpowers/specs/2026-06-09-mcp-phase2-design.md`
-- `docs/superpowers/plans/2026-06-09-mcp-phase2-plan.md`
-- `docs/superpowers/plans/2026-06-09-mcp-phase2/`
-
-Phase 2 范围：
-
-- project-scoped 本机 `mcp_state.json`，保存 server/tool enable-disable 和 per-tool output limit，不写项目仓库。
-- `/mcp status --verbose`、`/mcp tools`、`/mcp enable|disable`、`/mcp tool enable|disable`、`/mcp refresh`、`/mcp reconnect`、`/mcp events`、`/mcp output-limit`。
-- `notifications/tools/list_changed` 或等价 pending refresh event，在 AgentRuntime safe point 重建 MCP ToolDefs。
-- ToolRegistry mutation 只在主线程 safe point，background MCP thread 不直接改 schema。
-- lifecycle event ring buffer 和可观测 status，不泄露 env values。
-- per-tool output limit override，优先于全局 `max_mcp_output_chars`。
-- enabled MCP tools 超过 100 时 warning，用户通过 `/mcp tools` 和 `/mcp tool disable` 收敛。
-
-Phase 2 不做：
-
-- HTTP / Streamable HTTP / SSE。
-- OAuth、dynamic headers、token refresh。
-- resources、prompts、MCP Apps。
-- marketplace、registry、企业 policy。
-- 子 Agent 独立 MCP scope。
-- model-driven tool search / lazy schema loading。
+Phase 5 整体仍冻结。MCP 只允许在已完成的 stdio tools 基线之上按 spec 小步推进；不得把已完成的 MCP Phase 1/2 当作继续扩张到 HTTP/OAuth/resources/prompts 的默认许可。
 
 候选能力：
 
-| Task | 能力 | 备注 |
-|------|------|------|
-| 5.1 | MCP stdio tools | 代码实现、自动化和 PowerShell/cmd.exe E2E 通过；P0 安全接入，不含 resources/prompts/HTTP/SSE/OAuth |
-| 5.2 | MCP management + dynamic refresh | 代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 交互验收通过；只覆盖 stdio tools 管理面 |
-| 5.3 | WebFetch | 需要网络权限、安全边界和缓存策略 |
-| 5.4 | WebSearch | 需要 provider 抽象和引用展示 |
-| 5.5 | Cron / automation | 先明确本地线程、系统计划任务还是外部调度 |
-| 5.6 | Git tools | 需要强权限边界，避免误操作 |
-| 5.7 | Hooks | 需要定义触发点、失败策略和用户可见性 |
-| 5.8 | Remote skills / skill search | 需要信任模型、签名、安装和禁用策略 |
-
-## 13. Phase 6：外部聊天入口
-
-Phase 6 当前只围绕 QQchat 第一版收口，不扩大到更多 IM 或 Webhook。
-
-近期只做：
-
-- `/QQchat init`
-- `/QQchat reload`
-- QQchat Task 7 文档和最终验证
-- 真实 QQ 单聊被动回复验收
-- 真实 QQ 群聊 @ 被动回复验收
-- 原生 PowerShell/cmd.exe 中 `/QQchat start` 与 prompt_toolkit 并存验收
-
-暂不做：
-
-- Webhook
-- 富媒体
-- 频道消息
-- 主动推送
-- 远程危险工具审批
-- 多 IM connector 抽象
-
-核心安全边界保持不变：
-
-- QQ 消息是外部不可信输入。
-- QQ turn 使用独立 session/history，不复用本地 REPL `_history`。
-- QQ turn 默认只读 `ToolScope`。
-- 远程 QQ 用户不能审批危险工具。
-- AppSecret、AccessToken、Authorization header 不得进入项目配置、session transcript、audit event、错误输出或测试快照。
-
-## 14. P0/P1：compact 现场恢复与 checkpoint 链路
-
-状态：已写 spec/plan，待实现。
-
-文档：
-- `docs/superpowers/specs/2026-06-12-compact-state-restoration-design.md`
-- `docs/superpowers/plans/2026-06-12-compact-state-restoration-plan.md`
-
-目标是在现有 compact 可靠性基线之上继续增强两件事：
-
-1. compact 后注入 bounded `Compact restored context` system message，恢复 active file、最近读过的文件 excerpt/hash、latest diagnostics、latest build/test、current plan 和 invoked skill metadata。
-2. checkpoint 从 `xcode.v2` 演进到兼容的 `xcode.v3` lineage metadata，记录 `checkpoint_id`、`parent_checkpoint_id`、summary/restored-context hash、累计序号和可选 message range。
-
-下一步：按 plan 的 Task 1 从 `WorkStateTracker` 和 `tests/test_work_state.py` 开始，先建立结构化现场状态，再接入 tool loop、compact、session resume 和 QQchat/external turn 隔离。
-
-约束：
-- 不引入 asyncio、embedding、vector DB 或后台索引服务。
-- 不把完整文件、完整 shell 输出、secret、skill body 或 MCP secret 写入 restored context。
-- 本地 REPL 和 QQchat/external conversation 的 work state 必须隔离。
-- 没有自动化回归、PowerShell/cmd.exe 原生 PTY 验收和真实 QQ 平台验收前，不得标记为完成。
+| 能力 | 备注 |
+|------|------|
+| WebFetch | 需要网络权限、安全边界和缓存策略 |
+| WebSearch | 需要 provider 抽象和引用展示 |
+| Cron / automation | 先明确本地线程、系统计划任务还是外部调度 |
+| Git tools | 需要强权限边界，避免误操作 |
+| Hooks | 需要定义触发点、失败策略和用户可见性 |
+| Remote skills / skill search | 需要信任模型、签名、安装和禁用策略 |
+| MCP HTTP/SSE/OAuth/resources/prompts/MCP Apps | 需要独立 spec、trust model、secret 边界和原生 Windows 验收 |

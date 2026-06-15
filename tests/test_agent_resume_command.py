@@ -303,12 +303,13 @@ class TestResumeSuccessful:
 # ---------------------------------------------------------------------------
 
 class TestCompactCommand:
-    def test_compact_short_history_shows_message(self, tmp_path: Path, monkeypatch, capsys) -> None:
+    def test_compact_short_history_attempts_checkpoint(self, tmp_path: Path, monkeypatch, capsys) -> None:
         agent = _make_agent(tmp_path, monkeypatch)
         agent._history = [{"role": "user", "content": "hi"}]
         agent._handle_compact_command()
         captured = capsys.readouterr()
-        assert "Nothing to compact" in captured.out
+        assert "Context compacted" in captured.out
+        assert agent._history[0]["role"] == "system"
 
     def test_compact_writes_checkpoint_to_transcript(self, tmp_path: Path, monkeypatch, capsys) -> None:
         from xcode_cli.core.context import CompressionResult
@@ -353,7 +354,8 @@ class TestCompactCommand:
         assert "message" in msg_types
         assert "compaction_checkpoint" in msg_types
         cp = next(e for e in events if e.get("type") == "compaction_checkpoint")
-        assert cp["summary_format"] == "xcode.v2"
+        assert cp["summary_format"] == "xcode.v3"
+        assert cp["checkpoint_id"].startswith("ckpt_")
         assert cp["source_message_count"] == 4
         assert cp["protected_tail_messages"] == 2
         assert cp["micro_compacted_tool_results"] == 0

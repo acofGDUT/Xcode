@@ -44,6 +44,7 @@ from xcode_cli.core.tools import ALL_TOOLS
 from xcode_cli.core.tools.agent_tool import create_dispatch_agent_tool
 from xcode_cli.core.tools.skill_tool import create_skill_tool
 from xcode_cli.core.turn import UserTurnInput, coerce_user_turn_input
+from xcode_cli.core.work_state import WorkStateTracker
 from xcode_cli.mcp.config import MCPConfig, MCPServerConfig, load_mcp_config
 from xcode_cli.mcp.connection import MCPConnectionManager
 from xcode_cli.mcp.catalog import MCPCatalogTool
@@ -91,6 +92,7 @@ class AgentRuntime:
         cfg = self.config_store.load()
         self.context = ContextManager(max_tokens=cfg.max_tokens, max_summary_chars=cfg.max_summary_chars)
         self.task_tracker = TaskTracker()
+        self.work_state = WorkStateTracker(cwd=self.cwd)
         self.memory = MemoryManager(cwd=self.cwd)
         self.permissions = PermissionManager(cwd=self.cwd)
         self.plan_mode = PlanMode()
@@ -141,6 +143,7 @@ class AgentRuntime:
             self.config_store,
             self._session_auto_approve,
             tool_display=self.tool_display,
+            work_state=self.work_state,
         )
         self.qqchat_service: QQChatService | None = None
         self._qqchat_init_error: str | None = None
@@ -201,6 +204,7 @@ class AgentRuntime:
         system_prompt: str,
         tool_scope: ToolScope,
         session_id: str | None = None,
+        work_state=None,
     ) -> str:
         return self._run_llm_loop(
             history=history,
@@ -210,6 +214,7 @@ class AgentRuntime:
             render_output=False,
             update_runtime_stats=False,
             turn_blocked_tools=set(),
+            work_state=work_state,
         )
 
     def run_chat(self) -> None:
@@ -802,11 +807,13 @@ class AgentRuntime:
         def write_plan(content: str) -> str:
             path = write_plan_file(content)
             self.plan_mode.plan_path = path
+            self.work_state.update_current_plan(content)
             return f"Plan written to: {path}"
 
         def exit_plan_mode(plan_summary: str) -> str:
             if not self.plan_mode.is_active:
                 return "Error: not in planning mode"
+            self.work_state.update_current_plan(plan_summary)
             return self.plan_mode.exit(plan_summary)
 
         return [
@@ -867,13 +874,21 @@ class AgentRuntime:
         return self.compactor.find_previous_summary(history)
 
     def _handle_compact_command(self) -> None:
-        if len(self._history) < 4:
+        if not self._history:
             self.console.print("Nothing to compact.")
             return
 
-        outcome = self.compactor.compact_history(self._history)
+        outcome = self.compactor.compact_history(
+            self._history,
+            trigger="manual",
+            work_state=self.work_state,
+        )
         if outcome is None:
-            self.console.print("Nothing to compact.")
+            reason = self.compactor.last_failure_reason or "unknown"
+            if reason in {"no input", "no summarizable input", "no checkpoint"}:
+                self.console.print("Nothing to compact.")
+            else:
+                self.console.print(f"Compact failed: {reason}.", markup=False, highlight=False)
             return
 
         self._history[:] = outcome.messages
@@ -1049,12 +1064,14 @@ class AgentRuntime:
         render_output: bool = True,
         update_runtime_stats: bool = True,
         turn_blocked_tools: set[str] | None = None,
+        work_state=None,
     ) -> str:
         cfg = self.config_store.load()
         render_mode = cfg.response_render_mode
         assistant_turn_started = False
         transcript_session_id = self._session_id if session_id is None else session_id
         active_blocked_tools = self._current_blocked_tools if turn_blocked_tools is None else turn_blocked_tools
+        active_work_state = self.work_state if work_state is None else work_state
 
         renderer = (
             StreamingTurnRenderer(
@@ -1068,7 +1085,11 @@ class AgentRuntime:
 
         while True:
             if self.context.should_compress(history):
-                outcome = self.compactor.compact_history(history)
+                outcome = self.compactor.compact_history(
+                    history,
+                    trigger="auto",
+                    work_state=active_work_state,
+                )
                 if outcome is not None:
                     before_messages = outcome.before_messages
                     after_messages = outcome.after_messages
@@ -1194,6 +1215,7 @@ class AgentRuntime:
                 blocked_tools=active_blocked_tools,
                 tool_scope=tool_scope,
                 render_output=render_output,
+                work_state=active_work_state,
             )
             if tool_result.blocked_tools:
                 active_blocked_tools.update(tool_result.blocked_tools)

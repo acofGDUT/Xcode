@@ -17,10 +17,11 @@
 Describe the actual v3 runtime shape:
 
 ```text
-first user + compact boundary + summary checkpoint + compact restored context + pair-safe protected tail
+compact boundary + summary checkpoint + optional compact restored context + pair-safe protected tail
 ```
 
 Also document v3 checkpoint metadata and `/resume` behavior.
+2026-06-14 follow-up: no fixed first user is retained in `_history`; first-turn intent and constraints must be covered by the cumulative summary.
 
 - [ ] **Step 2: Update progress with evidence**
 

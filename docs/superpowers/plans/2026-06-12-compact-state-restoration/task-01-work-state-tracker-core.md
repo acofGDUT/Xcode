@@ -52,10 +52,10 @@ def test_records_shell_build_diagnostics_and_redacts_secret():
     )
 
     snapshot = tracker.snapshot()
-    assert snapshot.latest_build is not None
-    assert snapshot.latest_build.exit_code == 65
+    assert snapshot.latest_test is not None
+    assert snapshot.latest_test.exit_code == 65
     assert snapshot.diagnostics[0].path.endswith("LoginView.swift")
-    assert "secret-token" not in snapshot.latest_build.output_excerpt
+    assert "secret-token" not in snapshot.latest_test.output_excerpt
 ```
 
 - [ ] **Step 3: Implement dataclasses and bounded storage**
@@ -69,8 +69,9 @@ def _sha256_file(path: Path) -> str:
 
 def _redact(text: str) -> str:
     patterns = [
-        r"Authorization:\s*Bearer\s+\S+",
-        r"(?i)(client_secret|access_token|api_key)=\S+",
+        r"Authorization:\s*(Bearer|QQBot|Basic|Token)\s+\S+",
+        r"(?i)(client_secret|access_token|api_key|app_secret|qq_bot_client_secret)\s*[:=]\s*\S+",
+        r"(?i)--(client-secret|access-token|api-key|app-secret)(\s+|=)\S+",
     ]
     ...
 ```

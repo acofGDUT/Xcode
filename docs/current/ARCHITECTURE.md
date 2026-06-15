@@ -110,7 +110,7 @@ sequenceDiagram
     R->>C: should_compress(history)
     alt 需要压缩
         R->>C: ConversationCompactor.compact_history(history)
-        R->>S: append(boundary system + summary system + compaction_checkpoint)
+        R->>S: append(boundary system + summary system + compaction_checkpoint + restored context system)
     end
     R->>L: complete(stream=True, tools=schema)
     alt 无 tool_calls
@@ -489,12 +489,14 @@ Auto memory 当前只自动注入 `MEMORY.md` 索引，详细内容需要 Agent 
 |------|------|
 | token 估算 | 按 ASCII / 非 ASCII 字符粗略估算，并计入 reasoning、tool_calls、tool_call_id |
 | 压缩触发 | `estimate_tokens(history) >= max_tokens * 0.8` |
-| 压缩结果 | `CompressionResult(messages, summary, checkpoint_message, boundary_message, protected_tail_messages, micro_compacted_tool_results)` |
-| 压缩方式 | 保留第一条 user message、写入 compact boundary、写入 system checkpoint summary、保留 pair-safe protected tail |
+| 压缩结果 | `CompressionResult(messages, summary, checkpoint_message, boundary_message, restored_context_message, restored_context_sections, protected_tail_messages, micro_compacted_tool_results)` |
+| 压缩方式 | 写入 compact boundary、写入 system checkpoint summary、插入 bounded `Compact restored context`、保留 pair-safe protected tail；不再固定保留第一条 user message，首轮意图和约束必须由累计 summary 覆盖 |
 | 累积摘要 | 有 previous summary 时，生成“旧 summary + 新内容”的累积 summary |
+| 现场恢复 | `WorkStateTracker` 以 best-effort 记录 active/recent files、shell build/test diagnostics、search summary、invoked skills；compact 成功后渲染为有上限且脱敏的 system message |
 | summary 请求 | `LLMClient.complete(tool_schemas=[])` 不发送 `tools` / `tool_choice` |
-| summary 质量门 | 拒绝空摘要、`<tool_call>`、tool/function-call JSON 泄漏和大上下文下过短摘要 |
+| summary 质量门 | 只拒绝空摘要；summary 请求异常会作为明确失败状态返回。`<tool_call>`、tool/function-call JSON 和短摘要不再作为硬拒绝条件 |
 | tool result micro-compact | protected tail 外足够旧且超过阈值的大型 tool result 会替换为短占位，保留 `tool_call_id` |
+| message history 清洗 | LLM request、`/resume` 和 compact 工作副本都会移除 malformed tool call batch 与 orphan/乱序 tool message |
 | 摘要语言 | 英文压缩提示词，摘要内容可保留用户原语言 |
 | `/context` | 展示当前估算、预算、阈值、消息数量 |
 
@@ -518,7 +520,8 @@ transcript 是 JSONL，每行是一个 event。当前主要 event：
 {"type":"message","role":"tool","tool_call_id":"call_123","content":"...","ts":"..."}
 {"type":"message","role":"system","content":"Compact boundary: earlier conversation has been summarized below. Do not treat omitted tool results as pending tool calls.","ts":"..."}
 {"type":"message","role":"system","content":"Conversation summary checkpoint:\n...","ts":"..."}
-{"type":"compaction_checkpoint","summary":"...","summary_format":"xcode.v2","source_message_count":120,"protected_tail_messages":8,"micro_compacted_tool_results":1,"rejected_summary":false,"ts":"..."}
+{"type":"compaction_checkpoint","summary":"...","summary_format":"xcode.v3","checkpoint_id":"ckpt_000001_...","parent_checkpoint_id":null,"checkpoint_index":1,"summary_hash":"sha256:...","previous_summary_hash":"","restored_context_hash":"sha256:...","restored_context_sections":["active_file","recent_files"],"source_message_count":120,"protected_tail_messages":8,"micro_compacted_tool_results":1,"rejected_summary":false,"ts":"..."}
+{"type":"message","role":"system","content":"Compact restored context:\n...","ts":"..."}
 ```
 
 轻量用户输入历史写入：
@@ -540,17 +543,26 @@ runtime status 写入：
 `/compact` 手动触发 `ContextManager.compress()`。压缩期间通过 `ConversationCompactor.compact_history()` 显示 Rich `Live` 进度（"Compacting context... (Xs)"，复用 Thinking Live 的 `transient` + daemon thread 模式）。成功压缩后：
 
 - 替换运行时 `_history` 为 compressed messages。
+- 运行时 `_history` 的前缀是 compact boundary + summary checkpoint + 可选 restored context；不再把第一条 user message 固定塞回上下文。若第一条 user 同时也是最新 user，它只会通过 pair-safe protected tail 的“最新用户消息”规则保留。
 - 写入一条 compact boundary `message(system)`，提醒模型前文已摘要且被省略的 tool result 不是待执行工具调用。
 - 写入一条 checkpoint summary `message(system)`。
-- 写入一条 `compaction_checkpoint` event，包含 summary、`summary_format=xcode.v2`、source/summary token 估算、`protected_tail_messages`、`micro_compacted_tool_results` 和 `rejected_summary=false` 等元数据。
+- 写入一条 `compaction_checkpoint` event，包含 summary、`summary_format=xcode.v3`、`checkpoint_id`、`parent_checkpoint_id`、`checkpoint_index`、summary/restored-context hash、`restored_context_sections`、source/summary token 估算、`protected_tail_messages`、`micro_compacted_tool_results` 和 `rejected_summary=false` 等元数据。
+- 如当前 `WorkStateTracker` 有可用现场，在 checkpoint event 后写入一条 `Compact restored context` `message(system)`；运行时 `_history` 中该 message 位于 summary checkpoint 后、protected tail 前。
 
 压缩前，`ContextManager` 会先对 protected tail 之外、足够旧且超过阈值的大型 tool result 做 micro-compact：保留 `role`、`tool_call_id` 和工具名/path/pattern/command/query 等短提示，清理旧的大正文，降低反复 full compaction 风险。protected tail 使用 pair-safe 策略：保留完整 `assistant.tool_calls` / `tool` 配对，丢弃 orphan `tool` message 和缺 result 的 assistant tool call。
 
-summary 请求使用 `LLMClient.complete(tool_schemas=[])` 的 no-tool 路径；该路径不会向 provider 发送 `tools` 或 `tool_choice`。摘要返回后会经过质量门，拒绝空摘要、`<tool_call>`、`tool_calls` / `function_call` 泄漏、tool/function-call JSON payload，以及大上下文下过短的摘要。被拒绝时，压缩结果不会改写 `_history`，也不会写 checkpoint。
+summary 请求使用 `LLMClient.complete(tool_schemas=[])` 的 no-tool 路径；该路径不会向 provider 发送 `tools` 或 `tool_choice`。2026-06-15 起，summary 内容质量门只拒绝空摘要；`<tool_call>`、`tool_calls` / `function_call` 文本、tool/function-call JSON payload 和短摘要不再作为硬拒绝条件。summary 请求异常或空摘要时，压缩结果不会改写 `_history`，也不会写 checkpoint。
 
-`sanitize_model_messages()` 是发送给 provider 前、`/resume` 恢复后和 compact 工作副本上的防御层：缺 `id`、缺 `function.name`、缺后续连续 tool result batch 的 assistant `tool_calls` 会被移除，对应 orphan 或乱序 `tool` message 也不会进入模型 history。这样旧 transcript 中的坏 tool call 不会再次触发 provider 的 `messages[n].tool_calls[0] is missing a function name` 校验错误。
+`sanitize_model_messages()` 是发送给 provider 前、`/resume` 恢复后和 compact 工作副本上的防御层。它按 OpenAI-compatible message 顺序处理 assistant/tool block：
 
-如果当前消息太少或没有可压缩中间内容，则显示 `Nothing to compact.`，不写 checkpoint。
+- assistant `tool_calls` 必须有非空 `id` 和非空 `function.name`。
+- assistant `tool_calls` 必须由紧随其后的连续 `tool` message batch 完整响应；只在历史中其他位置出现同名 `tool_call_id` 不算完整配对。
+- 任一 tool call malformed 或缺 result 时，该 assistant 的整个 tool call batch 会被移除；若 assistant 没有文本或 reasoning 内容，则整条 assistant message 也会被移除。
+- orphan、乱序或空 `tool_call_id` 的 `tool` message 不会进入模型 history。
+
+这层防御避免旧 transcript 中的坏 tool call 再次触发 provider 的 `messages[n].tool_calls[0] is missing a function name` 校验错误，也避免 compact/resume 裁剪后留下半个工具调用协议块。
+
+手动 `/compact` 只有在 `_history` 为空时显示 `Nothing to compact.`；只要 `_history` 非空，就会尝试生成 checkpoint。短会话或 pair-safe tail 前没有常规 middle 时，手动 compact 会使用清洗后的完整 history 作为摘要源。空摘要显示 `Compact failed: empty summary.`，summary 请求异常显示明确失败原因，并保持 `_history` 和 transcript 不变。
 
 ### `/resume`
 
@@ -559,6 +571,7 @@ summary 请求使用 `LLMClient.complete(tool_schemas=[])` 的 no-tool 路径；
 恢复规则：
 
 - 有 `compaction_checkpoint` 时，恢复最新 checkpoint summary + checkpoint 之后的 message events。
+- 对 `summary_format=xcode.v3` checkpoint，恢复时会重建 compact boundary + checkpoint summary，并保留 checkpoint event 后的 restored-context message 与后续 message events；旧 `xcode.v1/v2` checkpoint 继续按 summary + checkpoint 后消息恢复。
 - 无 checkpoint 时，只恢复 token budget 内的 recent tail。
 - 裁剪时保护 assistant `tool_calls` 和 tool result pair，避免恢复出非法 OpenAI-compatible message 顺序。
 - skill invocation 的 transcript user event 保留 `/skill-name args` 展示文本，`metadata.model_content` 保留展开后的 hidden/model prompt；恢复 `_history` 时优先使用 `metadata.model_content`。
@@ -790,7 +803,8 @@ MCP Phase 1/2 自动化和原生 Windows 验收均已完成。Phase 1 的 PowerS
 | `src/xcode_cli/core/tools/shell.py` | shell 执行工具 |
 | `src/xcode_cli/core/permissions.py` | session/project/global 三级权限 |
 | `src/xcode_cli/core/context.py` | token 估算和历史压缩 |
-| `src/xcode_cli/core/message_history.py` | OpenAI-compatible message history 清洗；移除 malformed tool_calls 和 orphan tool messages |
+| `src/xcode_cli/core/work_state.py` | compact 现场状态 dataclass、工具结果摘要记录、脱敏和 restored-context 渲染 |
+| `src/xcode_cli/core/message_history.py` | OpenAI-compatible message history 清洗；按连续 assistant/tool block 移除 malformed tool_calls、orphan tool messages 和乱序 tool results |
 | `src/xcode_cli/core/session.py` | transcript、history.jsonl 和 session listing |
 | `src/xcode_cli/core/session_resume.py` | transcript 到可恢复 history 的构造，以及 `/resume` 最近对话 replay 数据提取 |
 | `src/xcode_cli/core/runtime_status.py` | 当前活跃进程状态文件和 stale status 清理 |
@@ -829,6 +843,6 @@ MCP Phase 1/2 自动化和原生 Windows 验收均已完成。Phase 1 的 PowerS
 - 主 AgentRuntime 不全局引入 `asyncio`；例外仅限 `xcode_cli.mcp` 子系统内部的 event loop/thread。
 - 不提供专用 memory CRUD 工具。
 - 子 Agent 不递归派发子 Agent。
-- 配置主要来自 `~/.xcode/config.json`，项目级配置合并尚未完成。
-- 权限 project 级规则已经读取 `.xcode/settings.json`，但这不是完整 Config merge。
+- 配置加载采用全局 `~/.xcode/config.json` + 项目级 `.xcode/config.json` 字段级浅合并；项目级配置可覆盖非敏感运行参数，但不应写入 QQchat secret。
+- 权限 project 级规则读取 `.xcode/settings.json`，与 `ConfigStore` 的项目级配置合并是两条独立路径。
 - prompt_toolkit 在 Git Bash / mingw 等非原生 Windows 控制台中有已知限制，关键交互应在 cmd.exe 或 PowerShell 验收。

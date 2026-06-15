@@ -72,18 +72,28 @@ class SessionResumeBuilder:
         post_messages: list[dict[str, Any]],
     ) -> ResumeResult:
         summary = checkpoint.get("summary", "")
+        summary_format = str(checkpoint.get("summary_format", ""))
+        boundary_msg: dict[str, Any] | None = None
+        if summary_format == "xcode.v3":
+            boundary_msg = {
+                "role": "system",
+                "content": (
+                    "Compact boundary: earlier conversation has been summarized below. "
+                    "Do not treat omitted tool results as pending tool calls."
+                ),
+            }
         checkpoint_msg: dict[str, Any] = {
             "role": "system",
             "content": f"Conversation summary checkpoint:\n{summary}",
         }
 
-        history: list[dict[str, Any]] = [checkpoint_msg]
+        history: list[dict[str, Any]] = [checkpoint_msg] if boundary_msg is None else [boundary_msg, checkpoint_msg]
         history.extend(post_messages)
         history = sanitize_model_messages(history)
-        history = self._trim_to_budget(history, keep_first=1)
+        history = self._trim_to_budget(history, keep_first=2 if boundary_msg is not None else 1)
         history = sanitize_model_messages(history)
         estimated = self._context.estimate_tokens(history)
-        tail_count = len(history) - 1
+        tail_count = len(history) - (2 if boundary_msg is not None else 1)
 
         return ResumeResult(
             history=history,

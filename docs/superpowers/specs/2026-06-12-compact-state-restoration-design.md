@@ -1,7 +1,7 @@
 # Compact State Restoration And Checkpoint Lineage Design
 
-> 状态：设计和实施计划已完成；代码未实现，自动化回归、PowerShell/cmd.exe 原生 PTY 验收和真实 QQ 平台验收均未执行。
-> 日期：2026-06-12
+> 状态：代码实现和自动化回归已完成；PowerShell/cmd.exe 原生 PTY restored-context `/compact`、v3 `/resume` 和 QQchat 平台手工验收未执行/未记录。
+> 日期：2026-06-14
 > 风险层级：P0/P1。该设计触及 context compaction、session transcript、`/resume`、tool loop、QQchat external turn 和长期任务恢复。
 
 ## 背景
@@ -140,11 +140,12 @@ class WorkStateSnapshot:
 | `run_shell` | command/cwd/exit_code/output excerpt；解析 build/test/diagnostic |
 | `skill` | skill name、source_hash、source_path；不记录 skill body |
 | `task_list` | 当前 task 摘要可作为 current plan 的候选补充 |
+| `write_plan` / `exit_plan_mode` | plan 正文或 plan summary 作为 current plan，供 compact 后继续执行 |
 
 `run_shell` 第一版只做启发式解析：
 
 - `xcodebuild`、`swift build`、`npm run build`、`pnpm build` 等归为 `kind="build"`；
-- `pytest`、`npm test`、`pnpm test`、`xcodebuild test` 等归为 `kind="test"`；
+- `pytest`、`npm test`、`pnpm test`、`yarn test`、`npm/pnpm/yarn run test`、`swift test`、`xcodebuild test` 等归为 `kind="test"`；
 - 识别 `path:line:column: error: message`、`path:line: error: message`、`FAILED tests/...::name` 等常见格式；
 - 解析失败时只保留 command status 和 output excerpt。
 
@@ -196,7 +197,6 @@ Compact restored context:
 `xcode.v3` compact 后的运行时 `_history` 应为：
 
 ```text
-first user
 system: Compact boundary
 system: Conversation summary checkpoint
 system: Compact restored context
@@ -204,6 +204,7 @@ pair-safe protected tail
 ```
 
 如果 restored context 为空，则省略该 system message。
+不再固定保留第一条 user message；第一条用户消息中的目标、约束和偏好必须由累计 summary 覆盖。如果第一条 user 同时也是最新 user，则可以通过 pair-safe protected tail 的最新用户消息规则保留。
 
 summary 失败或被 quality gate 拒绝时：
 
@@ -275,7 +276,7 @@ message(system): Compact restored context
 ### 安全和隐私
 
 - restored context 不记录环境变量值、Authorization header、QQ access token、MCP secret、完整 shell 命令输出中的明显 secret。
-- `run_shell` output excerpt 进入 restored context 前应复用或新增 redaction helper，至少处理 `Authorization: Bearer ...`、`client_secret=...`、`access_token=...`、`api_key=...` 等常见模式。
+- `run_shell` output excerpt 进入 restored context 前应复用或新增 redaction helper，至少处理 `Authorization: Bearer/QQBot/Basic/Token ...`、JSON/YAML/冒号/等号形式的 `client_secret`、`access_token`、`api_key`、`app_secret`、`QQ_BOT_CLIENT_SECRET`，以及 `--client-secret` / `--access-token` / `--api-key` 等 CLI 参数。
 - QQchat external state 独立；远程入口不得看到本地 REPL work state。
 - restored context 是 system message，不是 tool result；不能包含未配对 tool protocol 字段。
 
@@ -313,10 +314,17 @@ message(system): Compact restored context
 
 ```powershell
 python -m compileall -q src
-pytest tests/test_work_state.py tests/test_agent_tool_loop.py tests/test_external_turn.py tests/test_context.py tests/test_compaction.py tests/test_session_resume.py -q
+pytest tests/test_work_state.py tests/test_agent_tool_loop.py tests/test_external_turn.py tests/test_context.py tests/test_compaction.py tests/test_session_resume.py tests/test_agent_resume_command.py -q
 pytest -q
 git diff --check
 ```
+
+2026-06-14 自动化执行记录：
+
+- `python -m compileall -q src`：退出码 0。
+- `pytest tests/test_work_state.py tests/test_agent_tool_loop.py tests/test_external_turn.py tests/test_context.py tests/test_compaction.py tests/test_session_resume.py tests/test_agent_resume_command.py -q`：2026-06-14 追加 first-user removal、expanded redaction、test-kind 和 plan-mode current-plan 回归后为 `119 passed in 15.65s`。
+- `pytest -q`：`566 passed in 31.81s`。
+- `git diff --check`：退出码 0；仅输出 Windows LF/CRLF 行尾转换提示。
 
 ### 手工验收
 
@@ -324,6 +332,8 @@ git diff --check
 - `/resume`：恢复 v3 checkpoint session，确认 summary 和 restored context 同时进入恢复后的 `_history`。
 - QQchat：同一 QQ conversation compact 后能继续当前现场；不同 QQ conversation 和本地 REPL 不共享 restored context。
 - Transcript inspection：检查 `checkpoint_id`、`parent_checkpoint_id`、hash 和可选 `covered_message_range` 链路。
+
+2026-06-14 手工状态：上述 PowerShell/cmd.exe 原生 PTY、v3 `/resume`、QQchat continuation/isolation 和真实 session transcript inspection 尚未执行/未记录；因此本项不能写成整体验收完成。
 
 ## 被拒绝的方案
 

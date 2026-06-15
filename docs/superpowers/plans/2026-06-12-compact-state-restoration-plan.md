@@ -2,13 +2,20 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Detailed task checklists live in the task files listed below.
 
-Status: Spec and implementation plan are written on 2026-06-12. Code is not implemented. Automated regression, PowerShell/cmd.exe native PTY acceptance, and real QQ platform acceptance have not been run.
+Status: Code implementation and automated regression completed on 2026-06-14. PowerShell/cmd.exe native PTY restored-context `/compact`, v3 `/resume`, and QQchat platform acceptance have not been run/recorded, so implementation closeout still carries manual acceptance gaps.
 
 **Goal:** Add deterministic compact restored context and auditable cumulative checkpoint lineage on top of the existing compact reliability baseline.
 
 **Architecture:** Introduce a bounded `WorkStateTracker` that records active files, recent file excerpts, diagnostics, build/test status, plan summary, and invoked skill metadata during normal tool execution. `ConversationCompactor` will render that snapshot into a `Compact restored context` system message and write `xcode.v3` checkpoint lineage metadata without weakening the existing summary quality gate, pair-safe tail, or QQchat error boundary.
 
 **Tech Stack:** Python 3.10+、pytest、现有同步 `AgentRuntime`、`ToolCallExecutor`、`ContextManager`、`ConversationCompactor`、`SessionStore`、`SessionResumeBuilder`、`ExternalTurnRunner`。不引入 asyncio、embedding、vector DB 或外部服务。
+
+**Execution Record (2026-06-14):**
+
+- Tasks 1-7 were implemented and reviewed task-by-task: `WorkStateTracker`, local tool-loop recording, external work-state isolation, restored-context insertion, `xcode.v3` checkpoint metadata, v3 resume behavior, and `/compact` integration regression.
+- Task 8 synced current docs and recorded the remaining manual acceptance gaps.
+- Automated evidence: `python -m compileall -q src` exit 0; focused pytest matrix `117 passed in 13.80s`; full `pytest -q` `564 passed in 28.96s`; `git diff --check` exit 0 with only Windows LF/CRLF conversion warnings.
+- Follow-up hardening on 2026-06-14 removed fixed first-user retention from compacted `_history`, expanded restored-context redaction, classified `xcodebuild test`/`swift test`/JS test commands as latest tests, and connected plan-mode summaries to current plan restoration. Verification: `python -m compileall -q src` exit 0; focused regression `119 passed in 15.65s`; full `pytest -q` `566 passed in 31.81s`; `git diff --check` exit 0 with only Windows LF/CRLF warnings.
 
 ---
 
@@ -83,7 +90,7 @@ pytest -q
 git diff --check
 ```
 
-Manual acceptance required before closing implementation:
+Manual acceptance required before closing implementation; status on 2026-06-14: not yet run/recorded.
 
 - PowerShell and cmd.exe native PTY `/compact` with restored context.
 - `/resume` from v3 checkpoint.

@@ -79,6 +79,7 @@ def test_llm_loop_continues_across_multiple_tool_rounds(tmp_path: Path, monkeypa
     assert calls[0] == 3
     assert executed == ["read_file", "grep"]
     assert [m["role"] for m in history] == ["assistant", "tool", "assistant", "tool"]
+    assert agent.work_state.snapshot().active_file.endswith("README.md")
 
 
 def test_llm_loop_handles_tool_error_and_continues(tmp_path: Path, monkeypatch) -> None:
@@ -317,6 +318,44 @@ def test_external_llm_loop_does_not_update_local_tool_stats(tmp_path: Path, monk
 
     assert result == "external done"
     assert agent._tool_call_count == 5
+
+
+def test_external_llm_loop_uses_supplied_work_state_instead_of_local_state(tmp_path: Path, monkeypatch) -> None:
+    from xcode_cli.core.work_state import WorkStateTracker
+
+    agent = _make_agent(tmp_path, monkeypatch)
+    external_state = WorkStateTracker(cwd=agent.cwd)
+    calls = [0]
+
+    def fake_complete(**kwargs):
+        calls[0] += 1
+        if calls[0] == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(id="call_read", name="read_file", args={"path": "README.md"})],
+            )
+        return LLMResponse(content="external done", tool_calls=[])
+
+    agent.llm.complete = fake_complete
+    agent.tools._tools["read_file"].execute = lambda **kwargs: "external read"
+    monkeypatch.setattr(agent.console, "print", lambda *args, **kwargs: None)
+
+    result = agent._run_external_llm_loop(
+        history=[],
+        system_prompt="system",
+        tool_scope=ToolScope(
+            source="qqchat",
+            visible_tools=("read_file",),
+            execution_allowlist=("read_file",),
+            remote_approval=False,
+        ),
+        session_id="external-session",
+        work_state=external_state,
+    )
+
+    assert result == "external done"
+    assert external_state.snapshot().active_file.endswith("README.md")
+    assert agent.work_state.snapshot().active_file == ""
 
 
 def test_qq_tool_scope_rejects_non_read_only_allowlisted_tools(tmp_path: Path, monkeypatch) -> None:

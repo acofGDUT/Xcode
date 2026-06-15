@@ -30,6 +30,7 @@ class ToolCallExecutor:
         config_store,
         auto_approve: dict[str, bool],
         tool_display: ToolCallDisplay | None = None,
+        work_state=None,
     ) -> None:
         self.console = console
         self.tools = tools
@@ -39,6 +40,7 @@ class ToolCallExecutor:
         self.config_store = config_store
         self.auto_approve = auto_approve
         self.tool_display = tool_display or ToolCallDisplay(ToolDisplayState(expanded=True))
+        self.work_state = work_state
 
     def execute(
         self,
@@ -46,6 +48,7 @@ class ToolCallExecutor:
         blocked_tools: set[str] | list[str] | None = None,
         tool_scope=None,
         render_output: bool = True,
+        work_state=None,
     ) -> ToolExecutionResult:
         executed_calls: list[tuple[Any, ToolOutput]] = []
         executed_count = 0
@@ -185,6 +188,12 @@ class ToolCallExecutor:
                     newly_blocked_tools.append(tool_name)
 
             executed_calls.append((tc, output))
+            tracker = work_state if work_state is not None else self.work_state
+            if tracker is not None:
+                try:
+                    tracker.record_tool_call(tc.name, tc.args, output.content)
+                except Exception:
+                    pass
 
         assistant_msg: dict[str, Any] = {
             "role": "assistant",

@@ -143,7 +143,7 @@ The code should accept only the summary section. A summary must be rejected if i
 - starts with or contains `<tool_call>`;
 - looks like raw JSON tool call payload;
 - contains `tool_calls` / `function_call` protocol leakage as the dominant content;
-- is below the default minimum useful length while the source content is large: `source_token_estimate > 10000` and normalized summary length `< 80` characters;
+- is below the dynamic minimum useful length: start at 80 characters, raise to 300 when `source_token_estimate > 10000`, 600 when `source_token_estimate > 30000`, and 1000 when `source_token_estimate > 80000`;
 - repeats only fallback text such as `(middle conversation compressed)`;
 - exceeds `max_summary_chars` before controlled truncation.
 

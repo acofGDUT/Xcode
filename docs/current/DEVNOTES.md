@@ -320,7 +320,7 @@ Review 注意：
 - 显示 "Compacting context... (Xs)" 动态计时，复用 `_run_llm_loop()` 的 Thinking Live 模式（`Live(transient=True)` + daemon thread）。
 - 手动 `/compact` 和自动 compression 共用 `compact_history()`，进度展示自然统一。
 - `finally` 保护确保 `compress()` 异常时 Live 也停止，不残留终端状态。
-- `Nothing to compact.` 路径（history < 4）在 `_handle_compact_command` 中提前返回，不启动 Live。
+- 2026-06-15 起，手动 `/compact` 不再因 history < 4 提前返回；只有 `_history` 为空才显示 `Nothing to compact.`。非空短会话会尝试写 checkpoint，空摘要或 summary 请求异常显示明确失败原因。
 
 ## 17. `/resume` 选择体验需要方向键菜单
 
@@ -655,7 +655,7 @@ Review 注意：
 
 - `No response.` 对 QQchat/external turn 是错误边界，不是正常 assistant 文本；不能持久化为成功回复。
 - summary LLM request 必须真正无工具；`tool_schemas=[]` 不应继续传空 `tools` 或残留 `tool_choice=auto`。
-- compact summary 必须有质量门，拒绝 `<tool_call>`、JSON tool/function call、空摘要和 provider/protocol 泄漏。
+- compact summary 质量门在 2026-06-15 手动 compact 语义放宽后只保留空摘要硬拒绝；`<tool_call>`、JSON tool/function call 和短摘要不再作为硬拒绝条件，no-tool summary request 是主要防线。
 - compact tail 必须保持 OpenAI-compatible 工具配对，不保留 orphan `tool` message，也不保留缺 result 的 assistant `tool_calls`。
 - `ARCHITECTURE.md` 应描述当前 `xcode.v2` compact 架构，并明确 PowerShell/cmd.exe 原生 PTY `/compact` handler 验收不等同于真实 QQ 平台验收。
 
@@ -664,7 +664,7 @@ Review 注意：
 - `ExternalTurnRunner` 已把 `No response.` 视为 external turn failure；用户消息保留，空 assistant fallback 不进入 assistant history。
 - QQchat external turn error 会发送安全中文 fallback，并把 last_error 设置为可读错误摘要，不回传 raw `No response.`。
 - `LLMClient.complete(tool_schemas=[])` 不再发送 `tools` 和 `tool_choice=auto`，summary 请求保持 no-tool。
-- `ContextManager.compress()` 已加入结构化 summary prompt 和质量门；空摘要、`<tool_call>`、`tool_calls` / `function_call` 泄漏、tool/function-call JSON payload 和过短大上下文摘要都会被拒绝，拒绝时保留原 history。
+- `ContextManager.compress()` 已加入结构化 summary prompt 和质量门；2026-06-15 起只把空摘要作为内容硬拒绝，summary 请求异常会返回明确失败状态。放宽后的手动 `/compact` 优先尊重用户建立 checkpoint 的意图，拒绝时保留原 history。
 - compact tail 使用 pair-safe 策略，保护完整 assistant/tool 配对，并丢弃 orphan tool 或缺 result 的 assistant tool call。
 - compact checkpoint 使用 boundary system message + summary system message + `compaction_checkpoint` event；event 的 `summary_format` 为 `xcode.v2`，并记录 `protected_tail_messages`、`micro_compacted_tool_results` 和 `rejected_summary=false`。
 - 旧的大型 tool result 在 protected tail 之外 micro-compact，只保留 `role`、`tool_call_id`、工具名和 path/pattern/command/query 等短提示。
@@ -769,33 +769,35 @@ Review 注意：
 - PowerShell/cmd.exe 原生 PTY 验收覆盖 `/mcp` enable-disable、tool toggle、refresh 后工具集合变化、reconnect 旧进程退出与新进程启动、events 脱敏、output-limit、`/exit` shutdown，以及 `mcp__fake__echo` 走现有审批 UI 的冒烟验证。
 - Review follow-up：`call_tool_sync()` 的执行异常也必须走 server env/token 脱敏后再进入 tool result/history；动态 refresh 后 `_mcp_tool_warnings` 必须按当前 catalog 重算，不能保留已修复 schema 的旧 warning；`/mcp refresh` 和 `/mcp reconnect` 在 failed/untrusted/disabled 状态下只提示 requested 并引导查看 `/mcp status`。
 
-## 31. Compact v3 现场恢复与 checkpoint 链路设计边界
+## 31. Compact v3 现场恢复与 checkpoint 链路边界
 
-**状态**：Open
+**状态**：代码和自动化回归已落地；PowerShell/cmd.exe 原生 PTY 和 QQchat 平台手工验收缺口仍 Open
 **关联**：ROADMAP compact 现场恢复 / `/compact` / `/resume` / QQchat external turn / session transcript
 
-2026-06-12 已完成设计和实施计划，代码未实现：
+2026-06-12 完成设计和实施计划；2026-06-14 完成代码实现和自动化回归：
 
 - `docs/superpowers/specs/2026-06-12-compact-state-restoration-design.md`
 - `docs/superpowers/plans/2026-06-12-compact-state-restoration-plan.md`
 
-设计目标是在现有 `xcode.v2` compact 可靠性基线之上增加两类能力：
+实现目标是在现有 `xcode.v2` compact 可靠性基线之上增加两类能力：
 
 - compact 后注入 deterministic、bounded 的 `Compact restored context` system message，恢复 active file、recent read file excerpts/hash、latest diagnostics、latest build/test、current plan 和 invoked skill metadata。
+- compact 后不再固定保留第一条 user message；首轮目标、约束和用户偏好必须进入累计 summary。这样可以避免低价值或过时 first user 长期占用上下文，同时仍由 pair-safe protected tail 保留最新用户消息。
 - checkpoint metadata 升级到兼容的 `xcode.v3`，记录 `checkpoint_id`、`parent_checkpoint_id`、summary/restored-context hash、累计 checkpoint index 和可选 message range。
 
-设计边界：
+已落地边界：
 
-- `WorkStateTracker` 是 in-memory 现场状态层，状态更新应发生在 tool loop、plan mode 和 skill invocation 等边界；compact 不应重新解析整段 transcript 来猜当前现场。
+- `WorkStateTracker` 是 in-memory 现场状态层，当前由 tool loop 记录文件读取/写入摘要、搜索摘要、shell build/test diagnostics 和 skill metadata；compact 不重新解析整段 transcript 来猜当前现场。
 - summary 和 restored context 分工不同：summary 负责历史脉络，restored context 负责继续工作所需的当前现场。
 - restored context 必须有硬上限和裁剪顺序；优先保留 active file、diagnostics、latest failed build/test、current plan，再保留 recent files、invoked skills 和 searches。
 - `run_shell` diagnostics/build/test 解析第一版只做启发式提取；解析失败时保留 command status 和短 output excerpt，不阻断主循环。
-- secret redaction 是 P0 要求。Authorization header、access token、client secret、api key 等不得进入 restored context、checkpoint metadata 或测试快照。
+- secret redaction 是 P0 要求。Authorization header、access token、client secret、api key、app secret、QQ bot token、CLI secret 参数和环境变量形式 secret 等不得进入 restored context、checkpoint metadata 或测试快照。新增 secret 载体时必须先补 restored-context 红线测试。
 - 本地 REPL work state 和 QQchat/external conversation work state 必须隔离；不同 QQ conversation 之间也必须隔离。
 - summary rejection 仍然不能写 checkpoint、不能改写 `_history`、不能插入 restored context。
 - `xcode.v3` transcript 必须兼容旧 session；旧 `xcode.v1/v2` checkpoint 不迁移，继续按现有 resume 逻辑工作。
 - `/resume` 对 `xcode.v3` 应恢复 boundary + summary + restored context；metadata/message ids 不得进入模型 history。
-- 实现完成前不要修改 `ARCHITECTURE.md` 把 v3 描述成当前机制；只在代码和验证落地后同步当前架构。
+- transcript 写入顺序保持为 boundary message、summary message、`compaction_checkpoint` event、restored context message；运行时 `_history` 中 restored context 位于 summary 后、protected tail 前。
+- 2026-06-14 自动化证据已记录在 `PROGRESS.md`；原生 Windows restored-context `/compact`、v3 `/resume` 和 QQchat 平台 continuation/isolation 手工验收尚未记录。
 
 Review 注意：
 
@@ -803,3 +805,4 @@ Review 注意：
 - 不要把 tool result message 改造成状态载体；工具返回给模型的协议消息必须保持原有 OpenAI-compatible 配对。
 - 不要把 QQchat compact 的现场和本地 REPL 当前正在编辑的文件混在一起。
 - 不要只检查 summary 是否累计；还要检查 checkpoint parent/hash 链路是否可审计、resume 是否能拿回 restored context。
+- 后续声称本项“验收完成”前，必须补 PowerShell/cmd.exe 原生 PTY 与 QQchat 平台手工记录；自动化通过不能替代真实入口验收。

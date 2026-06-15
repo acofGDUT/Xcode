@@ -114,14 +114,22 @@ Review 输出应以问题为主，按严重程度排序，并提供文件和行�
 
 根目录的 `ARCHITECTURE.md`、`ROADMAP.md`、`PROGRESS.md`、`DEVNOTES.md` 现在只作为兼容入口。旧版内容保存在 `docs/old/2026-05-25-before-docs-restructure/`。
 
+## 文档职责边界
+
+- `README.md` 是文档索引，负责说明各核心文档的作用和阅读顺序。
+- `docs/current/PROGRESS.md` 只记录历史推进、完成证据、review 结论和完成项迁移记录；不维护当前 backlog 表。
+- `docs/current/ARCHITECTURE.md` 只描述当前代码已经实现的系统契约、组件关系和数据流；未实现设计不写成当前架构。
+- `docs/current/ROADMAP.md` 是当前 backlog 的单一入口，记录未完成能力、阻塞、遗留项、优先级和下一步。
+- `docs/current/DEVNOTES.md` 记录设计取舍、踩坑、兼容性限制、review 注意事项和长期风险。
+
 ## 当前重点方向
 
 近期应优先推动：
 
-- 设计并落地对话历史持久化、`--resume`、`--continue` 能力。
+- 完成 `/QQchat init`、`/QQchat reload`、真实 QQ 单聊/群聊平台验收，以及 `/QQchat start|stop|status` 的原生 Windows 交互验收。
+- 按 `docs/superpowers/plans/2026-06-12-compact-state-restoration-plan.md` 推进 compact 现场恢复和 `xcode.v3` checkpoint 链路。
 - 为 `/context` 增加 cost 估算，而不只是 token 统计。
-- 在原生 Windows 控制台中完成端到端交互验收。
-- 继续审查流式代码块双重渲染问题。
+- 收口工具调用 `Ctrl+O` 展开、task 面板持久展示、可替换区域式 streaming 和对话 fork/rollback 设计。
 - 维持测试基线，避免后续改动让 `pytest` 再次退回空测试状态。
 
 ## Git 与文档职责
@@ -129,7 +137,7 @@ Review 输出应以问题为主，按严重程度排序，并提供文件和行�
 Codex 负责在关键节点检查：
 
 - `git status` 中哪些是本轮变更，哪些可能是用户或其他 Agent 的已有改动。
-- 是否需要更新 `docs/current/README.md`、`docs/current/ARCHITECTURE.md`、`docs/current/DEVNOTES.md`、`docs/current/PROGRESS.md`、`docs/current/ROADMAP.md`。
+- 是否需要更新 `README.md`、`docs/current/README.md`、`docs/current/ARCHITECTURE.md`、`docs/current/DEVNOTES.md`、`docs/current/PROGRESS.md`、`docs/current/ROADMAP.md`。
 - 验收证据是否先于结论，包括 `py_compile`、`pytest`、import smoke test 和必要的手工交互记录。
 
 除非用户明确要求，Codex 不应自动创建提交；但可以准备提交说明、变更摘要和 review 结论。

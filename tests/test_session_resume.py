@@ -114,6 +114,37 @@ class TestResumeBuilderCheckpoint:
         assert any(m.get("content") == "q2" for m in result.history)
         assert not any(m.get("content") == "q1" for m in result.history)
 
+    def test_v3_checkpoint_restores_boundary_summary_and_restored_context(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        store = _make_store(tmp_path, monkeypatch)
+        sid = store.new_session_id()
+        store.append_message(sid, {"role": "system", "content": "Compact boundary: old"})
+        store.append_message(sid, {"role": "system", "content": "Conversation summary checkpoint:\nold"})
+        store.append_event(sid, {
+            "type": "compaction_checkpoint",
+            "summary": "v3 cumulative summary",
+            "summary_format": "xcode.v3",
+            "checkpoint_id": "ckpt_1",
+            "summary_hash": "sha256:abc",
+        })
+        store.append_message(sid, {
+            "role": "system",
+            "content": "Compact restored context:\n- Active file: src/foo.py",
+            "metadata": {"message_seq": 10, "message_id": "msg_10"},
+        })
+        store.append_message(sid, {"role": "user", "content": "continue"})
+
+        ctx = ContextManager(max_tokens=128000)
+        builder = SessionResumeBuilder(ctx, token_budget=100000)
+        result = builder.build(store.transcript_path(sid))
+
+        assert result.history[0]["content"].startswith("Compact boundary:")
+        assert result.history[1]["content"] == "Conversation summary checkpoint:\nv3 cumulative summary"
+        assert result.history[2]["content"].startswith("Compact restored context:")
+        assert result.history[3]["content"] == "continue"
+        assert all("metadata" not in message for message in result.history)
+
 
 class TestResumeReplayMessages:
     def test_uses_messages_after_latest_checkpoint(self, tmp_path: Path) -> None:

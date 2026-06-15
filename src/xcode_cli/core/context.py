@@ -17,8 +17,12 @@ class CompressionResult:
     summary: str
     checkpoint_message: dict[str, Any]
     boundary_message: dict[str, Any] = field(default_factory=dict)
+    restored_context_message: dict[str, Any] = field(default_factory=dict)
+    restored_context_sections: list[str] = field(default_factory=list)
     protected_tail_messages: int = 0
     micro_compacted_tool_results: int = 0
+    status: str = "success"
+    failure_reason: str = ""
 
 
 class ContextManager:
@@ -62,12 +66,18 @@ class ContextManager:
         messages: list[dict[str, Any]],
         llm_client,
         previous_summary: str = "",
+        *,
+        trigger: str = "auto",
+        restored_context: str = "",
+        restored_context_sections: list[str] | None = None,
     ) -> CompressionResult:
-        if len(messages) <= 20:
+        if not messages:
             return CompressionResult(
                 messages=messages,
                 summary="",
                 checkpoint_message={},
+                status="no_input",
+                failure_reason="no input",
             )
 
         tail_count = 8
@@ -78,28 +88,20 @@ class ContextManager:
         )
         working_messages = sanitize_model_messages(working_messages)
 
-        first_user_idx = next((i for i, m in enumerate(working_messages) if m.get("role") == "user"), None)
-        first_user = working_messages[first_user_idx] if first_user_idx is not None else None
-
         tail = build_pair_safe_tail(working_messages, max_messages=tail_count)
-        middle_start = (first_user_idx + 1) if first_user_idx is not None else 0
-        middle_end = max(len(working_messages) - tail_count, middle_start)
-        middle = working_messages[middle_start:middle_end]
+        middle_end = max(len(working_messages) - tail_count, 0)
+        middle = _filter_compact_system_messages(working_messages[:middle_end])
 
-        if previous_summary:
-            middle = [
-                m for m in middle
-                if not (
-                    m.get("role") == "system"
-                    and "Conversation summary checkpoint:" in str(m.get("content", ""))
-                )
-            ]
+        if not middle and trigger == "manual":
+            middle = _filter_compact_system_messages(working_messages)
 
         if not middle:
             return CompressionResult(
                 messages=messages,
                 summary="",
                 checkpoint_message={},
+                status="no_input",
+                failure_reason="no summarizable input",
             )
 
         char_limit = f" under {self.max_summary_chars} characters" if self.max_summary_chars else ""
@@ -143,11 +145,20 @@ class ContextManager:
             )
             middle_text = "\n".join(f"[{m.get('role','unknown')}] {m.get('content','')}" for m in middle)
 
-        summary_resp = llm_client.complete(
-            system_prompt="You are a conversation summarization assistant.",
-            messages=[{"role": "user", "content": f"{summary_prompt}\n\n{middle_text}"}],
-            tool_schemas=[],
-        )
+        try:
+            summary_resp = llm_client.complete(
+                system_prompt="You are a conversation summarization assistant.",
+                messages=[{"role": "user", "content": f"{summary_prompt}\n\n{middle_text}"}],
+                tool_schemas=[],
+            )
+        except Exception as exc:
+            return CompressionResult(
+                messages=messages,
+                summary="",
+                checkpoint_message={},
+                status="summary_request_failed",
+                failure_reason=str(exc),
+            )
         source_token_estimate = self.estimate_tokens(middle)
         summary = validate_compact_summary(
             summary_resp.content,
@@ -158,14 +169,14 @@ class ContextManager:
                 messages=messages,
                 summary="",
                 checkpoint_message={},
+                status="empty_summary",
+                failure_reason="empty summary",
             )
 
         if self.max_summary_chars and self.max_summary_chars > 0 and len(summary) > self.max_summary_chars:
             summary = summary[:self.max_summary_chars] + "...[summary truncated]"
 
         compressed: list[dict[str, Any]] = []
-        if first_user:
-            compressed.append(first_user)
         boundary_message: dict[str, Any] = {
             "role": "system",
             "content": (
@@ -179,7 +190,11 @@ class ContextManager:
         }
         compressed.append(boundary_message)
         compressed.append(checkpoint_message)
-        protected_tail = [message for message in tail if message is not first_user]
+        restored_context_message: dict[str, Any] = {}
+        if restored_context.strip():
+            restored_context_message = {"role": "system", "content": restored_context.strip()}
+            compressed.append(restored_context_message)
+        protected_tail = list(tail)
         compressed.extend(protected_tail)
 
         return CompressionResult(
@@ -187,6 +202,8 @@ class ContextManager:
             summary=summary,
             checkpoint_message=checkpoint_message,
             boundary_message=boundary_message,
+            restored_context_message=restored_context_message,
+            restored_context_sections=list(restored_context_sections or []),
             protected_tail_messages=len(protected_tail),
             micro_compacted_tool_results=micro_compacted_tool_results,
         )
@@ -196,19 +213,21 @@ def validate_compact_summary(summary: str, *, source_token_estimate: int) -> str
     normalized = summary.strip()
     if not normalized:
         return None
-
-    lowered = normalized.lower()
-    if "<tool_call>" in lowered:
-        return None
-    if normalized == "(middle conversation compressed)":
-        return None
-    if "tool_calls" in lowered or "function_call" in lowered:
-        return None
-    if source_token_estimate > 10000 and len(normalized) < 80:
-        return None
-    if _looks_like_tool_invocation_json(normalized):
-        return None
     return normalized
+
+
+def _filter_compact_system_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        message
+        for message in messages
+        if not (
+            message.get("role") == "system"
+            and (
+                "Conversation summary checkpoint:" in str(message.get("content", ""))
+                or "Compact restored context:" in str(message.get("content", ""))
+            )
+        )
+    ]
 
 
 def build_pair_safe_tail(messages: list[dict[str, Any]], *, max_messages: int = 8) -> list[dict[str, Any]]:
@@ -391,28 +410,3 @@ def _remove_incomplete_tool_pairs(
             result.discard(index)
 
     return result
-
-
-def _looks_like_tool_invocation_json(summary: str) -> bool:
-    stripped = summary.strip()
-    if not stripped.startswith(("{", "[")):
-        return False
-    try:
-        payload = json.loads(stripped)
-    except Exception:
-        return False
-    return _contains_tool_protocol_key(payload)
-
-
-def _contains_tool_protocol_key(value: Any) -> bool:
-    if isinstance(value, dict):
-        if "name" in value and "arguments" in value:
-            return True
-        for key, item in value.items():
-            if str(key) in {"tool_calls", "function_call"}:
-                return True
-            if _contains_tool_protocol_key(item):
-                return True
-    if isinstance(value, list):
-        return any(_contains_tool_protocol_key(item) for item in value)
-    return False

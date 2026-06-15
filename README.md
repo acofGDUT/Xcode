@@ -42,10 +42,12 @@ The root `README.md` is the single documentation index. Detailed current project
 
 | Document | Answers | Boundary |
 |----------|---------|----------|
-| [docs/current/PROGRESS.md](docs/current/PROGRESS.md) | How the project reached its current state | Phase/Batch history, review conclusions, acceptance state, current next steps |
+| [docs/current/PROGRESS.md](docs/current/PROGRESS.md) | How the project reached its current state | Phase/Batch history, review conclusions, acceptance evidence, completed migrations |
 | [docs/current/ARCHITECTURE.md](docs/current/ARCHITECTURE.md) | How the system works now | Current component relationships, data flows, memory/context/session/approval models |
-| [docs/current/ROADMAP.md](docs/current/ROADMAP.md) | What remains to build | Future goals, unfinished capabilities, implementation sketches, acceptance ideas |
+| [docs/current/ROADMAP.md](docs/current/ROADMAP.md) | What remains to build | Current backlog, blockers, unfinished capabilities, implementation sketches, acceptance ideas |
 | [docs/current/DEVNOTES.md](docs/current/DEVNOTES.md) | Why decisions were made and where risks are | Known issues, design decisions, compatibility limits, validation risks |
+
+Documentation ownership rule: completed work and evidence live in `PROGRESS.md`; current implementation contracts live in `ARCHITECTURE.md`; open work, blockers, and next steps live in `ROADMAP.md`; design rationale and recurring risks live in `DEVNOTES.md`.
 
 Recommended reading order:
 
@@ -69,10 +71,12 @@ Current reference notes:
 
 | 文档 | 说明 |
 |------|------|
-| [docs/current/PROGRESS.md](docs/current/PROGRESS.md) | 项目是怎么一步步推进到现在的，包含阶段历史、当前状态、阻塞和下一步 |
+| [docs/current/PROGRESS.md](docs/current/PROGRESS.md) | 项目是怎么一步步推进到现在的，包含阶段历史、review 结论、验收证据和完成项迁移记录 |
 | [docs/current/ARCHITECTURE.md](docs/current/ARCHITECTURE.md) | 当前系统怎么工作，包含组件关系、数据流、memory/context/session/approval 模型 |
-| [docs/current/ROADMAP.md](docs/current/ROADMAP.md) | 后续还要做什么，包含未完成能力、目标态和实现草案 |
+| [docs/current/ROADMAP.md](docs/current/ROADMAP.md) | 后续还要做什么，包含当前 backlog、阻塞、遗留项、未完成能力、目标态和实现草案 |
 | [docs/current/DEVNOTES.md](docs/current/DEVNOTES.md) | 踩坑、边界、设计决策、兼容性风险和问题状态 |
+
+文档职责约定：已完成工作和证据放 `PROGRESS.md`；当前实现契约放 `ARCHITECTURE.md`；未完成项、阻塞、遗留和下一步放 `ROADMAP.md`；设计取舍、坑点和长期风险放 `DEVNOTES.md`。
 
 推荐阅读顺序：
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Spec-first Project Workflow"
+  short_description: "以规格先行方式完成项目设计、实施任务拆分、验证与当前文档收口"
+  default_prompt: "Use $spec-first-project-workflow to define the project change, split the implementation plan, and update the current documentation."

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal
 
 from xcode_cli.core.turn import UserTurnInput, coerce_user_turn_input
+from xcode_cli.core.work_state import WorkStateTracker
 
 
 DEFAULT_EXTERNAL_TOOLS = ("read_file", "grep", "glob", "task_list")
@@ -43,6 +45,7 @@ class ToolScope:
 class _ExternalConversationState:
     session_id: str
     history: list[dict[str, Any]] = field(default_factory=list)
+    work_state: WorkStateTracker = field(default_factory=WorkStateTracker)
 
 
 def default_qqchat_tool_scope() -> ToolScope:
@@ -90,6 +93,7 @@ class ExternalTurnRunner:
     ) -> None:
         self._session_store = session_store
         self._run_llm_loop = run_llm_loop
+        self._run_llm_loop_accepts_work_state = _accepts_keyword(run_llm_loop, "work_state")
         self._build_system_prompt = build_system_prompt
         self._default_tool_scope = sanitize_tool_scope(default_tool_scope or default_qqchat_tool_scope())
         self._conversations: dict[str, _ExternalConversationState] = {}
@@ -117,12 +121,16 @@ class ExternalTurnRunner:
         self._session_store.append_user_history(state.session_id, user_turn.display_content)
         state.history.append({"role": "user", "content": user_turn.model_content})
 
-        final_text = self._run_llm_loop(
-            history=state.history,
-            system_prompt=self._build_system_prompt(),
-            tool_scope=effective_tool_scope,
-            session_id=state.session_id,
-        )
+        loop_kwargs = {
+            "history": state.history,
+            "system_prompt": self._build_system_prompt(),
+            "tool_scope": effective_tool_scope,
+            "session_id": state.session_id,
+        }
+        if self._run_llm_loop_accepts_work_state:
+            final_text = self._run_llm_loop(**loop_kwargs, work_state=state.work_state)
+        else:
+            final_text = self._run_llm_loop(**loop_kwargs)
 
         if _is_external_turn_failure(final_text):
             return ExternalTurnResult(text=final_text, session_id=state.session_id, error=final_text)
@@ -160,3 +168,16 @@ def _is_external_turn_failure(text: str) -> bool:
         or text.startswith("[v0] Missing API key")
         or text.startswith("[v0] openai package not installed")
     )
+
+
+def _accepts_keyword(func: Callable[..., str], keyword: str) -> bool:
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return True
+    for parameter in signature.parameters.values():
+        if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+            return True
+        if parameter.name == keyword:
+            return True
+    return False

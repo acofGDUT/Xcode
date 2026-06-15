@@ -59,15 +59,14 @@ def test_should_compress_small_max_tokens() -> None:
     assert cm.should_compress(long_content) is (tokens >= int(1000 * 0.8))
 
 
-def test_compress_short_history_returns_unchanged() -> None:
+def test_auto_compress_short_history_can_checkpoint_when_called() -> None:
     cm = ContextManager(max_tokens=128000)
-    llm = _FakeLLMClient()
+    llm = _FakeLLMClient("short summary")
     msgs = [{"role": "user", "content": f"msg {i}"} for i in range(10)]
     result = cm.compress(msgs, llm)
-    assert len(result.messages) == len(msgs)
-    assert result.summary == ""
-    assert result.checkpoint_message == {}
-    assert llm.calls == []
+    assert result.summary == "short summary"
+    assert result.checkpoint_message
+    assert llm.calls
 
 
 def test_compress_uses_english_prompts() -> None:
@@ -103,14 +102,15 @@ def test_compress_with_previous_summary_uses_cumulative_prompt() -> None:
     assert "cumulative" in user_content.lower() or "Cumulative" in user_content
 
 
-def test_compress_preserves_first_user_message() -> None:
+def test_compress_no_longer_preserves_first_user_message_when_it_is_not_latest() -> None:
     cm = ContextManager(max_tokens=128000)
     llm = _FakeLLMClient("summary")
     first = {"role": "user", "content": "first message"}
     msgs = [first] + [{"role": "user", "content": f"msg {i}"} for i in range(25)]
     result = cm.compress(msgs, llm)
-    assert result.messages[0]["content"] == "first message"
-    assert result.messages[0]["role"] == "user"
+    assert first not in result.messages
+    assert result.messages[0]["role"] == "system"
+    assert result.messages[0]["content"].startswith("Compact boundary:")
 
 
 def test_compress_preserves_tail_messages() -> None:
@@ -164,13 +164,14 @@ def test_estimate_tokens_includes_reasoning() -> None:
     assert cm.estimate_tokens(with_reasoning) > cm.estimate_tokens(without)
 
 
-def test_compress_empty_middle_returns_unchanged() -> None:
+def test_manual_compress_uses_full_history_when_pair_safe_middle_is_empty() -> None:
     cm = ContextManager(max_tokens=128000)
-    llm = _FakeLLMClient()
+    llm = _FakeLLMClient("manual short checkpoint")
     msgs = [{"role": "user", "content": "hi"}] + [{"role": "assistant", "content": "hey"}] * 8
-    result = cm.compress(msgs, llm)
-    assert len(result.messages) == len(msgs)
-    assert result.summary == ""
+    result = cm.compress(msgs, llm, trigger="manual")
+    assert result.checkpoint_message
+    assert result.summary == "manual short checkpoint"
+    assert "hi" in llm.calls[0]["messages"][0]["content"]
 
 
 def test_summary_truncated_when_too_long() -> None:
@@ -227,30 +228,25 @@ def test_previous_summary_filters_old_checkpoint_messages() -> None:
     assert "Conversation summary checkpoint:" not in new_content_section
 
 
-def test_short_history_returns_no_checkpoint() -> None:
-    """4-20 messages with empty middle: compress returns no checkpoint."""
+def test_empty_history_returns_no_input_status() -> None:
     cm = ContextManager(max_tokens=128000)
     llm = _FakeLLMClient()
-    msgs = [{"role": "user", "content": "hi"}] + [
-        {"role": "assistant", "content": f"msg {i}"} for i in range(8)
-    ]
+    msgs: list[dict] = []
     result = cm.compress(msgs, llm)
     assert result.checkpoint_message == {}
     assert result.summary == ""
+    assert result.status == "no_input"
+    assert llm.calls == []
 
 
 @pytest.mark.parametrize(
     "bad_summary",
     [
-        "<tool_call>{\"name\":\"read_file\",\"arguments\":{}}</tool_call>",
-        "{\"tool_calls\":[{\"function\":{\"name\":\"read_file\",\"arguments\":\"{}\"}}]}",
-        "{\"name\":\"read_file\",\"arguments\":{\"path\":\"README.md\"}}",
         "",
         "   \n\t  ",
-        "(middle conversation compressed)",
     ],
 )
-def test_rejects_bad_summary_without_replacing_messages(bad_summary: str) -> None:
+def test_rejects_empty_summary_without_replacing_messages(bad_summary: str) -> None:
     cm = ContextManager(max_tokens=128000)
     llm = _FakeLLMClient(response_text=bad_summary)
     msgs = [{"role": "user", "content": f"msg {i}"} for i in range(30)]
@@ -260,6 +256,28 @@ def test_rejects_bad_summary_without_replacing_messages(bad_summary: str) -> Non
     assert result.messages == msgs
     assert result.summary == ""
     assert result.checkpoint_message == {}
+    assert result.status == "empty_summary"
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "short",
+        "(middle conversation compressed)",
+        "<tool_call>{\"name\":\"read_file\",\"arguments\":{}}</tool_call>",
+        "{\"tool_calls\":[{\"function\":{\"name\":\"read_file\",\"arguments\":\"{}\"}}]}",
+        "{\"name\":\"read_file\",\"arguments\":{\"path\":\"README.md\"}}",
+    ],
+)
+def test_compact_summary_quality_gate_allows_non_empty_text(summary: str) -> None:
+    cm = ContextManager(max_tokens=128000)
+    llm = _FakeLLMClient(response_text=summary)
+    msgs = [{"role": "user", "content": f"msg {i}"} for i in range(30)]
+
+    result = cm.compress(msgs, llm)
+
+    assert result.summary == summary
+    assert result.checkpoint_message
 
 
 def test_summary_prompt_requests_structured_text_without_tool_payloads() -> None:
@@ -515,3 +533,56 @@ def test_compress_metadata_reports_microcompacted_tool_results() -> None:
     result = cm.compress(messages, llm)
 
     assert result.micro_compacted_tool_results == 1
+
+
+def test_compress_inserts_restored_context_after_summary_before_tail() -> None:
+    cm = ContextManager(max_tokens=128000)
+    llm = _FakeLLMClient("Summary:\n- User intent and active task: continue")
+    tail_user = {"role": "user", "content": "latest user"}
+    msgs = [{"role": "user", "content": f"msg {i}"} for i in range(25)] + [tail_user]
+
+    result = cm.compress(
+        msgs,
+        llm,
+        restored_context="Compact restored context:\n- Active file: src/foo.py",
+    )
+
+    contents = [message.get("content", "") for message in result.messages]
+    restored_index = contents.index("Compact restored context:\n- Active file: src/foo.py")
+    summary_index = contents.index(result.checkpoint_message["content"])
+    tail_index = result.messages.index(tail_user)
+    assert summary_index < restored_index < tail_index
+    assert result.restored_context_message["content"].startswith("Compact restored context:")
+
+
+def test_previous_summary_filters_old_restored_context_messages() -> None:
+    cm = ContextManager(max_tokens=128000)
+    llm = _FakeLLMClient("new cumulative summary")
+    msgs = [
+        {"role": "system", "content": "Conversation summary checkpoint:\nold summary text"},
+        {"role": "system", "content": "Compact restored context:\n- Active file: old.py"},
+        {"role": "user", "content": "new work"},
+        {"role": "assistant", "content": "new answer"},
+    ] + [{"role": "user", "content": f"extra {i}"} for i in range(20)]
+
+    cm.compress(msgs, llm, previous_summary="old summary text")
+
+    new_content_section = llm.calls[0]["messages"][0]["content"].split("New content:\n", 1)[-1]
+    assert "Conversation summary checkpoint:" not in new_content_section
+    assert "Compact restored context:" not in new_content_section
+
+
+def test_summary_request_exception_returns_failure_status_without_replacing_messages() -> None:
+    class BrokenLLM:
+        def complete(self, **kwargs):
+            raise RuntimeError("provider down")
+
+    cm = ContextManager(max_tokens=128000)
+    msgs = [{"role": "user", "content": f"msg {i}"} for i in range(30)]
+
+    result = cm.compress(msgs, BrokenLLM())
+
+    assert result.messages == msgs
+    assert result.checkpoint_message == {}
+    assert result.status == "summary_request_failed"
+    assert "provider down" in result.failure_reason

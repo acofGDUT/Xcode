@@ -16,7 +16,6 @@
 Assert successful compact produces:
 
 ```text
-first user
 Compact boundary
 Conversation summary checkpoint
 Compact restored context
@@ -24,6 +23,7 @@ protected tail
 ```
 
 Also assert restored context is omitted when the builder returns empty text, and omitted when summary validation rejects the summary.
+2026-06-14 follow-up: fixed first-user retention was removed. The runtime shape is now compact boundary + summary checkpoint + optional restored context + pair-safe protected tail; the first user is covered by the cumulative summary unless it is also retained by tail rules.
 
 - [ ] **Step 2: Extend CompressionResult**
 

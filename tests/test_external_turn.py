@@ -64,6 +64,47 @@ def test_same_conversation_key_reuses_history():
     assert "assistant reply" in [m["content"] for m in second_history if m["role"] == "assistant"]
 
 
+def test_different_conversation_keys_get_isolated_work_state():
+    sessions = FakeSessionStore()
+    seen = []
+
+    def loop(**kwargs):
+        kwargs["work_state"].record_tool_call("read_file", {"path": f"{kwargs['session_id']}.txt"}, "content")
+        seen.append(kwargs["work_state"])
+        return "assistant reply"
+
+    runner = ExternalTurnRunner(session_store=sessions, run_llm_loop=loop, build_system_prompt=lambda: "system")
+
+    runner.run("qq:c2c:user-a", UserTurnInput("QQ user-a: hi", "hi"), tool_scope=READ_ONLY_SCOPE)
+    runner.run("qq:c2c:user-b", UserTurnInput("QQ user-b: hi", "hi"), tool_scope=READ_ONLY_SCOPE)
+    runner.run("qq:c2c:user-a", UserTurnInput("QQ user-a: again", "again"), tool_scope=READ_ONLY_SCOPE)
+
+    assert seen[0] is seen[2]
+    assert seen[0] is not seen[1]
+    assert runner._conversations["qq:c2c:user-a"].work_state.snapshot().active_file == "session-1.txt"
+    assert runner._conversations["qq:c2c:user-b"].work_state.snapshot().active_file == "session-2.txt"
+
+
+def test_loop_type_error_with_work_state_text_is_not_retried_as_signature_fallback():
+    sessions = FakeSessionStore()
+    calls = []
+
+    def loop(**kwargs):
+        calls.append(kwargs)
+        raise TypeError("internal work_state conversion failed")
+
+    runner = ExternalTurnRunner(session_store=sessions, run_llm_loop=loop, build_system_prompt=lambda: "system")
+
+    try:
+        runner.run("qq:c2c:user-a", UserTurnInput("QQ: hi", "hi"), tool_scope=READ_ONLY_SCOPE)
+    except TypeError as exc:
+        assert "internal work_state conversion failed" in str(exc)
+    else:
+        raise AssertionError("expected TypeError")
+
+    assert len(calls) == 1
+
+
 def test_tool_scope_is_passed_to_loop_and_dangerous_tools_absent():
     sessions = FakeSessionStore()
     loop = FakeLoop()

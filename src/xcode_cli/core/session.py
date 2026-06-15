@@ -126,3 +126,19 @@ class SessionStore:
                     messages.append(msg)
 
         return messages
+
+    def latest_compaction_checkpoint(self, session_id: str) -> dict[str, Any] | None:
+        path = self.transcript_path(session_id)
+        if not path.exists():
+            return None
+
+        latest: dict[str, Any] | None = None
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "compaction_checkpoint":
+                    latest = event
+        return latest

@@ -2,7 +2,7 @@
 
 > 本文档记录项目如何一步步走到现在。当前实现细节见 `ARCHITECTURE.md`，未来计划见 `ROADMAP.md`，已知问题和设计取舍见 `DEVNOTES.md`。
 
-最后更新：2026-06-13
+最后更新：2026-06-14
 
 ## 1. 当前状态总览
 
@@ -31,10 +31,12 @@
 | MCP Phase 2 | 管理面、动态工具刷新、tool enable-disable、reconnect/events、per-tool output limit | 代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 验收通过 | `2026-06-09-mcp-phase2-plan.md` |
 | `/resume` 最近对话 replay | 恢复成功后展示 checkpoint 后 user/assistant 对话 | 完成；自动化和原生 Windows E2E 通过 | `2026-06-09-resume-recent-conversation-rendering-plan.md` |
 | compact 可靠性重设计 | `No response.` 外部错误边界、no-tool summary、summary 质量门、pair-safe tail、xcode.v2 checkpoint metadata、tool result micro-compact、QQchat fallback/heartbeat 降噪 | 代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY `/compact` handler 验收完成；真实 QQ 验收由用户接手 | `2026-06-11-compact-reliability-plan.md` |
+| compact v3 现场恢复 | `WorkStateTracker`、bounded restored context、checkpoint lineage metadata、v3 resume 和 external work-state isolation | 代码实现和自动化回归完成；PowerShell/cmd.exe 与 QQchat 手工验收未执行/未记录 | `2026-06-12-compact-state-restoration-plan.md` |
+| 手动 `/compact` 语义放宽 | 非空 `_history` 均尝试 checkpoint；移除消息数和摘要长度硬门槛；空摘要/summary 请求异常给出明确失败 | 代码实现和自动化回归完成；原生 PTY 手工验收未执行/未记录 | `2026-06-14-manual-compact-semantics-design.md` |
 | `dispatch_agent` 免审优化 | 本地主会话子 Agent 分派默认免审批，explicit deny/ask 与 QQchat 远程过滤保持生效 | 代码实现并通过聚焦回归 | `2026-06-11-dispatch-agent-auto-allow-design.md` / `2026-06-11-dispatch-agent-auto-allow.md` |
 | Phase 5 | 生态扩展 | 冻结 | 未开始 |
 
-当前重点仍不是全面进入 Phase 5，而是补齐费用估算、QQchat 收口，以及按已写 spec/plan 推进 compact 现场恢复。MCP Phase 1 已完成 stdio tools 安全接入、自动化回归和 PowerShell/cmd.exe 原生 E2E，Phase 2 已完成 stdio tools 管理面与动态刷新代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 验收；后续不得无 spec 扩展到 resources/prompts/HTTP/SSE/OAuth。核心 CLI 的 `/resume`、`/compact` Live 进度、多轮 tool call 和本地主会话 `dispatch_agent` 默认免审已完成聚焦回归；2026-06-12 compact 可靠性代码、自动化回归和 PowerShell/cmd.exe 原生 PTY `/compact` handler 验收已收口，剩余真实平台验收仍集中在 QQchat。
+当前重点仍不是全面进入 Phase 5，而是补齐费用估算、QQchat 收口，以及 compact v3 现场恢复的原生 Windows/QQchat 手工验收。MCP Phase 1 已完成 stdio tools 安全接入、自动化回归和 PowerShell/cmd.exe 原生 E2E，Phase 2 已完成 stdio tools 管理面与动态刷新代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 验收；后续不得无 spec 扩展到 resources/prompts/HTTP/SSE/OAuth。核心 CLI 的 `/resume`、`/compact` Live 进度、多轮 tool call 和本地主会话 `dispatch_agent` 默认免审已完成聚焦回归；2026-06-12 compact 可靠性代码、自动化回归和 PowerShell/cmd.exe 原生 PTY `/compact` handler 验收已收口，compact v3 的 restored-context `/compact`、v3 `/resume` 和 QQchat continuation/isolation 手工验收仍未记录。
 
 ## 2. Phase 1：协议与工具升级
 
@@ -667,7 +669,7 @@ Review follow-up（2026-06-10）：
 
 - `ExternalTurnRunner` 把 `No response.` 和外部 LLM 异常归入错误边界，不再把空回复兜底文本写入 assistant history；QQchat 发送安全中文 fallback。
 - `LLMClient.complete(tool_schemas=[])` 不再传 `tools` / `tool_choice`，summary 请求进入真正 no-tool 模式。
-- `ContextManager.compress()` 使用结构化 summary prompt 和 `validate_compact_summary()` 质量门，拒绝空摘要、`<tool_call>`、tool/function-call JSON 泄漏和过短大上下文摘要；拒绝时保留原 history。
+- `ContextManager.compress()` 使用结构化 summary prompt 和 `validate_compact_summary()` 质量门，拒绝空摘要、`<tool_call>`、tool/function-call JSON 泄漏和低于动态最小长度的摘要；最小长度按 `source_token_estimate` 分档为 80 / 300 / 600 / 1000 字符，拒绝时保留原 history。
 - compact tail 改为 pair-safe：保留完整 `assistant.tool_calls` / `tool` 配对，移除 orphan tool 和缺 result 的 assistant tool call。
 - checkpoint 升级为 boundary system message + summary system message + `compaction_checkpoint` event，`summary_format=xcode.v2`，记录 `protected_tail_messages`、`micro_compacted_tool_results` 等元数据。
 - 旧的大型 tool result 会在 protected tail 之外 micro-compact，保留 `role`、`tool_call_id` 和简短来源说明，降低反复 full compaction 风险。
@@ -686,53 +688,74 @@ Review follow-up（2026-06-10）：
 - 2026-06-12 malformed tool call follow-up：复现 `messages[22].tool_calls[0] is missing a function name`，确认本地 session `D--Xcode/sessions/df9c728e-59e5-4008-a9f6-d4fbd5476970.jsonl` line 22 存在 `id=""` / `function.name=""` 的旧 assistant tool call。新增清洗层后，该 session 经 `SessionResumeBuilder` 恢复结果为 `bad_tool_calls=[]`；聚焦回归 `pytest tests/test_llm.py tests/test_session_resume.py tests/test_context.py tests/test_compaction.py tests/test_agent_resume_command.py tests/test_external_turn.py tests/test_qqchat_service.py tests/test_qqchat_gateway.py -q` 为 `116 passed`，全量 `pytest -q` 为 `537 passed`。
 - 2026-06-13 review follow-up：`sanitize_model_messages()` 改为按 assistant 后面的连续 tool result batch 校验配对，避免乱序 tool result 让 assistant `tool_calls` 被误判为完整；新增 `tests/test_message_history.py` 覆盖乱序 result 和正常连续配对。重新验证 `python -m compileall -q src`、相关回归 `119 passed`、全量 `pytest -q` 为 `546 passed`，`git diff --check` 仅有 LF/CRLF 提示。
 
-## 26. Compact 现场恢复与 checkpoint 链路设计：2026-06-12
+## 26. Compact 现场恢复与 checkpoint 链路：2026-06-12
 
-状态：设计和实施计划完成；代码未实现，自动化回归、PowerShell/cmd.exe 原生 PTY 验收和真实 QQ 平台验收均未执行。
+状态：代码实现和自动化回归已完成；PowerShell/cmd.exe 原生 PTY restored-context `/compact`、v3 `/resume` 和 QQchat 平台手工验收未执行/未记录，因此本项仍保留手工验收缺口。
 
-背景：`xcode.v2` compact 已解决坏 summary、orphan tool message、旧大工具结果和 QQchat `No response.` 污染问题，但 compact 后仍主要依赖 summary 和 pair-safe tail。长任务继续工作时，模型还需要 deterministic 的当前现场，例如 active file、最近 read_file excerpt/hash、build/test diagnostics、当前 plan 和已调用 skill metadata。多次 compact 的 summary 虽然已有累计文本，但 transcript 中还缺少 checkpoint parent/hash/coverage 等可审计链路。
+背景：`xcode.v2` compact 已解决坏 summary、orphan tool message、旧大工具结果和 QQchat `No response.` 污染问题，但 compact 后仍主要依赖 summary 和 pair-safe tail。长任务继续工作时，模型还需要 deterministic 的当前现场，例如 active file、最近 read_file excerpt/hash、build/test diagnostics、当前 plan 和已调用 skill metadata。多次 compact 的 summary 虽然已有累计文本，但 transcript 中还缺少 checkpoint parent/hash 等可审计链路。
 
 文档：
 - `docs/superpowers/specs/2026-06-12-compact-state-restoration-design.md`
 - `docs/superpowers/plans/2026-06-12-compact-state-restoration-plan.md`
 
-设计结论：
+实现结果：
 
-- 新增 `WorkStateTracker` 作为 in-memory 现场状态层，由 tool loop 记录 `read_file`、`edit_file`、`write_file`、`grep`、`glob`、`run_shell`、`skill` 等工具结果的 bounded 摘要。
-- compact 成功后在 summary checkpoint 后插入单独的 `Compact restored context` system message；summary 负责历史脉络，restored context 负责继续工作的现场。
-- checkpoint metadata 升级到兼容的 `summary_format=xcode.v3`，新增 `checkpoint_id`、`parent_checkpoint_id`、summary/restored-context hash、checkpoint index 和可选 message range。
-- `/resume` 需要能恢复 v3 boundary + summary + restored context；旧 `xcode.v1/v2` checkpoint 必须继续兼容。
-- 本地 REPL 和 QQchat/external conversation 的 work state 必须隔离，避免远程聊天入口看到本地工作现场。
-- restored context 必须有字符/token 上限和 secret redaction，不能写入完整文件、完整 shell 输出、skill body、MCP secret 或 QQ token。
+- 新增 `src/xcode_cli/core/work_state.py`，`WorkStateTracker` 作为 in-memory 现场状态层，记录 `read_file` excerpt/hash/line range、`edit_file`/`write_file` 路径与 hash、`grep`/`glob` 摘要、`run_shell` build/test diagnostics 和 skill metadata；记录过程 best-effort，异常不会冒泡到 Agent loop。
+- `ToolCallExecutor`、本地 `AgentRuntime` 和 `ExternalTurnRunner` 已接入 optional work state；本地 REPL、不同 QQ/external conversation 之间使用独立 tracker。
+- compact 成功后在 summary checkpoint 后插入单独的 `Compact restored context` system message；summary 负责历史脉络，restored context 负责继续工作的现场。运行时 `_history` 不再固定保留第一条 user message，首轮意图和约束由累计 summary 覆盖；若第一条 user 同时也是最新 user，则只通过 pair-safe protected tail 保留。summary rejection 时不改写 `_history`、不写 checkpoint、不插入 restored context。
+- checkpoint metadata 升级到兼容的 `summary_format=xcode.v3`，新增 `checkpoint_id`、`parent_checkpoint_id`、`checkpoint_index`、`summary_hash`、`previous_summary_hash`、`restored_context_hash` 和 `restored_context_sections`。
+- transcript 写入顺序为 compact boundary `message(system)`、checkpoint summary `message(system)`、`compaction_checkpoint` event、restored context `message(system)`；运行时 `_history` 中 restored context 位于 summary 后、protected tail 前。
+- `/resume` 对 v3 checkpoint 重建 boundary + summary，并保留 checkpoint event 后的 restored context message；旧 `xcode.v1/v2` checkpoint 继续兼容。
+- restored context 有字符上限和 secret redaction，覆盖 Authorization Bearer/QQBot/Basic/Token、JSON/YAML/冒号/等号形式的 `client_secret`、`access_token`、`api_key`、`app_secret`、`QQ_BOT_CLIENT_SECRET`，以及常见 CLI secret 参数；不写完整文件、完整 shell 输出、skill body、MCP secret 或 QQ token。
+- `xcodebuild test`、`swift test`、`npm/pnpm/yarn test`、`npm/pnpm/yarn run test` 会归为 latest tests；plan-mode 的 `write_plan` 和 `exit_plan_mode` 会更新 `WorkStateTracker.current_plan`，供 compact restored context 恢复当前计划。
 
-下一步：按 plan 的 Task 1 从 `src/xcode_cli/core/work_state.py` 和 `tests/test_work_state.py` 开始，先写失败测试，再实现 bounded tracker 和 renderer。
+自动化证据：
 
-## 27. 当前阻塞和遗留
+- `python -m compileall -q src`：退出码 0。
+- 聚焦回归：`pytest tests/test_work_state.py tests/test_agent_tool_loop.py tests/test_external_turn.py tests/test_context.py tests/test_compaction.py tests/test_session_resume.py tests/test_agent_resume_command.py -q`，2026-06-14 追加修复后为 `119 passed in 15.65s`。
+- summary 动态最小长度回归：`pytest tests/test_context.py tests/test_work_state.py tests/test_compaction.py tests/test_session_resume.py tests/test_agent_tool_loop.py -q`，`94 passed in 22.52s`。
+- 全量回归：`pytest -q`，`570 passed in 40.41s`。
+- whitespace 检查：`git diff --check` 退出码 0；仅输出 Windows LF/CRLF 行尾转换提示。
 
-| 项目 | 状态 | 说明 |
-|------|------|------|
-| CLI `--resume` / `--continue` | 延后 | 当前只做交互内 `/resume`，CLI 恢复入口后续如有明确需求再设计 |
-| runtime status stale cleanup | 代码实现和自动化通过 | `RuntimeStatusStore.create()` 已调用 `prune_stale()` 清理 dead pid 和损坏 status；后续 dashboard/list 读取活跃进程前应复用 |
-| `/context` cost | 未实现 | 当前只有 token 估算，没有价格估算 |
-| compact 现场恢复与 checkpoint 链路 | 已写 spec/plan，未实现 | `xcode.v3` restored context、checkpoint lineage metadata、v3 resume 和 external work-state isolation 待按 TDD 实现 |
-| compact 可靠性重设计 | 代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY `/compact` handler 验收完成；真实 QQ 验收由用户接手 | `No response.` 外部错误边界、summary 质量门、pair-safe tail、xcode.v2 metadata、micro-compact、QQchat fallback/heartbeat 降噪已落地 |
-| MCP Phase 1 | 完成 | stdio tools 安全接入、自动化回归和 PowerShell/cmd.exe fake server、审批 UI、`/exit` shutdown 验收均通过 |
-| MCP Phase 2 | 代码实现、自动化回归和 Windows PTY 验收通过 | stdio tools 管理面、动态刷新、reconnect/events、per-tool output limit 已实现；不包含 HTTP/OAuth/resources/prompts/MCP Apps |
-| `/QQchat init` + reload | 已写 spec/plan，未实现 | 需要实现配置文件骨架初始化和热部署 reload；项目级 config 不能写 secret |
-| `/QQchat` 最终验证 | 未完成 | Task 7 仍需收口文档、跑聚焦测试、记录未完成的真实 QQ/Windows 验收 |
-| QQ 真实平台验收 | 未完成 | 单聊被动回复、群聊 @ 被动回复、危险工具真实 QQ 场景均未验收 |
-| 工具调用 `Ctrl+O` 展开 | 未实现 | 默认摘要已完成；展开热键和原生 Windows 热键验收仍未做 |
-| 多轮 tool call 原生终端验收 | 完成 | 2026-06-10 用户确认 PowerShell/cmd.exe 多轮工具链路持续推进正常，未被 UI 状态中断 |
-| 可替换区域式 streaming | 未实现 | 结构化内容去重已基础收口；长期更稳的 streaming + final render 仍需设计 |
-| `/resume` 长列表重复渲染 | 完成 | 固定 9 行窗口、单行预览和固定行数刷新已通过 PowerShell/cmd.exe 长列表连续滚动验收 |
-| `/resume` 恢复后最近对话渲染 | 完成 | PowerShell/cmd.exe 已验收 checkpoint 后 replay、tool result 跳过和 hidden prompt 不泄露 |
-| task 面板持久展示 | 待后续迭代 | `task_create/update` auto-allow + 瞬时面板已完成；持久底部驻留展示未做 |
-| `/resume` last_user_input 不稳定 | 仅记录 | 同一 session 的预览文案随时间变化，用户难识别；后续可考虑首条输入或固定摘要 |
-| 原生 Windows E2E | 核心 CLI 完成；QQchat 待验收 | `/resume`、`/compact`、多轮 tool call 和 MCP 已通过；`/QQchat start` 与真实 QQ 平台仍待验收 |
-| Phase 5 | 整体冻结，MCP 小步例外 | 不全面扩展生态；MCP 仅允许按已写 spec/plan 做 stdio tools 安全接入和管理面迭代 |
+手工验收记录：
 
-## 28. 下一步
+- PowerShell/cmd.exe 原生 PTY `/compact` with restored context：未执行/未记录。
+- PowerShell/cmd.exe 或真实 session `/resume` from v3 checkpoint：自动化覆盖 v3 恢复结构；原生 PTY 手工验收未执行/未记录。
+- QQchat same-conversation continuation：自动化覆盖 external work-state 隔离；真实或 controlled QQchat compact continuation 手工验收未执行/未记录。
+- QQchat conversation isolation：自动化覆盖不同 conversation tracker 隔离；真实 QQ 平台隔离验收未执行/未记录。
+- Transcript inspection：自动化覆盖 v3 parent/hash metadata、写入顺序和 secret redaction；真实 session 手工检查未执行/未记录。
 
-1. 按 `2026-06-12-compact-state-restoration-plan.md` 从 `WorkStateTracker` 开始实现 compact 现场恢复与 checkpoint 链路增强。
-2. 为 `/context` 增加 cost 估算，补齐 token 之外的费用视角。
-3. 完成 `/QQchat init` + reload，并补真实 PowerShell/cmd.exe 手工验收和 QQ 平台单聊/群聊被动回复验收；未完成前不要把 Phase 6 标记为完整完成。
+### 26.1 手动 `/compact` 语义放宽：2026-06-15
+
+状态：代码实现和自动化回归已完成；PowerShell/cmd.exe 原生 PTY 手工验收未执行/未记录。
+
+本轮实现：
+
+- `/compact` handler 只有在 `_history` 为空时显示 `Nothing to compact.`；非空短会话会进入 compact 流程。
+- `ContextManager.compress()` 去掉 `len(messages) <= 20` 硬门槛；手动触发且常规 middle 为空时，使用清洗后的完整 history 作为摘要源。
+- `validate_compact_summary()` 只拒绝空摘要；不再因摘要少于 80 字符、低于动态长度分档、出现 `<tool_call>`、`tool_calls`/`function_call` 或 tool-call JSON 形态而拒绝。
+- `CompressionResult` 增加 `status` / `failure_reason`，区分 `no_input`、`empty_summary` 和 `summary_request_failed`；失败路径不改写 `_history`，不写 checkpoint。
+- 成功路径继续写 `xcode.v3` boundary、summary checkpoint、`compaction_checkpoint` event 和可选 restored context，pair-safe tail 与 message history 清洗保持不变。
+
+验证：
+
+- `pytest tests/test_work_state.py tests/test_agent_tool_loop.py tests/test_external_turn.py tests/test_context.py tests/test_compaction.py tests/test_session_resume.py tests/test_agent_resume_command.py -q`：`110 passed in 14.25s`。
+- `python -m compileall -q src`：退出码 0。
+- `pytest -q`：`557 passed in 31.27s`。
+
+剩余缺口：PowerShell/cmd.exe 原生 PTY 下手动 `/compact` 的真实交互验收未执行/未记录。
+
+## 27. Roadmap 完成项迁移：2026-06-13
+
+本轮按“ROADMAP 只保留未来计划、未完成能力和仍需验收风险”的原则，清理 `docs/current/ROADMAP.md` 中已经完成或已经有详细进度记录的内容。以下条目不再在 ROADMAP 中展开，后续查实现细节看 `ARCHITECTURE.md`，查过程和证据看本文件对应章节：
+
+- compact 可靠性重设计：实现与验证证据见 `25.1 Compact 可靠性实现收口`。
+- `dispatch_agent` 本地主会话免审：实现状态已进入当前状态总览，设计和任务文档保留在 `docs/superpowers/specs/2026-06-11-dispatch-agent-auto-allow-design.md` 与 `docs/superpowers/plans/2026-06-11-dispatch-agent-auto-allow.md`。
+- runtime status stale cleanup：实现与验证已记录在 `9. Session Resume` 的 2026-06-09 修复收口。
+- `/resume` 固定 9 行长列表、最近对话 replay、多轮 tool call 原生终端验收：实现与 PowerShell/cmd.exe 验收记录见 `12. /compact + /resume 体验优化` 和 `24. /resume 恢复后最近对话渲染`。
+- MCP Phase 1/2：安全接入、管理面、动态刷新和 PowerShell/cmd.exe 原生 PTY 验收已在 `23. MCP Phase 2` 及此前 MCP Phase 1 记录中收口；ROADMAP 只保留后续生态候选，不再重复 MCP 已完成范围。
+- 已完成归档表从 ROADMAP 移除；完成项以本文件的历史章节和顶部状态总览为准。
+
+## 28. 当前未完成项入口
+
+当前阻塞、遗留项和下一步 backlog 已迁移到 `docs/current/ROADMAP.md`。本文件只维护历史推进过程、完成证据和迁移记录，避免与 ROADMAP 双写不同步。
