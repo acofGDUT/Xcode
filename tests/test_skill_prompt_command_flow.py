@@ -54,6 +54,33 @@ def test_skill_dispatch_returns_user_turn_input_with_display_and_model_content()
     assert result.turn_input.metadata["skill"] == "review"
 
 
+def test_skill_dispatch_appends_args_when_body_has_no_placeholder():
+    skill = Skill(
+        name="review",
+        display_name=None,
+        description="Review code",
+        body="Review carefully.",
+        root=Path("D:/Xcode/.xcode/skills/review"),
+    )
+    registry = CommandRegistry.from_skills([skill])
+    dispatcher = SlashCommandDispatcher(
+        console=_console(),
+        registry=registry,
+        **_handlers(),
+    )
+
+    result = dispatcher.dispatch("/review 解释一下这个技能")
+
+    assert result.kind == "prompt"
+    assert result.turn_input.display_content == "/review 解释一下这个技能"
+    assert result.turn_input.model_content == (
+        "Review carefully.\n\n"
+        "ARGUMENTS:\n"
+        "解释一下这个技能"
+    )
+    assert result.turn_input.metadata["args"] == "解释一下这个技能"
+
+
 def test_skill_dispatch_metadata_includes_source_path_and_hash(tmp_path):
     skill_dir = tmp_path / ".xcode" / "skills" / "review"
     skill_dir.mkdir(parents=True)

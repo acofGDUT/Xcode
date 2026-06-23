@@ -216,7 +216,7 @@ def test_owner_openids_limits_c2c_and_group_senders():
     assert runner.calls == []
 
 
-def test_reply_content_is_truncated_to_configured_limit():
+def test_reply_content_is_split_into_multiple_messages_with_incrementing_msg_seq():
     class LongReplyRunner(FakeRunner):
         def run(self, conversation_key, turn, *, tool_scope=None):
             return type("Result", (), {"text": "abcdef", "session_id": "session-1", "error": None})()
@@ -230,7 +230,9 @@ def test_reply_content_is_truncated_to_configured_limit():
     _wait_until_idle(service)
     service.stop()
 
-    assert replies.calls[0][1] == "abc"
+    assert [call[1] for call in replies.calls] == ["abc", "def"]
+    assert [call[3] for call in replies.calls] == [1, 2]
+    assert service.status()["sent_replies"] == 2
 
 
 def test_external_turn_error_sends_safe_fallback_instead_of_raw_no_response():

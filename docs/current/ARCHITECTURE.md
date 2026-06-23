@@ -185,7 +185,7 @@ Layer 4  执行与编排      core/tooling/execution.py, core/agent.py, core/com
 
 **Layer 2 — 调用服务**
 
-- `SkillInvocationService`：唯一的 skill 调用入口。`invoke_for_user()` 跳过模型校验，`invoke_for_model()` 完整校验。内部通过 `SkillPromptExpander.expand()` 展开 `$ARGUMENTS` 和 `${XCODE_SKILL_DIR}`，构造 `SkillInvocation`（含 display/model/audit 三份 metadata）。
+- `SkillInvocationService`：唯一的 skill 调用入口。`invoke_for_user()` 跳过模型校验，`invoke_for_model()` 完整校验。内部通过 `SkillPromptExpander.expand()` 展开 `$ARGUMENTS` 和 `${XCODE_SKILL_DIR}`；当 args 非空且 skill 正文没有 `$ARGUMENTS` 时，会在展开 prompt 末尾追加 `ARGUMENTS:` 兜底块，确保用户或模型传入的附加说明进入模型可见内容。服务最终构造 `SkillInvocation`（含 display/model/audit 三份 metadata）。
 - `SkillListingFormatter`：生成 compact listing 注入 system prompt，三级降级预算控制（full → truncated → name_only → name_only_with_omissions）。
 
 **Layer 3 — 工具注册**
@@ -252,7 +252,7 @@ flowchart TD
 - `SkillLoader`：只负责磁盘扫描、frontmatter 解析、source hash 计算和 load notice 收集。
 - `SkillCatalog`：负责 `find()`、`user_invocable_skills()`、`model_invocable_skills()` 和模型调用校验；它会排除 built-in command 冲突、`disable-model-invocation: true` 和 `context: fork`。
 - `SkillListingFormatter`：把 model-invocable skills 格式化成轻量 listing，并控制长度预算。
-- `SkillInvocationService`：唯一的 skill 调用服务。用户 slash command 和模型 SkillTool 都通过它展开 `$ARGUMENTS`、`${XCODE_SKILL_DIR}`，并生成 display/model/audit metadata。
+- `SkillInvocationService`：唯一的 skill 调用服务。用户 slash command 和模型 SkillTool 都通过它展开 `$ARGUMENTS`、`${XCODE_SKILL_DIR}`；如果 args 非空但正文没有 `$ARGUMENTS`，统一追加 `ARGUMENTS:` 兜底块，并生成 display/model/audit metadata。
 - `CommandRegistry`：把 built-in prompt commands 和 user-invocable skills 合并成 slash command registry；built-in command 冲突时 built-in 优先。
 - `SkillTool`：模型入口。它不依赖 slash command registry，也不会把工具调用拼成 `/skill-name args` 再交给 dispatcher。
 - `ToolCallExecutor`：执行 SkillTool 后负责 barrier、防递归 blocked-tools、session audit event 收集。
@@ -612,7 +612,7 @@ QQChatService
 - QQ external turn 走 `_run_external_llm_loop()`，该路径调用普通 `_run_llm_loop()` 的 headless 模式：不创建 streaming renderer、不启动 Rich Live、不打印工具摘要、不更新本地 bottom toolbar 工具计数。
 - `ExternalTurnRunner` 将 `No response.`、`[v0]...` 和 LLM 异常视为 external turn failure：保留本轮 user message，不把失败 assistant 文本写入外部会话 history。QQchat 收到该错误后发送安全中文 fallback，不把 raw provider/protocol 文本回传给远程用户。
 - `QQChatConfig` 在 normalize 后、dedupe 前执行：`enabled`、`enable_c2c`、`enable_group_at`、`group_allowlist`、`owner_openids`、`group_turn_timeout_seconds`、`c2c_turn_timeout_seconds` 都会影响消息是否进入 runner。
-- `max_reply_chars` 在发送前截断被动回复，避免长回复直接打到 QQ HTTP 接口限制。
+- `max_reply_chars` 作为单条 QQ 被动回复的分段上限；长回复会拆成多条被动文本回复连续发送，后续段使用递增的 `msg_seq`，避免单条消息直接打到 QQ HTTP 接口限制。
 - Gateway status 通过 `on_status -> QQChatService.handle_gateway_status()` 进入 service，`/QQchat status` 可看到最近断线、重连、heartbeat 或 gateway 错误。reconnect/stop 期间的 `Connection is already closed.` heartbeat close 被视为 benign lifecycle noise，不覆盖真实 runner/LLM 错误；unexpected heartbeat failure 仍会报告。
 - AppSecret、AccessToken 和完整 Authorization header 不写入项目配置、session transcript metadata 或错误输出。
 

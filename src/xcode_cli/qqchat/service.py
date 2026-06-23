@@ -176,13 +176,12 @@ class QQChatService:
             reply_text = EXTERNAL_TURN_ERROR_FALLBACK if result.error else result.text
             if result.error:
                 self._last_error = _external_turn_error_summary(result.error)
-            content = _truncate_reply(reply_text, self._config.max_reply_chars)
-            if content:
+            for index, content in enumerate(_split_reply(reply_text, self._config.max_reply_chars)):
                 self._reply_client.send_text_reply(
                     message.reply_target,
                     content=content,
                     msg_id=message.message_id,
-                    msg_seq=msg_seq,
+                    msg_seq=msg_seq + index,
                 )
                 self._sent_replies += 1
         except Exception as exc:
@@ -278,10 +277,12 @@ def _is_benign_gateway_status(message: str) -> bool:
     return "heartbeat failed" in lowered and "connection is already closed" in lowered
 
 
-def _truncate_reply(content: str, max_chars: int) -> str:
-    if max_chars > 0 and len(content) > max_chars:
-        return content[:max_chars]
-    return content
+def _split_reply(content: str, max_chars: int) -> list[str]:
+    if not content:
+        return []
+    if max_chars <= 0 or len(content) <= max_chars:
+        return [content]
+    return [content[index : index + max_chars] for index in range(0, len(content), max_chars)]
 
 
 def _parse_timestamp(value: str) -> datetime | None:

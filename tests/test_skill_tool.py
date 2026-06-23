@@ -47,6 +47,27 @@ def test_skill_tool_returns_loaded_marker_audit_metadata_and_blocks_recursion():
     assert "model_content" not in result.audit_metadata
 
 
+def test_skill_tool_appends_args_when_body_has_no_placeholder():
+    registry = ToolRegistry()
+    service = SkillInvocationService(
+        SkillCatalog(
+            [_skill(body="Review carefully.")],
+            builtin_commands=set(),
+        )
+    )
+    registry.register(create_skill_tool(service))
+
+    result = registry.execute(
+        "skill",
+        {"skill": "review", "args": "解释一下这个技能"},
+    )
+
+    assert '<xcode_loaded_skill name="review" source="model">' in result.content
+    assert "Review carefully.\n\nARGUMENTS:\n解释一下这个技能" in result.content
+    assert result.audit_metadata["args"] == "解释一下这个技能"
+    assert result.blocked_tools == ["skill"]
+
+
 def test_skill_tool_rejects_disabled_model_invocation():
     registry = ToolRegistry()
     service = SkillInvocationService(

@@ -759,3 +759,52 @@ Review follow-up（2026-06-10）：
 ## 28. 当前未完成项入口
 
 当前阻塞、遗留项和下一步 backlog 已迁移到 `docs/current/ROADMAP.md`。本文件只维护历史推进过程、完成证据和迁移记录，避免与 ROADMAP 双写不同步。
+
+## 29. Skill args 兜底注入：2026-06-15
+
+状态：代码实现和自动化回归已完成。
+
+本轮实现：
+
+- `SkillPromptExpander.expand()` 保留既有 `$ARGUMENTS` 替换和 `${XCODE_SKILL_DIR}` 替换。
+- 当传入 args 非空且 skill 正文没有 `$ARGUMENTS` 时，在展开后的 prompt 末尾追加：
+
+```text
+ARGUMENTS:
+<args>
+```
+
+- 追加判断只用 `args.strip()` 判断是否为空，模型可见内容保留原始 args 文本。
+- 用户 slash skill 路径和模型 `skill` tool 路径共享同一 expander 行为；未改变 session display content、`metadata.model_content` 恢复语义、SkillTool read-only、blocked-tools 或 audit metadata 边界。
+- 未实现 `$0/$1/$foo/$ARGUMENTS[0]`、shell-like quoting、命名参数或新的 frontmatter 字段。
+
+验证：
+
+- TDD RED：`pytest tests/test_skill_prompt.py::test_appends_arguments_when_body_has_no_arguments_placeholder tests/test_skill_prompt.py::test_does_not_append_arguments_when_placeholder_was_used tests/test_skill_prompt.py::test_does_not_append_arguments_when_args_are_blank -q`，`1 failed, 2 passed`，失败点为无占位符时未追加 `ARGUMENTS:`。
+- `pytest tests/test_skill_prompt.py -q`：`5 passed`。
+- `pytest tests/test_skill_prompt_command_flow.py::test_skill_dispatch_appends_args_when_body_has_no_placeholder -q`：`1 passed`。
+- `pytest tests/test_skill_prompt_command_flow.py -q`：`6 passed`。
+- `pytest tests/test_skill_tool.py::test_skill_tool_appends_args_when_body_has_no_placeholder -q`：`1 passed`。
+- `pytest tests/test_skill_tool.py -q`：`4 passed`。
+- `pytest tests/test_skill_prompt.py tests/test_skill_prompt_command_flow.py tests/test_skill_tool.py tests/test_skill_invocation_service.py -q`：`18 passed`。
+- `python -m compileall -q src`：退出码 0。
+- `pytest -q`：`565 passed`。
+- `git diff --check`：退出码 0；仅输出 Windows LF/CRLF 行尾转换提示。
+
+## 30. QQchat 多段回复：2026-06-15
+
+状态：代码实现和自动化回归已完成；真实 QQ 平台单聊/群聊多段回复验收未执行。
+
+本轮实现：
+- QQchat 不再把超过 `max_reply_chars` 的 assistant 回复直接截断为单条消息。
+- `QQChatService` 会按 `max_reply_chars` 将回复切成多段，连续调用 QQ 被动文本回复接口。
+- 第一段沿用当前 `msg_seq`，后续段使用 `msg_seq + 1`、`msg_seq + 2` 递增，保留 QQ 单条 HTTP 消息长度保护。
+- `max_reply_chars <= 0` 保留不分段发送的语义；空回复仍不发送。
+- external turn error 的安全中文 fallback 继续由 QQchat 发送，若超过上限也走同一分段逻辑。
+
+验证：
+- TDD RED：`pytest tests/test_qqchat_service.py::test_reply_content_is_split_into_multiple_messages_with_incrementing_msg_seq -q` 先失败，确认为旧实现只发送 `["abc"]`。
+- GREEN：`pytest tests/test_qqchat_service.py::test_reply_content_is_split_into_multiple_messages_with_incrementing_msg_seq -q`：`1 passed`。
+- QQchat service 回归：`pytest tests/test_qqchat_service.py -q`：`14 passed`。
+- QQchat 邻近回归：`pytest tests/test_qqchat_service.py tests/test_qqchat_config.py tests/test_qqchat_message_client.py -q`：`23 passed`。
+- 编译检查：`python -m compileall -q src`：退出码 0。

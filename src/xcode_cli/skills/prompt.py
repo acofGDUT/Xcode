@@ -43,6 +43,9 @@ class SkillPromptExpander:
                 "This skill requires fork execution, which is not supported yet."
             )
 
+        has_arguments_placeholder = "$ARGUMENTS" in skill.body
         prompt = skill.body.replace("$ARGUMENTS", args)
         prompt = prompt.replace("${XCODE_SKILL_DIR}", str(skill.root))
+        if args.strip() and not has_arguments_placeholder:
+            prompt = prompt.rstrip() + f"\n\nARGUMENTS:\n{args}"
         return ExpandedSkillPrompt(prompt=prompt)
