@@ -65,6 +65,10 @@ Current reference notes:
 - [docs/reference/qqchat-setup-guide.md](docs/reference/qqchat-setup-guide.md): QQ Chat 配置教程，面向 pull 项目后想要使用 QQ Chat 功能的用户。
 - [docs/reference/qq-bot-integration-guide.md](docs/reference/qq-bot-integration-guide.md): QQ bot API v2 investigation and target `/QQchat` usage guide.
 
+Explainers:
+
+- [docs/explainers/auto-memory-recall-v2.md](docs/explainers/auto-memory-recall-v2.md): Auto memory recall v2 为什么这样升级、每个升级点有什么用，以及升级后的效果和边界。
+
 ## 中文文档导航
 
 根目录 `README.md` 是当前唯一的文档索引，核心项目文档都在 `docs/current/`：
@@ -93,6 +97,10 @@ Current reference notes:
 
 - [docs/reference/qqchat-setup-guide.md](docs/reference/qqchat-setup-guide.md)：QQ Chat 配置教程，面向 pull 项目后想要使用 QQ Chat 功能的用户。
 - [docs/reference/qq-bot-integration-guide.md](docs/reference/qq-bot-integration-guide.md)：QQ 机器人 API v2 调研与 `/QQchat` 目标接入教程。
+
+解释性文档：
+
+- [docs/explainers/auto-memory-recall-v2.md](docs/explainers/auto-memory-recall-v2.md)：Auto memory recall v2 为什么这样升级、每个升级点有什么用，以及升级后的效果和边界。
 
 ## Development Workflow
 

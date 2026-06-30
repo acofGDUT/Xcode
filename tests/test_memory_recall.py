@@ -70,3 +70,26 @@ def test_recall_dedupes_surfaced_and_read_files(tmp_path: Path) -> None:
     result = service.prefetch("query", [_entry(tmp_path, "foo.md")], state)
 
     assert result.memories == []
+
+
+def test_relevant_memory_state_snapshot_copies_mutable_audit_fields() -> None:
+    state = RelevantMemoryState(
+        surfaced_paths={"a.md"},
+        touched_paths={"b.md"},
+        surfaced_bytes=42,
+        late_prefetch_count=2,
+        warnings=["old warning"],
+        last_result="selected=1 surfaced=0",
+    )
+
+    snapshot = state.snapshot()
+    state.surfaced_paths.add("new.md")
+    state.touched_paths.add("new-touch.md")
+    state.warnings.append("new warning")
+
+    assert snapshot.surfaced_paths == {"a.md"}
+    assert snapshot.touched_paths == {"b.md"}
+    assert snapshot.surfaced_bytes == 42
+    assert snapshot.late_prefetch_count == 2
+    assert snapshot.warnings == ["old warning"]
+    assert snapshot.last_result == "selected=1 surfaced=0"

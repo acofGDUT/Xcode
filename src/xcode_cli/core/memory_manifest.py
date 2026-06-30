@@ -19,6 +19,7 @@ class MemoryManifestEntry:
     description: str
     type: str
     source: Literal["stable", "legacy"]
+    name: str = ""
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,7 @@ def _entry_from_file(path: Path, *, source: Literal["stable", "legacy"]) -> Memo
     if raw_type not in VALID_TYPES:
         raise ValueError("invalid type")
     stat = path.stat()
+    name = str(frontmatter.get("name") or path.stem).strip()
     return MemoryManifestEntry(
         filename=path.name,
         file_path=path,
@@ -73,6 +75,7 @@ def _entry_from_file(path: Path, *, source: Literal["stable", "legacy"]) -> Memo
         description=description,
         type=raw_type,
         source=source,
+        name=name,
     )
 
 

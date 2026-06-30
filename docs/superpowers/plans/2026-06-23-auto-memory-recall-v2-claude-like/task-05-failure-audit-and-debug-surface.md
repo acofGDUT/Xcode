@@ -1,6 +1,6 @@
 # Task 05: Failure Audit And Debug Surface
 
-状态：未实现；自动化回归未执行；PowerShell/cmd.exe 原生 PTY 手工验收未执行。
+状态：代码实现和自动化回归已完成；PowerShell/cmd.exe 原生 PTY 手工验收未执行、未记录。
 
 **风险层级：** P1/P2
 
@@ -25,7 +25,7 @@
 
 ## 步骤
 
-- [ ] **Step 1: 添加 audit result 测试**
+- [x] **Step 1: 添加 audit result 测试**
 
 覆盖 `RelevantMemoryResult` 或新增 audit dataclass：
 
@@ -39,7 +39,7 @@
 
 字段可以按实现实际裁剪，但必须能解释“为什么本轮没有注入 memory”。
 
-- [ ] **Step 2: 添加 fail-closed 测试**
+- [x] **Step 2: 添加 fail-closed 测试**
 
 覆盖：
 
@@ -51,7 +51,7 @@
 
 预期：主流程不抛异常，result/reminder 为空或只带 warning。
 
-- [ ] **Step 3: 让测试先失败**
+- [x] **Step 3: 让测试先失败**
 
 运行：
 
@@ -61,7 +61,7 @@ pytest tests/test_memory_recall_v2.py tests/test_agent_memory_recall_v2.py -q
 
 预期：audit 字段或 late 状态相关测试失败。
 
-- [ ] **Step 4: 实现 audit 状态**
+- [x] **Step 4: 实现 audit 状态**
 
 优先把审计状态保存在内存对象里：
 
@@ -69,7 +69,7 @@ pytest tests/test_memory_recall_v2.py tests/test_agent_memory_recall_v2.py -q
 - `AgentRuntime` 可保存 `self._last_memory_recall_result`。
 - 不写 session transcript，不写项目文件。
 
-- [ ] **Step 5: 可选扩展 `/memory` debug 输出**
+- [x] **Step 5: 可选扩展 `/memory` debug 输出**
 
 如果实现范围允许，在 `/memory` 状态里追加一行最近 recall 摘要，例如：
 
@@ -79,7 +79,7 @@ Relevant recall: selected=2 surfaced=1 skipped=late warnings=0
 
 保持这是状态摘要，不输出 memory 正文或 selector 输入。
 
-- [ ] **Step 6: 运行聚焦测试**
+- [x] **Step 6: 运行聚焦测试**
 
 运行：
 
@@ -92,11 +92,10 @@ pytest tests/test_memory_recall_v2.py tests/test_agent_memory_recall_v2.py -q
 - fail-closed 路径全部通过。
 - 普通对话输出不出现 debug/audit 噪声。
 
-- [ ] **Step 7: 停止 review**
+- [x] **Step 7: 停止 review**
 
 Review 检查：
 
 - 审计字段是否足够定位问题，但不泄漏敏感上下文。
 - 是否误把 recall failure 写入 transcript 或用户可见回复。
 - `/memory` 输出如有新增，是否使用中文且不解析模型文本为 Rich markup。
-

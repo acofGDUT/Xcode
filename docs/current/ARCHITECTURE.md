@@ -472,6 +472,11 @@ flowchart LR
     Extractor --> Writer["MemoryWriter<br/>v2 policy guard"]
     Writer --> AutoFile
     Writer --> Index
+
+    LocalTurn["local REPL user turn"] --> Scanner["MemoryManifestScanner<br/>v2 topic manifest"]
+    Scanner --> Recall["MemoryRecallService<br/>no-tool selector"]
+    Recall --> Reminder["point-in-time system reminder"]
+    Reminder --> Loop["AgentRuntime safe point"]
 ```
 
 `MemoryManager` 只负责路径管理、读取 Project/User XCODE.md、读取 auto memory index，以及向 prompt 注入 memory context。普通写入由 `BASE_SYSTEM_PROMPT` 规则驱动 LLM 使用文件工具完成；自动沉淀由 `MemoryExtractionRunner` 在后台调度 `MemoryExtractionSubagent` 完成，主回复、`_history` 和 session transcript 不等待也不受 extraction 失败影响。
@@ -483,7 +488,15 @@ flowchart LR
 3. 当前项目 resolved memory paths
 4. Project XCODE.md、User XCODE.md、Auto Memory Index
 
-Auto memory 当前只自动注入 `MEMORY.md` 索引，详细内容需要 Agent 再用 `read_file` 读取具体 memory 文件。新写入 topic 使用 v2 frontmatter（`name`、`description`、顶层 `type`）并要求正文包含 `Evidence:`；旧 `metadata.type` topic 由 manifest scanner 以 warning 跳过。
+Auto memory 的常驻 prompt 只注入 `MEMORY.md` 短索引，topic 正文不会常驻 base system prompt。新写入 topic 使用 v2 frontmatter（`name`、`description`、顶层 `type`）并要求正文包含 `Evidence:`；旧 `metadata.type` topic 由 manifest scanner 以 warning 跳过。
+
+Relevant recall v2 只服务本地 REPL turn。`AgentRuntime._start_memory_prefetch()` 在 auto memory 开启、当前 turn 没有“忽略/不使用记忆”语义、query 不为空/不过短、session surfaced bytes 未达 60 KiB 上限且 manifest 非空时，提交后台 prefetch；主 LLM 请求、streaming 和工具执行不等待 selector。QQchat、external 和 headless turn 不共享本地 recall state，也不触发本地 relevant reminder 注入。
+
+`MemoryRecallService` 使用当前主 agent 的 `LLMClient` 做 no-tool selector side query（`tool_schemas=[]`），selector 输入包含当前 query、最多 200 条 v2 manifest 候选（filename/name/description/type/mtime/source）和最近成功工具名。最近工具上下文只保存本地 REPL 成功执行的工具名，最多 10 个 distinct names，不包含 args、path、command、output 或 secret。selector 输出只接受 manifest 中的 `.md` 文件名，重复、编造、带路径分隔符或非法 JSON 均 fail closed。
+
+选中 topic 每轮最多 5 个；每个文件最多读取 4096 bytes 或 200 行，读取失败只进入 warning。注入前会再次过滤 session 已 surfaced 的 memory 和本轮通过 `read_file` / `write_file` / `edit_file` touched 的 auto memory 文件。reminder 使用 `<system-reminder>` 边界，包含 memory age 和 point-in-time verification 提醒，要求涉及代码行为、路径、行号、依赖版本、日程或当前状态时按当前代码/文档验证。已完成 prefetch 只在当前 turn 的安全点注入一次；迟到 prefetch 标记为 late，不会污染下一轮 unrelated turn。
+
+Recall v2 的审计状态只保存在 runtime 内存对象中。`/memory` 可展示最近一次 relevant recall 的计数摘要，例如 selected/surfaced/skipped/warnings/elapsed/status；普通对话输出和 session transcript 不写入 selector 输入、manifest 全量列表、工具参数、工具输出或 memory 正文。
 
 Extraction subagent 只暴露 memory-scoped `read_file`、`write_file`、`edit_file` 和 `glob`，不暴露 shell、git、MCP、项目任意读取、`dispatch_agent` 或 hooks。单次 extraction 最多 5 个模型 turn、最多保存 3 个 topic；runner 同一时间只执行一个 extraction，overlap 时保留 latest pending event 并在当前 run 后触发 trailing run。QQchat、external 和 headless turn 不触发 long-term auto memory extraction。
 
@@ -825,7 +838,7 @@ MCP Phase 1/2 自动化和原生 Windows 验收均已完成。Phase 1 的 PowerS
 | `src/xcode_cli/core/memory_extraction_subagent.py` | 受限 memory extraction subagent prompt、tool loop、manifest 注入和保存审计 |
 | `src/xcode_cli/core/memory_extraction_runner.py` | after-turn 后台 single-flight runner、latest pending、trailing run、timeout 和 shutdown |
 | `src/xcode_cli/core/memory_extraction.py` | 兼容 facade，委托 v2 `MemoryExtractionSubagent` |
-| `src/xcode_cli/core/memory_recall.py` | relevant auto memory selector、bounded topic 读取、session/touched 去重和 reminder 渲染 |
+| `src/xcode_cli/core/memory_recall.py` | recall v2 no-tool selector、recent tool context、bounded topic 读取、point-in-time reminder、session/touched 去重和 audit summary |
 | `src/xcode_cli/core/hooks.py` | 代码注册的内部 after-turn hook runner 和事件模型 |
 | `src/xcode_cli/core/turn.py` | `UserTurnInput`，区分 UI 展示内容、模型可见内容和当前 turn metadata |
 | `src/xcode_cli/core/prompting.py` | base system prompt 和 memory 规则 |

@@ -1,6 +1,6 @@
 # Task 03: Bounded Read And Point-In-Time Reminders
 
-状态：未实现；自动化回归未执行；PowerShell/cmd.exe 原生 PTY 手工验收未执行。
+状态：代码实现和自动化回归已完成；PowerShell/cmd.exe 原生 PTY 手工验收未执行、未记录。
 
 **风险层级：** P1
 
@@ -23,7 +23,7 @@
 
 ## 步骤
 
-- [ ] **Step 1: 添加 bounded read 测试**
+- [x] **Step 1: 添加 bounded read 测试**
 
 覆盖：
 
@@ -32,7 +32,7 @@
 - 截断正文末尾追加提示：可用 `read_file` 查看 auto memory scope 内完整文件。
 - 读取失败只进入 warnings，不影响其他 memory 注入。
 
-- [ ] **Step 2: 添加 reminder 格式测试**
+- [x] **Step 2: 添加 reminder 格式测试**
 
 覆盖：
 
@@ -42,7 +42,7 @@
 - 包含 point-in-time / verify current code/docs 提醒。
 - 多个 memory 可以合并为一条 system message，但必须 bounded 且可测试。
 
-- [ ] **Step 3: 添加 surfaced bytes 测试**
+- [x] **Step 3: 添加 surfaced bytes 测试**
 
 覆盖：
 
@@ -50,7 +50,7 @@
 - 达到 session cap 时停止读取后续 memory。
 - `surfaced_bytes` 使用 UTF-8 byte length，而不是 Python 字符数。
 
-- [ ] **Step 4: 让测试先失败**
+- [x] **Step 4: 让测试先失败**
 
 运行：
 
@@ -60,7 +60,7 @@ pytest tests/test_memory_recall_v2.py -q
 
 预期：旧 `Relevant auto memories:` 简单格式和无截断提示相关测试失败。
 
-- [ ] **Step 5: 实现 `SurfacedMemory` 字段补充**
+- [x] **Step 5: 实现 `SurfacedMemory` 字段补充**
 
 按需给 `SurfacedMemory` 增加：
 
@@ -72,7 +72,7 @@ pytest tests/test_memory_recall_v2.py -q
 
 保持旧测试可小幅迁移，避免把数据模型做成通用文档 AST。
 
-- [ ] **Step 6: 实现 reminder 渲染**
+- [x] **Step 6: 实现 reminder 渲染**
 
 渲染要求：
 
@@ -81,7 +81,7 @@ pytest tests/test_memory_recall_v2.py -q
 - 正文保留原 v2 frontmatter 和 body。
 - 截断提示只给 auto memory scope 内 path。
 
-- [ ] **Step 7: 运行聚焦测试**
+- [x] **Step 7: 运行聚焦测试**
 
 运行：
 
@@ -94,11 +94,10 @@ pytest tests/test_memory_recall_v2.py tests/test_memory_recall.py -q
 - v2 reminder 渲染通过。
 - 原有 selection、dedupe、fail-closed 行为不回归。
 
-- [ ] **Step 8: 停止 review**
+- [x] **Step 8: 停止 review**
 
 Review 检查：
 
 - reminder 是否可能过长或重复注入。
 - 截断提示是否可能暴露 memory scope 外路径。
 - point-in-time 文案是否足够明确，避免模型把旧记忆当实时事实。
-

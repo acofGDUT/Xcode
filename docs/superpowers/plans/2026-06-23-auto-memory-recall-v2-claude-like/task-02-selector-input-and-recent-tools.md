@@ -1,6 +1,6 @@
 # Task 02: Selector Input And Recent Tools
 
-状态：未实现；自动化回归未执行；PowerShell/cmd.exe 原生 PTY 手工验收未执行。
+状态：代码实现和自动化回归已完成；PowerShell/cmd.exe 原生 PTY 手工验收未执行、未记录。
 
 **风险层级：** P1
 
@@ -26,7 +26,7 @@
 
 ## 步骤
 
-- [ ] **Step 1: 添加 selector prompt/input 测试**
+- [x] **Step 1: 添加 selector prompt/input 测试**
 
 在 `tests/test_memory_recall_v2.py` 覆盖：
 
@@ -35,7 +35,7 @@
 - selector user input 包含 query、最多 200 条 manifest、`[type] filename (mtime/source): description`。
 - manifest 中包含 `name` 时也可进入输入，帮助 LLM 区分 slug 和标题。
 
-- [ ] **Step 2: 添加 recent tools 测试**
+- [x] **Step 2: 添加 recent tools 测试**
 
 覆盖：
 
@@ -43,7 +43,7 @@
 - 不渲染 tool args、path、command、output。
 - 无 recent tools 时省略该段。
 
-- [ ] **Step 3: 添加 selection 过滤测试**
+- [x] **Step 3: 添加 selection 过滤测试**
 
 覆盖：
 
@@ -53,7 +53,7 @@
 - 输出超过 5 个时截断。
 - 非 dict、缺 `selected_memories`、非法 JSON 都 fail closed。
 
-- [ ] **Step 4: 让测试先失败**
+- [x] **Step 4: 让测试先失败**
 
 运行：
 
@@ -63,7 +63,7 @@ pytest tests/test_memory_recall_v2.py -q
 
 预期：recent tools 和 v2 prompt/input 相关测试失败。
 
-- [ ] **Step 5: 实现 selector input**
+- [x] **Step 5: 实现 selector input**
 
 在 `MemoryRecallService.prefetch()` 增加可选参数，例如：
 
@@ -77,7 +77,7 @@ recent_successful_tools: list[str] | None = None
 - 输入包含候选 manifest 的 type、filename、mtime/source、description，可包含 name。
 - recent tools 只输出工具名，去重并限制为 10 个。
 
-- [ ] **Step 6: 记录最近成功工具名**
+- [x] **Step 6: 记录最近成功工具名**
 
 在本地 `AgentRuntime` tool loop 中，基于执行结果维护最近成功工具名：
 
@@ -88,7 +88,7 @@ recent_successful_tools: list[str] | None = None
 
 如果 `ToolCallExecutor.execute()` 目前没有直接暴露成功工具名，优先做小而明确的返回字段，而不是解析 tool result 文案。
 
-- [ ] **Step 7: 运行聚焦测试**
+- [x] **Step 7: 运行聚焦测试**
 
 运行：
 
@@ -101,11 +101,10 @@ pytest tests/test_memory_recall_v2.py tests/test_agent_memory_recall_v2.py -q
 - selector no-tool、input 渲染和 output 过滤通过。
 - recent tools 只包含工具名。
 
-- [ ] **Step 8: 停止 review**
+- [x] **Step 8: 停止 review**
 
 Review 检查：
 
 - 是否有任何工具参数、路径、shell command、输出片段进入 selector input。
 - selector 是否仍能选择 warning/gotcha/known issue 类 memory。
 - 是否没有为了 recent tools 引入脆弱的 tool result 文案解析。
-

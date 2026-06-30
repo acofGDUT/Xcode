@@ -42,6 +42,7 @@ from xcode_cli.core.memory_manifest import MemoryManifestScanner
 from xcode_cli.core.memory_recall import (
     MAX_SESSION_SURFACED_BYTES,
     MemoryRecallService,
+    RelevantMemoryAudit,
     RelevantMemoryResult,
     RelevantMemoryState,
 )
@@ -125,6 +126,8 @@ class AgentRuntime:
         self.after_turn_hooks.register(self._run_memory_extraction_hook)
         self.memory_recall = MemoryRecallService(llm=self.llm)
         self._memory_recall_state = RelevantMemoryState()
+        self._last_memory_recall_result: RelevantMemoryResult | None = None
+        self._recent_successful_tool_names: list[str] = []
         self._memory_prefetch_executor = ThreadPoolExecutor(max_workers=1)
         self._session_auto_approve: dict[str, bool] = {"write": False, "shell": False}
         self.prompt = PromptSession(
@@ -383,14 +386,34 @@ class AgentRuntime:
         cfg = self.config_store.load()
         if not cfg.auto_memory or self._memory_disabled_for_turn(query):
             return None
+        if self._memory_query_too_short(query):
+            return None
+        if self._memory_recall_state.surfaced_bytes >= MAX_SESSION_SURFACED_BYTES:
+            return None
         stable, legacy = self.memory.manifest_dirs()
         manifest = MemoryManifestScanner(stable, legacy).scan().entries
         if not manifest:
             return None
         state_snapshot = self._memory_recall_state.snapshot()
+        recent_tools = list(self._recent_successful_tool_names)
         return self._memory_prefetch_executor.submit(
-            lambda: self.memory_recall.prefetch(query, manifest, state_snapshot)
+            lambda: self.memory_recall.prefetch(
+                query,
+                manifest,
+                state_snapshot,
+                recent_successful_tools=recent_tools,
+            )
         )
+
+    def _memory_query_too_short(self, query: str) -> bool:
+        stripped = query.strip()
+        if not stripped:
+            return True
+        if any(ch.isspace() for ch in stripped):
+            return False
+        if stripped.isascii():
+            return len(stripped) <= 32
+        return len(stripped) <= 4
 
     def _memory_disabled_for_turn(self, query: str) -> bool:
         lowered = query.lower()
@@ -937,6 +960,12 @@ class AgentRuntime:
             if legacy_dir.exists() and legacy_dir != self.memory.memory_dir_path():
                 self.console.print(f"Legacy memory dir: {legacy_dir} (read fallback)")
             self.console.print(f"Memory files: {len(memory_files)} (index: {index_entries} entries)")
+            if self._last_memory_recall_result is not None:
+                self.console.print(
+                    f"相关记忆召回: {self._last_memory_recall_result.audit_summary()}",
+                    markup=False,
+                    highlight=False,
+                )
             return
 
         if len(parts) == 3 and parts[1].lower() == "auto" and parts[2].lower() in {"on", "off"}:
@@ -1288,6 +1317,16 @@ class AgentRuntime:
 
             if not response.tool_calls:
                 final_text = response.content or ""
+                if active_memory_prefetch is not None:
+                    self._memory_recall_state.late_prefetch_count += 1
+                    self._last_memory_recall_result = RelevantMemoryResult(
+                        audit=RelevantMemoryAudit(
+                            skipped_reason="late",
+                            late_or_consumed="late",
+                        )
+                    )
+                    self._memory_recall_state.last_result = self._last_memory_recall_result.audit_summary()
+                    active_memory_prefetch = None
                 if render_output and renderer is not None:
                     turn_result = renderer.finish(final_text)
                     if final_text and turn_result.needs_final_render:
@@ -1313,6 +1352,7 @@ class AgentRuntime:
                 self._turn_wrote_memory = True
             if tool_scope is None:
                 self._record_touched_memory_paths(response.tool_calls)
+                self._record_recent_successful_tool_names(tool_result.successful_tool_names)
             if update_runtime_stats:
                 self._tool_call_count += tool_result.executed_count
             history.append(tool_result.assistant_message)
@@ -1333,9 +1373,21 @@ class AgentRuntime:
     def _maybe_inject_relevant_memories(self, history: list[dict[str, Any]], future: Future) -> None:
         try:
             result = future.result()
-        except Exception:
+        except Exception as exc:
+            self._last_memory_recall_result = RelevantMemoryResult(
+                warnings=[str(exc)],
+                audit=RelevantMemoryAudit(
+                    skipped_reason="future_error",
+                    warnings_count=1,
+                    late_or_consumed="future_error",
+                ),
+            )
+            self._memory_recall_state.last_result = self._last_memory_recall_result.audit_summary()
+            self._memory_recall_state.warnings.append("future_error")
             return
         filtered = self._filter_relevant_memories(result)
+        self._last_memory_recall_result = filtered
+        self._memory_recall_state.last_result = filtered.audit_summary()
         reminder = filtered.render_system_reminder()
         if not reminder:
             return
@@ -1353,7 +1405,13 @@ class AgentRuntime:
             if self._memory_recall_state.surfaced_bytes >= MAX_SESSION_SURFACED_BYTES:
                 break
             memories.append(memory)
-        return RelevantMemoryResult(memories=memories, warnings=result.warnings)
+        audit = replace(
+            result.audit,
+            surfaced_count=len(memories),
+            skipped_reason=result.audit.skipped_reason if memories else (result.audit.skipped_reason or "filtered"),
+            late_or_consumed="consumed" if memories else result.audit.late_or_consumed,
+        )
+        return RelevantMemoryResult(memories=memories, warnings=result.warnings, audit=audit)
 
     def _mark_relevant_memories_surfaced(self, result: RelevantMemoryResult) -> None:
         for memory in result.memories:
@@ -1373,6 +1431,17 @@ class AgentRuntime:
             resolved = self._resolve_auto_memory_path(path)
             if resolved:
                 self._memory_recall_state.touched_paths.add(resolved)
+
+    def _record_recent_successful_tool_names(self, tool_names: list[str]) -> None:
+        for raw_name in tool_names:
+            name = str(raw_name).strip()
+            if not name:
+                continue
+            if name in self._recent_successful_tool_names:
+                self._recent_successful_tool_names.remove(name)
+            self._recent_successful_tool_names.append(name)
+            if len(self._recent_successful_tool_names) > 10:
+                self._recent_successful_tool_names = self._recent_successful_tool_names[-10:]
 
     def _resolve_auto_memory_path(self, path: str) -> str:
         try:

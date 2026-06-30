@@ -2,8 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: 使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans` 逐 task 执行。本计划使用 checkbox（`- [ ]`）跟踪状态。
 
-状态：已写 spec/plan；代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 手工交互验收均未执行。
-日期：2026-06-24
+状态：代码实现和自动化回归已完成；PowerShell/cmd.exe 原生 PTY 手工交互验收未执行、未记录。QQchat/external/headless 隔离目前由自动化回归覆盖，未做真实平台手工记录。
+日期：2026-06-30
 
 **目标：** 在 auto memory extraction v2 已稳定写入 v2 topic 的基础上，把 relevant auto memory recall 从 v1 轻量 selector 升级为 Claude-like 双路径召回：`MEMORY.md` 短索引常驻主 prompt，后台 non-blocking relevant topic prefetch 只把确定相关的 bounded topic 正文作为 point-in-time system reminder 注入当前本地 REPL turn。
 
@@ -89,4 +89,3 @@ git diff --check
 - PowerShell/cmd.exe：已完成 prefetch 在安全点注入 reminder，迟到 prefetch 不注入下一轮 unrelated turn。
 - Memory 目录检查：v2 topic frontmatter、bounded read、截断提示和 `MEMORY.md` 相对链接均符合预期。
 - External entry inspection：QQchat/external/headless turn 不共享本地 REPL recall state。
-

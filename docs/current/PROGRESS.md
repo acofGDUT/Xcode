@@ -2,7 +2,7 @@
 
 > 本文档记录项目如何一步步走到现在。当前实现细节见 `ARCHITECTURE.md`，未来计划见 `ROADMAP.md`，已知问题和设计取舍见 `DEVNOTES.md`。
 
-最后更新：2026-06-24
+最后更新：2026-06-30
 
 ## 1. 当前状态总览
 
@@ -35,9 +35,10 @@
 | 手动 `/compact` 语义放宽 | 非空 `_history` 均尝试 checkpoint；移除消息数和摘要长度硬门槛；空摘要/summary 请求异常给出明确失败 | 代码实现和自动化回归完成；原生 PTY 手工验收未执行/未记录 | `2026-06-14-manual-compact-semantics-design.md` |
 | `dispatch_agent` 免审优化 | 本地主会话子 Agent 分派默认免审批，explicit deny/ask 与 QQchat 远程过滤保持生效 | 代码实现并通过聚焦回归 | `2026-06-11-dispatch-agent-auto-allow-design.md` / `2026-06-11-dispatch-agent-auto-allow.md` |
 | Auto memory extraction v2 | Claude-like memory-only extraction subagent、v2 topic policy、后台 single-flight runner | 代码实现和自动化回归完成；原生 PTY 手工验收未执行/未记录 | `2026-06-23-auto-memory-extraction-v2-claude-like-plan.md` |
+| Auto memory recall v2 | Claude-like `MEMORY.md` 短索引 + relevant topic prefetch、bounded reminder、安全点注入 | 代码实现和自动化回归完成；PowerShell/cmd.exe 原生 PTY 手工验收未执行/未记录 | `2026-06-23-auto-memory-recall-v2-claude-like-plan.md` |
 | Phase 5 | 生态扩展 | 冻结 | 未开始 |
 
-当前重点仍不是全面进入 Phase 5，而是补齐费用估算、QQchat 收口，以及 compact v3 现场恢复的原生 Windows/QQchat 手工验收。MCP Phase 1 已完成 stdio tools 安全接入、自动化回归和 PowerShell/cmd.exe 原生 E2E，Phase 2 已完成 stdio tools 管理面与动态刷新代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 验收；后续不得无 spec 扩展到 resources/prompts/HTTP/SSE/OAuth。核心 CLI 的 `/resume`、`/compact` Live 进度、多轮 tool call、本地主会话 `dispatch_agent` 默认免审和本地 REPL auto memory extraction v2 已完成聚焦回归；compact v3 的 restored-context `/compact`、v3 `/resume` 和 QQchat continuation/isolation 手工验收仍未记录。
+当前重点仍不是全面进入 Phase 5，而是补齐费用估算、QQchat 收口，以及 compact v3 现场恢复和 auto memory recall v2 的原生 Windows/QQchat 手工验收。MCP Phase 1 已完成 stdio tools 安全接入、自动化回归和 PowerShell/cmd.exe 原生 E2E，Phase 2 已完成 stdio tools 管理面与动态刷新代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 验收；后续不得无 spec 扩展到 resources/prompts/HTTP/SSE/OAuth。核心 CLI 的 `/resume`、`/compact` Live 进度、多轮 tool call、本地主会话 `dispatch_agent` 默认免审、本地 REPL auto memory extraction v2 和 auto memory recall v2 已完成聚焦回归；compact v3 的 restored-context `/compact`、v3 `/resume`、recall v2 原生 PTY 和 QQchat continuation/isolation 手工验收仍未记录。
 
 ## 2. Phase 1：协议与工具升级
 
@@ -812,7 +813,7 @@ ARGUMENTS:
 
 ## 31. Auto memory extraction v2：2026-06-24
 
-状态：代码实现和自动化回归已完成；PowerShell/cmd.exe 原生 PTY 手工交互验收未执行、未记录。Auto memory recall v2 仍未实现。
+状态：代码实现和自动化回归已完成；PowerShell/cmd.exe 原生 PTY 手工交互验收未执行、未记录。Auto memory recall v2 已另于 2026-06-30 完成代码实现和自动化回归。
 
 本轮实现：
 
@@ -845,4 +846,41 @@ ARGUMENTS:
 - `pytest tests/test_memory_extraction.py tests/test_memory_manifest.py tests/test_memory.py -q`：`50 passed in 3.49s`。
 - `python -m compileall -q src`：退出码 0。
 - `pytest -q`：`614 passed in 32.39s`。
+- `git diff --check`：退出码 0；仅输出 Windows LF/CRLF 行尾转换提示。
+
+## 32. Auto memory recall v2：2026-06-30
+
+状态：代码实现和自动化回归已完成；PowerShell/cmd.exe 原生 PTY 手工交互验收未执行、未记录。QQchat/external/headless 隔离目前由自动化回归覆盖，未做真实平台手工记录。
+
+本轮实现：
+
+- `RelevantMemoryState` 增加 surfaced/touched/surfaced bytes 之外的 late、warnings 和 last_result 审计字段，snapshot 会复制可变集合。
+- `AgentRuntime._start_memory_prefetch()` 增加 auto-memory、忽略记忆语义、空/过短 query、session cap 和 manifest gate；只在本地 REPL user turn 提交后台 prefetch。
+- `MemoryManifestEntry` 增加 `name`；selector 输入使用 v2 manifest 的 filename/name/description/type/mtime/source。
+- `MemoryRecallService` selector 保持 no-tool side query（`tool_schemas=[]`），默认复用主 agent LLM，不新增独立 recall model。
+- Agent tool loop 只记录本地 REPL 成功执行的工具名，最多 10 个 distinct names，并传给 selector；不记录 args、path、command、output 或 secret。
+- selector 输出严格过滤：只接受 manifest 中的 `.md` 文件名，重复、编造、路径分隔符、非法 JSON 和 selector 异常均 fail closed。
+- 选中 topic 每轮最多 5 个；每个文件最多 4096 bytes 或 200 行；截断时追加 `read_file` 完整读取提示。
+- reminder 改为 `<system-reminder>`，包含 memory age 和 point-in-time verification 提醒。
+- `_run_llm_loop()` 只在当前 turn 的安全点消费已完成 prefetch；迟到 prefetch 标记 late，不注入下一轮 unrelated turn。
+- 注入前再次过滤 session 已 surfaced 和本轮 touched 的 auto memory 文件。
+- `RelevantMemoryAudit` 和 `/memory` 最近 recall 摘要提供本地 debug surface；普通回复和 transcript 不写 selector 输入、manifest 全量列表、工具参数、工具输出或 memory 正文。
+
+逐 task review 结论：
+
+- Task 01：通过。trigger gates 和 recall state 已收紧；短 query 规则没有挡住正常中文短句；external/headless 不共享本地 recall state。
+- Task 02：通过。selector 输入使用 v2 manifest 和 bounded recent tool names；没有解析工具结果文案，也没有泄漏工具参数、路径或输出。
+- Task 03：通过。bounded read、截断提示、UTF-8 byte 计数和 point-in-time reminder 已覆盖；topic 正文不常驻 base prompt。
+- Task 04：通过。prefetch future turn-local，安全点注入一次；late/stale future 不污染后续 turn；touched-path 二次过滤生效。
+- Task 05：通过。fail-closed 和 audit summary 覆盖 selector/future 异常、非法 JSON、路径分隔符和读取失败；普通对话输出无 debug 噪声。
+- Task 06：通过。文档同步和最终验证完成；原生 PTY/真实平台手工验收缺口明确保留。
+
+验证：
+
+- `pytest tests/test_memory_manifest_v2.py -q`：`4 passed in 0.21s`。
+- `pytest tests/test_memory_recall_v2.py -q`：`13 passed in 0.57s`。
+- `pytest tests/test_agent_memory_recall_v2.py -q`：`13 passed in 2.66s`。
+- `pytest tests/test_prompting_memory_v2.py -q`：`2 passed in 0.19s`。
+- `python -m compileall -q src`：退出码 0。
+- `pytest -q`：`642 passed in 39.93s`。
 - `git diff --check`：退出码 0；仅输出 Windows LF/CRLF 行尾转换提示。

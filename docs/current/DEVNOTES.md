@@ -821,7 +821,7 @@ Review 注意：
 - `MemoryWriter` 写入前会拒绝缺失 evidence、泛化 slug、任务摘要和 secret-like 内容；显式 `deny write_file` 仍优先。
 - manifest 默认读取 v2 顶层 `type`；旧 `metadata.type` topic 不再作为有效 topic 注入，只产生 skip warning。
 - 本地 REPL 成功 assistant turn 才触发 extraction；QQchat/external/headless turn 不自动写 long-term memory。
-- Auto memory recall v2 是独立后续项，仍未实现；当前仍只注入 `MEMORY.md` 索引和 bounded relevant-memory reminder。
+- Auto memory recall v2 已在 2026-06-30 完成代码实现和自动化回归；PowerShell/cmd.exe 原生 PTY 手工交互验收未执行、未记录。
 
 Review 注意：
 
@@ -830,4 +830,50 @@ Review 注意：
 - 不要因为写入目标是 auto memory 就绕过显式 `deny`。
 - 不要让 QQchat/external turn 自动写长期 memory；如需外部入口写 memory，必须另写 owner-only、opt-in 设计。
 - 不要把 topic memory body 常驻注入 base system prompt；正文只能走 bounded relevant-memory reminder 或模型显式 `read_file`。
-- 后续实现 recall v2 时，默认复用主 agent LLM 做 selector；如需独立 recall model，必须新增明确配置和验收。
+- recall v2 默认复用主 agent LLM 做 selector；如需独立 recall model，必须新增明确配置和验收。
+
+## 33. Auto memory recall v2 边界
+
+**状态**：代码实现和自动化回归已完成；PowerShell/cmd.exe 原生 PTY 手工交互验收未执行、未记录
+**关联**：memory 模型 / relevant memory recall / AgentRuntime safe point / tool loop
+
+2026-06-30 已完成 auto memory recall v2 代码实现和自动化回归：
+
+- `MEMORY.md` 短索引仍由 `MemoryManager.get_context_for_prompt()` 常驻注入 base prompt，topic 正文不常驻。
+- 本地 REPL user turn 才启动 relevant recall prefetch；auto memory 关闭、用户要求忽略/不使用记忆、query 为空或过短、session surfaced bytes 达 60 KiB 上限时跳过。
+- selector 是 no-tool side query：`tool_schemas=[]`，默认复用主 agent `LLMClient`，不新增 `memory_recall_model`。
+- selector 输入只包含 query、v2 manifest 候选和最近成功工具名；recent tools 只记录本地 REPL 成功工具名，最多 10 个 distinct names，不包含 args/path/command/output。
+- selector 输出只接受 manifest 中的 `.md` 文件名；编造文件、重复、路径分隔符、非法 JSON、selector 异常均 fail closed。
+- 每轮最多读取 5 个 topic；每个 topic 最多 4096 bytes 或 200 行；截断时追加 `read_file` 完整读取提示。
+- reminder 使用 point-in-time system reminder，包含 memory age，并要求涉及当前代码、路径、行号、版本、日程或状态时重新验证。
+- 安全点注入只消费当前 turn 的 prefetch；迟到 prefetch 只记录 late，不注入后续 unrelated turn。
+- 注入前再次过滤 session 已 surfaced 和本轮 touched 的 auto memory 文件。
+- `/memory` 只展示最近 recall 计数摘要，不输出 selector prompt、manifest 全量列表、工具参数、工具输出或 memory 正文。
+
+Review 注意：
+
+- 不要把 topic 正文塞回 base system prompt；`MEMORY.md` 只能作为短索引常驻。
+- 不要让 stale/late prefetch 污染下一轮用户输入；future 必须保持 turn-local。
+- 不要把 recent tools 扩展成工具参数、路径、shell command 或 output 摘要。
+- 不要让 QQchat/external/headless turn 共享本地 REPL recall state。
+- 不要把 recall failure 写入 transcript 或普通 assistant 回复；失败只能 fail closed 并保留本地 audit summary。
+
+## 34. 本地审批拒绝中断当前 turn 边界
+
+**状态**：Open，已写 spec/plan，代码未实现
+**关联**：权限审批 / tool loop / session transcript / 原生 Windows 交互
+
+2026-06-30 已完成设计和实施计划：
+
+- `docs/superpowers/specs/2026-06-30-approval-denial-interrupts-turn-design.md`
+- `docs/superpowers/plans/2026-06-30-approval-denial-interrupts-turn-plan.md`
+
+目标语义：用户在本地 REPL 审批菜单中选择 `No` 后，Xcode 应写入被拒绝工具的 assistant/tool 配对和固定中断标记，然后立即结束当前 user turn，回到输入提示符等待下一次用户输入；不应在同一 turn 中继续请求模型主动找替代方案。
+
+Review 注意：
+
+- 只把本地交互式审批 `No` 视为用户中断；显式配置 `deny`、QQchat/external `remote_approval=False`、blocked tool、unknown tool 和工具执行异常仍应作为 tool error 交给模型处理。
+- 不要把中断标记写成 `role=user`，避免污染 `/resume` session preview 和用户输入历史。
+- 中断前必须保持 OpenAI-compatible assistant/tool 配对；不能留下 orphan tool message 或缺 result 的 assistant tool call。
+- 中断后 `_run_user_turn()` 不能追加伪 assistant final text，也不能运行 after-turn success hooks 或 auto memory extraction。
+- 完成前必须补 PowerShell/cmd.exe 原生 PTY 验收，确认拒绝审批后不会继续主动思考。

@@ -1,6 +1,6 @@
 # Task 01: Trigger Gates And Recall State
 
-状态：未实现；自动化回归未执行；PowerShell/cmd.exe 原生 PTY 手工验收未执行。
+状态：代码实现和自动化回归已完成；PowerShell/cmd.exe 原生 PTY 手工验收未执行、未记录。
 
 **风险层级：** P0/P1
 
@@ -24,7 +24,7 @@
 
 ## 步骤
 
-- [ ] **Step 1: 添加 trigger gate 回归测试**
+- [x] **Step 1: 添加 trigger gate 回归测试**
 
 在 `tests/test_agent_memory_recall_v2.py` 覆盖：
 
@@ -34,14 +34,14 @@
 - `RelevantMemoryState.surfaced_bytes >= MAX_SESSION_SURFACED_BYTES` 时返回 `None`。
 - 本地 REPL 成功 turn 才可能启动 recall；external/headless 测试保持不会触发本地 recall state。
 
-- [ ] **Step 2: 添加 state 字段测试**
+- [x] **Step 2: 添加 state 字段测试**
 
 在 `tests/test_memory_recall_v2.py` 或现有 `tests/test_memory_recall.py` 覆盖：
 
 - `RelevantMemoryState.snapshot()` 复制 `surfaced_paths`、`touched_paths`、`surfaced_bytes`。
 - 新增 `late_prefetch_count` / `warnings` / `last_result` 等审计字段时，snapshot 不共享可变集合。
 
-- [ ] **Step 3: 让测试先失败**
+- [x] **Step 3: 让测试先失败**
 
 运行：
 
@@ -51,7 +51,7 @@ pytest tests/test_agent_memory_recall_v2.py tests/test_memory_recall.py -q
 
 预期：过短 query、session cap 或新增审计字段相关测试先失败。
 
-- [ ] **Step 4: 实现 trigger gates**
+- [x] **Step 4: 实现 trigger gates**
 
 在 `AgentRuntime._start_memory_prefetch()` 或 `MemoryRecallService` 的入口层实现：
 
@@ -60,11 +60,11 @@ pytest tests/test_agent_memory_recall_v2.py tests/test_memory_recall.py -q
 - 极短 query 跳过，建议规则为：去空白后长度很短，且不包含空格/中文短语上下文时跳过；具体阈值以测试固定。
 - 保留现有 `_memory_disabled_for_turn()` 中英文短语，并根据 spec 补齐“不使用记忆/忽略记忆”语义。
 
-- [ ] **Step 5: 保持 non-blocking 边界**
+- [x] **Step 5: 保持 non-blocking 边界**
 
 确认 `_start_memory_prefetch()` 只做轻量 gating、manifest scan 和 `ThreadPoolExecutor.submit()`，不得调用 `future.result()` 或等待 selector。
 
-- [ ] **Step 6: 运行聚焦测试**
+- [x] **Step 6: 运行聚焦测试**
 
 运行：
 
@@ -77,11 +77,10 @@ pytest tests/test_agent_memory_recall_v2.py tests/test_memory_recall.py -q
 - Trigger gate 测试通过。
 - 现有 v1 recall 基础行为未回归。
 
-- [ ] **Step 7: 停止 review**
+- [x] **Step 7: 停止 review**
 
 Review 检查：
 
 - 是否把 recall state 限定在本地 `AgentRuntime`。
 - 是否避免了任何 external/headless 共享 state。
 - 是否没有把“过短 query”规则写得过度激进，导致正常中文短句都不召回。
-

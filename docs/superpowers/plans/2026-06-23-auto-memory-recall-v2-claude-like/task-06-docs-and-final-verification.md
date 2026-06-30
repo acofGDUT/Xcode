@@ -1,6 +1,6 @@
 # Task 06: Docs And Final Verification
 
-状态：未实现；自动化回归未执行；PowerShell/cmd.exe 原生 PTY 手工验收未执行。
+状态：代码实现、自动化回归和文档同步已完成；PowerShell/cmd.exe 原生 PTY 手工验收未执行、未记录。
 
 **风险层级：** P1/P2
 
@@ -27,7 +27,7 @@
 
 ## 步骤
 
-- [ ] **Step 1: 更新 task 状态**
+- [x] **Step 1: 更新 task 状态**
 
 把已完成 task 顶部状态从“未实现”改为真实状态，例如：
 
@@ -37,7 +37,7 @@
 
 不要把未执行的手工验收写成已完成。
 
-- [ ] **Step 2: 更新总 plan 状态**
+- [x] **Step 2: 更新总 plan 状态**
 
 在总 plan 顶部写明真实完成度：
 
@@ -46,7 +46,7 @@
 - PowerShell/cmd.exe 原生 PTY 手工验收是否完成。
 - QQchat/external/headless 隔离是否只由自动化覆盖，还是有真实平台记录。
 
-- [ ] **Step 3: 更新 `ARCHITECTURE.md`**
+- [x] **Step 3: 更新 `ARCHITECTURE.md`**
 
 只在实现完成后追加/调整 memory 相关章节：
 
@@ -56,7 +56,7 @@
 - bounded topic read + point-in-time system reminder。
 - session surfaced/touched 去重和 local REPL state 边界。
 
-- [ ] **Step 4: 更新 `PROGRESS.md`**
+- [x] **Step 4: 更新 `PROGRESS.md`**
 
 记录真实证据：
 
@@ -66,7 +66,7 @@
 - `git diff --check` 结果。
 - 手工验收是否执行。
 
-- [ ] **Step 5: 更新 `ROADMAP.md`**
+- [x] **Step 5: 更新 `ROADMAP.md`**
 
 如果代码和自动化完成但手工验收未做：
 
@@ -75,7 +75,7 @@
 
 如果全部完成，则从近期未实现项移除，只在验收缺口表保留真实未完成部分。
 
-- [ ] **Step 6: 更新 `DEVNOTES.md`**
+- [x] **Step 6: 更新 `DEVNOTES.md`**
 
 记录仍有效 review 边界：
 
@@ -84,7 +84,7 @@
 - 不要让 recent tools 泄漏 args/path/output。
 - 不要让 QQchat/external/headless 共享本地 REPL recall state。
 
-- [ ] **Step 7: 运行最终验证**
+- [x] **Step 7: 运行最终验证**
 
 运行：
 
@@ -100,7 +100,7 @@ git diff --check
 
 将真实输出摘要写入 `PROGRESS.md`，不要预填结果。
 
-- [ ] **Step 8: 做中文文档 UTF-8 抽样验证**
+- [x] **Step 8: 做中文文档 UTF-8 抽样验证**
 
 运行类似命令抽样读取新增中文段落：
 
@@ -110,11 +110,10 @@ python -X utf8 -c "from pathlib import Path; paths=[Path('docs/current/ROADMAP.m
 
 必要时再抽样总 plan 和 task 文件标题，确认磁盘内容不是乱码。
 
-- [ ] **Step 9: 停止 final review**
+- [x] **Step 9: 停止 final review**
 
 Review 检查：
 
 - 完成结论是否都跟在证据之后。
 - ROADMAP、PROGRESS、ARCHITECTURE、DEVNOTES 是否没有状态漂移。
 - spec/plan/task checkbox 是否反映真实状态。
-

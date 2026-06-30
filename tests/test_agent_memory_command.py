@@ -61,6 +61,27 @@ class TestMemoryCommand:
         assert "User memory" in captured.out
         assert "Memory dir" in captured.out
 
+    def test_memory_prints_recent_recall_summary(self, tmp_path: Path, monkeypatch, capsys) -> None:
+        from xcode_cli.core.memory_recall import RelevantMemoryAudit, RelevantMemoryResult
+
+        agent = _make_agent(tmp_path, monkeypatch, auto_memory=True)
+        agent._last_memory_recall_result = RelevantMemoryResult(
+            audit=RelevantMemoryAudit(
+                selected_count=2,
+                surfaced_count=1,
+                skipped_reason="late",
+                warnings_count=0,
+                elapsed_ms=12,
+                late_or_consumed="late",
+            )
+        )
+
+        agent._handle_memory_command(["/memory"])
+
+        captured = capsys.readouterr()
+        flat = " ".join(captured.out.split())
+        assert "相关记忆召回: selected=2 surfaced=1 skipped=late warnings=0 elapsed_ms=12 status=late" in flat
+
     def test_memory_prints_auto_memory_off(self, tmp_path: Path, monkeypatch, capsys) -> None:
         agent = _make_agent(tmp_path, monkeypatch, auto_memory=False)
         agent._handle_memory_command(["/memory"])
