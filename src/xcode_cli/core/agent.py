@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
 import os
+from pathlib import Path
 import threading
 import time
 from dataclasses import replace
@@ -31,8 +33,18 @@ from xcode_cli.core.ui.streaming import StreamingTurnRenderer
 from xcode_cli.core.context import ContextManager
 from xcode_cli.core.dashboard import Dashboard
 from xcode_cli.core.external_turn import ExternalTurnRunner, ToolScope
+from xcode_cli.core.hooks import AfterTurnHookRunner, AfterTurnSuccessEvent
 from xcode_cli.core.llm import LLMClient, _friendly_llm_error
 from xcode_cli.core.memory import MemoryManager
+from xcode_cli.core.memory_extraction_runner import MemoryExtractionRunner
+from xcode_cli.core.memory_extraction_subagent import MemoryExtractionSubagent
+from xcode_cli.core.memory_manifest import MemoryManifestScanner
+from xcode_cli.core.memory_recall import (
+    MAX_SESSION_SURFACED_BYTES,
+    MemoryRecallService,
+    RelevantMemoryResult,
+    RelevantMemoryState,
+)
 from xcode_cli.core.planning import PlanMode, write_plan_file
 from xcode_cli.core.prompting import build_skill_listing_section, build_system_prompt
 from xcode_cli.core.project_root import resolve_project_root
@@ -102,6 +114,18 @@ class AgentRuntime:
         self._history: list[dict[str, Any]] = []
         self._session_id: str = ""
         self._current_blocked_tools: set[str] = set()
+        self.after_turn_hooks = AfterTurnHookRunner()
+        self._turn_wrote_memory = False
+        self.memory_extraction_subagent = MemoryExtractionSubagent(
+            memory=self.memory,
+            permissions=self.permissions,
+            llm=self.llm,
+        )
+        self.memory_extraction_runner = MemoryExtractionRunner(subagent=self.memory_extraction_subagent)
+        self.after_turn_hooks.register(self._run_memory_extraction_hook)
+        self.memory_recall = MemoryRecallService(llm=self.llm)
+        self._memory_recall_state = RelevantMemoryState()
+        self._memory_prefetch_executor = ThreadPoolExecutor(max_workers=1)
         self._session_auto_approve: dict[str, bool] = {"write": False, "shell": False}
         self.prompt = PromptSession(
             completer=SlashCompleter(commands=self._command_registry.visible_commands()),
@@ -248,6 +272,11 @@ class AgentRuntime:
 
                 self._run_user_turn(user_input)
         finally:
+            try:
+                self.memory_extraction_runner.shutdown(wait=False)
+            except Exception:
+                pass
+            self._memory_prefetch_executor.shutdown(wait=False, cancel_futures=True)
             self._shutdown_mcp_manager()
             self._runtime_status.delete()
 
@@ -270,6 +299,8 @@ class AgentRuntime:
         """执行一个普通 user turn：写入 session/history → 调用 LLM → 追加 assistant 响应。"""
         turn = coerce_user_turn_input(user_input)
         self._current_blocked_tools = set()
+        self._turn_wrote_memory = False
+        memory_prefetch = self._start_memory_prefetch(turn.model_content)
         message = {"role": "user", "content": turn.display_content}
         metadata = dict(turn.metadata)
         if turn.model_content != turn.display_content or metadata:
@@ -298,7 +329,10 @@ class AgentRuntime:
 
         self._runtime_status.update("busy")
         try:
-            final_text = self._run_llm_loop(history=self._history, system_prompt=system_prompt)
+            loop_kwargs: dict[str, Any] = {"history": self._history, "system_prompt": system_prompt}
+            if memory_prefetch is not None:
+                loop_kwargs["memory_prefetch"] = memory_prefetch
+            final_text = self._run_llm_loop(**loop_kwargs)
         finally:
             self._runtime_status.update("idle")
 
@@ -312,6 +346,18 @@ class AgentRuntime:
 
         self.sessions.append_message(self._session_id, {"role": "assistant", "content": final_text})
         self._history.append({"role": "assistant", "content": final_text})
+        if final_text != "No response.":
+            self.after_turn_hooks.run_after_turn_success(
+                AfterTurnSuccessEvent(
+                    session_id=self._session_id,
+                    cwd=self.cwd,
+                    user_display_content=turn.display_content,
+                    user_model_content=turn.model_content,
+                    assistant_text=final_text,
+                    recent_history=list(self._history[-12:]),
+                    wrote_memory_this_turn=self._turn_wrote_memory,
+                )
+            )
 
         if self.plan_mode.pending_approval:
             self._show_plan_and_ask_approval()
@@ -325,6 +371,42 @@ class AgentRuntime:
 
     def _handle_skill_command(self, parts: list[str]) -> None:
         self._skill_service.run(parts)
+
+    def _run_memory_extraction_hook(self, event: AfterTurnSuccessEvent) -> None:
+        try:
+            cfg = self.config_store.load()
+            self.memory_extraction_runner.submit(event, auto_memory_enabled=cfg.auto_memory)
+        except Exception:
+            pass
+
+    def _start_memory_prefetch(self, query: str) -> Future | None:
+        cfg = self.config_store.load()
+        if not cfg.auto_memory or self._memory_disabled_for_turn(query):
+            return None
+        stable, legacy = self.memory.manifest_dirs()
+        manifest = MemoryManifestScanner(stable, legacy).scan().entries
+        if not manifest:
+            return None
+        state_snapshot = self._memory_recall_state.snapshot()
+        return self._memory_prefetch_executor.submit(
+            lambda: self.memory_recall.prefetch(query, manifest, state_snapshot)
+        )
+
+    def _memory_disabled_for_turn(self, query: str) -> bool:
+        lowered = query.lower()
+        return any(
+            phrase in lowered
+            for phrase in (
+                "do not remember",
+                "don't remember",
+                "ignore memory",
+                "不要记住",
+                "别记住",
+                "不要保存到记忆",
+                "不使用记忆",
+                "忽略记忆",
+            )
+        )
 
     def _handle_qqchat_command(self, parts: list[str]) -> None:
         action = parts[1].lower() if len(parts) > 1 else "status"
@@ -851,6 +933,9 @@ class AgentRuntime:
             memory_index = self.memory.read_memory_index()
             index_entries = memory_index.count("\n") + 1 if memory_index else 0
             self.console.print(f"Memory dir: {self.memory.memory_dir_path()}")
+            legacy_dir = self.memory.legacy_memory_dir_path()
+            if legacy_dir.exists() and legacy_dir != self.memory.memory_dir_path():
+                self.console.print(f"Legacy memory dir: {legacy_dir} (read fallback)")
             self.console.print(f"Memory files: {len(memory_files)} (index: {index_entries} entries)")
             return
 
@@ -1065,6 +1150,7 @@ class AgentRuntime:
         update_runtime_stats: bool = True,
         turn_blocked_tools: set[str] | None = None,
         work_state=None,
+        memory_prefetch: Future | None = None,
     ) -> str:
         cfg = self.config_store.load()
         render_mode = cfg.response_render_mode
@@ -1072,6 +1158,7 @@ class AgentRuntime:
         transcript_session_id = self._session_id if session_id is None else session_id
         active_blocked_tools = self._current_blocked_tools if turn_blocked_tools is None else turn_blocked_tools
         active_work_state = self.work_state if work_state is None else work_state
+        active_memory_prefetch = memory_prefetch
 
         renderer = (
             StreamingTurnRenderer(
@@ -1165,6 +1252,9 @@ class AgentRuntime:
 
             try:
                 self._drain_mcp_refresh_events()
+                if active_memory_prefetch is not None and active_memory_prefetch.done():
+                    self._maybe_inject_relevant_memories(history, active_memory_prefetch)
+                    active_memory_prefetch = None
                 response = self.llm.complete(
                     system_prompt=system_prompt,
                     messages=history,
@@ -1219,6 +1309,10 @@ class AgentRuntime:
             )
             if tool_result.blocked_tools:
                 active_blocked_tools.update(tool_result.blocked_tools)
+            if tool_result.wrote_memory:
+                self._turn_wrote_memory = True
+            if tool_scope is None:
+                self._record_touched_memory_paths(response.tool_calls)
             if update_runtime_stats:
                 self._tool_call_count += tool_result.executed_count
             history.append(tool_result.assistant_message)
@@ -1235,6 +1329,68 @@ class AgentRuntime:
                         transcript_session_id,
                         {"type": "skill_invocation", **invocation},
                     )
+
+    def _maybe_inject_relevant_memories(self, history: list[dict[str, Any]], future: Future) -> None:
+        try:
+            result = future.result()
+        except Exception:
+            return
+        filtered = self._filter_relevant_memories(result)
+        reminder = filtered.render_system_reminder()
+        if not reminder:
+            return
+        history.append({"role": "system", "content": reminder})
+        self._mark_relevant_memories_surfaced(filtered)
+
+    def _filter_relevant_memories(self, result: RelevantMemoryResult) -> RelevantMemoryResult:
+        memories = []
+        for memory in result.memories:
+            resolved = str(memory.path.resolve(strict=False))
+            if resolved in self._memory_recall_state.surfaced_paths:
+                continue
+            if resolved in self._memory_recall_state.touched_paths:
+                continue
+            if self._memory_recall_state.surfaced_bytes >= MAX_SESSION_SURFACED_BYTES:
+                break
+            memories.append(memory)
+        return RelevantMemoryResult(memories=memories, warnings=result.warnings)
+
+    def _mark_relevant_memories_surfaced(self, result: RelevantMemoryResult) -> None:
+        for memory in result.memories:
+            resolved = str(memory.path.resolve(strict=False))
+            if resolved in self._memory_recall_state.surfaced_paths:
+                continue
+            self._memory_recall_state.surfaced_paths.add(resolved)
+            self._memory_recall_state.surfaced_bytes += len(memory.content.encode("utf-8", errors="replace"))
+
+    def _record_touched_memory_paths(self, tool_calls: list[Any]) -> None:
+        for tc in tool_calls:
+            if tc.name not in {"read_file", "write_file", "edit_file"}:
+                continue
+            path = tc.args.get("path")
+            if not isinstance(path, str) or not path.strip():
+                continue
+            resolved = self._resolve_auto_memory_path(path)
+            if resolved:
+                self._memory_recall_state.touched_paths.add(resolved)
+
+    def _resolve_auto_memory_path(self, path: str) -> str:
+        try:
+            candidate = Path(path).expanduser()
+            if not candidate.is_absolute():
+                candidate = Path(self.cwd) / candidate
+            target = candidate.resolve(strict=False)
+            stable, legacy = self.memory.manifest_dirs()
+            roots = [stable, legacy]
+            for root in roots:
+                if root is None:
+                    continue
+                root_resolved = root.resolve(strict=False)
+                if target.is_relative_to(root_resolved) and target.suffix.lower() == ".md":
+                    return str(target)
+        except (OSError, RuntimeError, ValueError):
+            return ""
+        return ""
 
 
 def _short_fingerprint(fingerprint: str) -> str:

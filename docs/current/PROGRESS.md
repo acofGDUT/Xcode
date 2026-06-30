@@ -2,7 +2,7 @@
 
 > 本文档记录项目如何一步步走到现在。当前实现细节见 `ARCHITECTURE.md`，未来计划见 `ROADMAP.md`，已知问题和设计取舍见 `DEVNOTES.md`。
 
-最后更新：2026-06-14
+最后更新：2026-06-24
 
 ## 1. 当前状态总览
 
@@ -34,9 +34,10 @@
 | compact v3 现场恢复 | `WorkStateTracker`、bounded restored context、checkpoint lineage metadata、v3 resume 和 external work-state isolation | 代码实现和自动化回归完成；PowerShell/cmd.exe 与 QQchat 手工验收未执行/未记录 | `2026-06-12-compact-state-restoration-plan.md` |
 | 手动 `/compact` 语义放宽 | 非空 `_history` 均尝试 checkpoint；移除消息数和摘要长度硬门槛；空摘要/summary 请求异常给出明确失败 | 代码实现和自动化回归完成；原生 PTY 手工验收未执行/未记录 | `2026-06-14-manual-compact-semantics-design.md` |
 | `dispatch_agent` 免审优化 | 本地主会话子 Agent 分派默认免审批，explicit deny/ask 与 QQchat 远程过滤保持生效 | 代码实现并通过聚焦回归 | `2026-06-11-dispatch-agent-auto-allow-design.md` / `2026-06-11-dispatch-agent-auto-allow.md` |
+| Auto memory extraction v2 | Claude-like memory-only extraction subagent、v2 topic policy、后台 single-flight runner | 代码实现和自动化回归完成；原生 PTY 手工验收未执行/未记录 | `2026-06-23-auto-memory-extraction-v2-claude-like-plan.md` |
 | Phase 5 | 生态扩展 | 冻结 | 未开始 |
 
-当前重点仍不是全面进入 Phase 5，而是补齐费用估算、QQchat 收口，以及 compact v3 现场恢复的原生 Windows/QQchat 手工验收。MCP Phase 1 已完成 stdio tools 安全接入、自动化回归和 PowerShell/cmd.exe 原生 E2E，Phase 2 已完成 stdio tools 管理面与动态刷新代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 验收；后续不得无 spec 扩展到 resources/prompts/HTTP/SSE/OAuth。核心 CLI 的 `/resume`、`/compact` Live 进度、多轮 tool call 和本地主会话 `dispatch_agent` 默认免审已完成聚焦回归；2026-06-12 compact 可靠性代码、自动化回归和 PowerShell/cmd.exe 原生 PTY `/compact` handler 验收已收口，compact v3 的 restored-context `/compact`、v3 `/resume` 和 QQchat continuation/isolation 手工验收仍未记录。
+当前重点仍不是全面进入 Phase 5，而是补齐费用估算、QQchat 收口，以及 compact v3 现场恢复的原生 Windows/QQchat 手工验收。MCP Phase 1 已完成 stdio tools 安全接入、自动化回归和 PowerShell/cmd.exe 原生 E2E，Phase 2 已完成 stdio tools 管理面与动态刷新代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 验收；后续不得无 spec 扩展到 resources/prompts/HTTP/SSE/OAuth。核心 CLI 的 `/resume`、`/compact` Live 进度、多轮 tool call、本地主会话 `dispatch_agent` 默认免审和本地 REPL auto memory extraction v2 已完成聚焦回归；compact v3 的 restored-context `/compact`、v3 `/resume` 和 QQchat continuation/isolation 手工验收仍未记录。
 
 ## 2. Phase 1：协议与工具升级
 
@@ -808,3 +809,40 @@ ARGUMENTS:
 - QQchat service 回归：`pytest tests/test_qqchat_service.py -q`：`14 passed`。
 - QQchat 邻近回归：`pytest tests/test_qqchat_service.py tests/test_qqchat_config.py tests/test_qqchat_message_client.py -q`：`23 passed`。
 - 编译检查：`python -m compileall -q src`：退出码 0。
+
+## 31. Auto memory extraction v2：2026-06-24
+
+状态：代码实现和自动化回归已完成；PowerShell/cmd.exe 原生 PTY 手工交互验收未执行、未记录。Auto memory recall v2 仍未实现。
+
+本轮实现：
+
+- 主 agent auto memory prompt 和 `MemoryWriter` 已升级到 v2 topic：frontmatter 使用 `name`、`description`、顶层 `type`，正文必须包含 `Evidence:`。
+- 新增 `memory_extraction_policy.py`，在写入前拒绝缺失 evidence、泛化 slug、任务摘要和 secret-like 内容；显式 `deny write_file` 仍优先。
+- `MemoryManifestScanner` 默认读取 v2 顶层 `type`，旧 `metadata.type` topic 会以 warning 跳过。
+- 新增 `memory_tools.py`，为 extraction subagent 提供 memory-only `read_file`、`write_file`、`edit_file`、`glob` sandbox；不暴露 shell、git、MCP、项目读、`dispatch_agent` 或 skill/user hooks。
+- 新增 `MemoryExtractionSubagent`，继承主 v2 memory prompt，注入 manifest 和 extraction user message，最多 5 个模型 turn，单次最多保存 3 个 topic。
+- 新增 `MemoryExtractionRunner`，after-turn hook 非阻塞 submit，runner single-flight，overlap 只保留 latest pending event，完成后执行 trailing run，支持 bounded shutdown。
+- `AgentRuntime` 已接入 background runner；本地 REPL 成功 turn 才提交，QQchat/external/headless turn 不触发 long-term memory extraction。
+
+逐 task review 结论：
+
+- Task 01：通过。v2 prompt、writer 和 policy guard 覆盖 evidence、legacy format、generic slug、task summary 和 secret-like 拒绝。
+- Task 02：通过。manifest scanner 默认 v2 顶层 `type`，legacy `metadata.type` 只 warning/skip。
+- Task 03：通过。memory-only sandbox 限制 read/write/edit/glob 到 auto memory scope，且不暴露高风险工具。
+- Task 04：通过。subagent loop 有 5 turn 上限、3 topic 保存上限和 manifest 去重上下文。
+- Task 05：通过。runner single-flight、latest pending、trailing run 和 shutdown 语义有回归覆盖。
+- Task 06：通过。Agent hook 非阻塞接入，本地 REPL 与 QQchat/external/headless turn 隔离。
+- Task 07：通过。文档同步和最终验证完成；原生 PTY 手工验收缺口明确保留。
+
+验证：
+
+- `pytest tests/test_prompting_memory_v2.py -q`：`2 passed in 0.33s`。
+- `pytest tests/test_memory_manifest_v2.py -q`：`4 passed in 0.23s`。
+- `pytest tests/test_memory_extraction_policy.py -q`：`5 passed in 0.20s`。
+- `pytest tests/test_memory_extraction_subagent.py -q`：`8 passed in 0.46s`。
+- `pytest tests/test_memory_extraction_runner.py -q`：`4 passed in 0.22s`。
+- `pytest tests/test_agent_memory_extraction_v2.py tests/test_agent_memory_hooks.py tests/test_agent_user_turn.py -q`：`16 passed in 2.49s`。
+- `pytest tests/test_memory_extraction.py tests/test_memory_manifest.py tests/test_memory.py -q`：`50 passed in 3.49s`。
+- `python -m compileall -q src`：退出码 0。
+- `pytest -q`：`614 passed in 32.39s`。
+- `git diff --check`：退出码 0；仅输出 Windows LF/CRLF 行尾转换提示。

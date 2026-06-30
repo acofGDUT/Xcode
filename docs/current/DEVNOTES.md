@@ -806,3 +806,28 @@ Review 注意：
 - 不要把 QQchat compact 的现场和本地 REPL 当前正在编辑的文件混在一起。
 - 不要只检查 summary 是否累计；还要检查 checkpoint parent/hash 链路是否可审计、resume 是否能拿回 restored context。
 - 后续声称本项“验收完成”前，必须补 PowerShell/cmd.exe 原生 PTY 与 QQchat 平台手工记录；自动化通过不能替代真实入口验收。
+
+## 32. Auto memory extraction v2 边界
+
+**状态**：本地 REPL 实现已完成；PowerShell/cmd.exe 原生 PTY 手工交互验收未执行、未记录
+**关联**：memory 模型 / after-turn hook / extraction subagent / relevant memory recall
+
+2026-06-24 已完成 auto memory extraction v2 代码实现和自动化回归：
+
+- after-turn hook 只提交 `MemoryExtractionRunner`，不执行用户脚本或 skill frontmatter hooks。
+- runner 是后台 single-flight 边界；overlap 时只保留 latest pending event，当前 run 完成后执行 trailing run。
+- extraction subagent 只允许 memory-scoped `read_file`、`write_file`、`edit_file` 和 `glob`；项目读取、shell、git、MCP、测试、`dispatch_agent` 和 hooks 都不暴露。
+- 新 topic 文件使用 v2 frontmatter：`name`、`description`、顶层 `type`，正文必须包含 `Evidence:`。
+- `MemoryWriter` 写入前会拒绝缺失 evidence、泛化 slug、任务摘要和 secret-like 内容；显式 `deny write_file` 仍优先。
+- manifest 默认读取 v2 顶层 `type`；旧 `metadata.type` topic 不再作为有效 topic 注入，只产生 skip warning。
+- 本地 REPL 成功 assistant turn 才触发 extraction；QQchat/external/headless turn 不自动写 long-term memory。
+- Auto memory recall v2 是独立后续项，仍未实现；当前仍只注入 `MEMORY.md` 索引和 bounded relevant-memory reminder。
+
+Review 注意：
+
+- 不要把 after-turn hook 扩展成通用用户脚本或 skill hook 执行器。
+- 不要新增公开 memory CRUD tool；当前仍是文件驱动 memory 模型。
+- 不要因为写入目标是 auto memory 就绕过显式 `deny`。
+- 不要让 QQchat/external turn 自动写长期 memory；如需外部入口写 memory，必须另写 owner-only、opt-in 设计。
+- 不要把 topic memory body 常驻注入 base system prompt；正文只能走 bounded relevant-memory reminder 或模型显式 `read_file`。
+- 后续实现 recall v2 时，默认复用主 agent LLM 做 selector；如需独立 recall model，必须新增明确配置和验收。

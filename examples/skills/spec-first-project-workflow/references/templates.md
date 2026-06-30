@@ -60,33 +60,62 @@
 
 ## 总 Plan 模板
 
+跨模块或多阶段功能优先使用“调度页式总 plan”。总 plan 是项目级调度页，不承载逐步代码施工细节；细节放到独立 task 文件。
+
 ```markdown
 # <Feature> Implementation Plan
 
-> Parent spec: <relative link>
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-## Goal
+Status: Plan and task files are drafted. Code implementation, automated regression, and manual/E2E acceptance have not been executed.
 
-本计划交付的结果。
+**Goal:** <one-sentence result>
 
-## Constraints
+**Architecture:** <2-3 sentences about approach and major boundaries>
 
-- 不可破坏的行为。
-- 禁止引入的依赖或模式。
+**Tech Stack:** <runtime, test tools, existing modules, forbidden dependencies if important>
 
-## Task Order
+---
 
-1. Task 1: 建立核心状态或契约
-2. Task 2: 接入用户/API 流程
-3. Task 3: 失败恢复与兼容
-4. Task 4: E2E、文档和最终验证
+## Evidence and References
 
-## Cross-task Validation
+- Parent spec: [<spec-file>](../specs/<spec-file>).
+- Prior plan/spec/incident/transcript links when relevant.
+- Current docs entry, such as `docs/current/ROADMAP.md`.
 
-- 项目级 build/test/lint/typecheck。
-- 集成、E2E、性能或人工验收。
-- 文档一致性和 Git diff 检查。
+## File Structure
+
+| File | Action | Responsibility |
+|------|--------|----------------|
+| `src/path/module.py` | Modify | Short responsibility |
+| `tests/test_feature.py` | Create | Behavior regression |
+
+## Task Files
+
+- [Task 1: <behavior title>](<feature>/task-01-<topic>.md)
+- [Task 2: <behavior title>](<feature>/task-02-<topic>.md)
+- [Task N: Docs and final verification](<feature>/task-NN-docs-final-verification.md)
+
+## Execution Constraints
+
+- Execute one task at a time; stop for review after each task.
+- State non-goals and forbidden dependencies/patterns.
+- State safety, permission, migration, UI, or external-entry constraints.
+
+## Recommended Final Verification
+
+```text
+<focused commands>
+<full commands>
+git diff --check
 ```
+
+Manual/E2E acceptance records required:
+
+- <entry point and acceptance evidence>
+```
+
+Small changes may still use a single concise plan without task files. For multi-task work, keep task files detailed with TDD steps, code snippets, exact commands, expected failure/pass behavior, and review checkpoints.
 
 ## Task 模板
 

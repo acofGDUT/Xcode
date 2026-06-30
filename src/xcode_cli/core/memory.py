@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from xcode_cli.core.config import Config
+from xcode_cli.core.project_key import project_key_for_path
 from xcode_cli.paths import ensure_xcode_home
 
 
@@ -12,9 +13,12 @@ class MemoryManager:
         self.xcode_home = ensure_xcode_home()
         self.user_memory = self.xcode_home / "XCODE.md"
         self.project_memory = self.cwd / "XCODE.md"
-        project_name = self.cwd.name or "default"
-        self.memory_dir = self.xcode_home / "projects" / project_name / "memory"
+        project_key = project_key_for_path(str(self.cwd))
+        legacy_project_name = self.cwd.name or "default"
+        self.memory_dir = self.xcode_home / "projects" / project_key / "memory"
+        self.legacy_memory_dir = self.xcode_home / "projects" / legacy_project_name / "memory"
         self.memory_index = self.memory_dir / "MEMORY.md"
+        self.legacy_memory_index = self.legacy_memory_dir / "MEMORY.md"
         self.memory_dir.mkdir(parents=True, exist_ok=True)
 
     def user_memory_path(self) -> Path:
@@ -54,10 +58,23 @@ class MemoryManager:
     def memory_index_path(self) -> Path:
         return self.memory_index
 
+    def legacy_memory_dir_path(self) -> Path:
+        return self.legacy_memory_dir
+
+    def legacy_memory_index_path(self) -> Path:
+        return self.legacy_memory_index
+
+    def manifest_dirs(self) -> tuple[Path, Path | None]:
+        legacy = self.legacy_memory_dir if self.legacy_memory_dir != self.memory_dir else None
+        return self.memory_dir, legacy
+
     def read_memory_index(self) -> str:
-        if not self.memory_index.exists():
+        path = self.memory_index
+        if not path.exists() and self.legacy_memory_index.exists():
+            path = self.legacy_memory_index
+        if not path.exists():
             return ""
-        return self.memory_index.read_text(encoding="utf-8").strip()
+        return path.read_text(encoding="utf-8").strip()
 
     def get_context_for_prompt(self, cfg: Config) -> str:
         blocks: list[str] = []
@@ -119,4 +136,3 @@ class MemoryManager:
         if len(text) <= max_chars:
             return text
         return text[:max_chars].rstrip() + "\n...[truncated]"
-

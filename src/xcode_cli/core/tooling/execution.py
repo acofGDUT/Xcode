@@ -17,6 +17,7 @@ class ToolExecutionResult:
     executed_count: int
     blocked_tools: list[str] = field(default_factory=list)
     skill_invocations: list[dict[str, object]] = field(default_factory=list)
+    wrote_memory: bool = False
 
 
 class ToolCallExecutor:
@@ -57,6 +58,7 @@ class ToolCallExecutor:
         newly_blocked_tools: list[str] = []
         skill_invocations: list[dict[str, object]] = []
         skill_barrier_active = False
+        wrote_memory = False
 
         if render_output:
             self._render_tool_calls(response.tool_calls)
@@ -173,6 +175,8 @@ class ToolCallExecutor:
                 output = ToolOutput(content="Error: user interrupted the operation")
 
             executed_count += 1
+            if is_memory_write and not output.content.startswith("Error:"):
+                wrote_memory = True
             if render_output:
                 if output.content.startswith("Error:"):
                     self.console.print(f"  [bold red]{output.content}[/bold red]")
@@ -220,6 +224,7 @@ class ToolCallExecutor:
             executed_count=executed_count,
             blocked_tools=newly_blocked_tools,
             skill_invocations=skill_invocations,
+            wrote_memory=wrote_memory,
         )
 
     def _render_tool_calls(self, tool_calls: list[Any]) -> None:

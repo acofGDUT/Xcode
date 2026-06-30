@@ -2,15 +2,16 @@
 
 > 本文只记录未来计划、未完成能力和仍需验收的风险。已完成实现请看 `PROGRESS.md`，当前实现细节请看 `ARCHITECTURE.md`，坑点和设计取舍请看 `DEVNOTES.md`。
 
-最后更新：2026-06-15
+最后更新：2026-06-24
 
 ## 1. 当前焦点
 
-Xcode v0.1.0 的核心 CLI、session/resume、compact v2 可靠性、Skills Phase 1-2、MCP Phase 1/2 和本地主会话 `dispatch_agent` 免审已经收口。compact v3 现场恢复代码和自动化回归已落地，但原生 Windows/QQchat 手工验收仍未收口。后续 roadmap 不再展开已完成项，只保留仍需实现或仍需真实平台验收的工作。
+Xcode v0.1.0 的核心 CLI、session/resume、compact v2 可靠性、Skills Phase 1-2、MCP Phase 1/2、本地主会话 `dispatch_agent` 免审和 auto memory extraction v2 已经收口。compact v3 现场恢复代码和自动化回归已落地，但原生 Windows/QQchat 手工验收仍未收口。后续 roadmap 不再展开已完成项，只保留仍需实现或仍需真实平台验收的工作。
 
 近期优先级：
 
 - 完成 `/QQchat init`、`/QQchat reload` 和真实 QQ 单聊/群聊平台验收。
+- 按 `docs/superpowers/plans/2026-06-23-auto-memory-recall-v2-claude-like-plan.md` 推进 relevant memory recall v2。
 - 为 `/context` 增加费用估算，而不只是 token 统计。
 - 补齐 compact v3 现场恢复与 `xcode.v3` checkpoint 链路的 PowerShell/cmd.exe 原生 PTY 和 QQchat 平台手工验收。
 - 继续收口工具调用展开、task 面板持久展示、对话回退/分叉和渲染模式。
@@ -24,6 +25,7 @@ Phase 5 生态扩展整体继续冻结。MCP 目前只完成 stdio tools 的安�
 | P0 | QQchat 原生 Windows/真实平台 E2E | 未完成 | 在 PowerShell/cmd.exe 验证 `/QQchat start|stop|status` 与 prompt_toolkit 共存，并完成真实 QQ 单聊和群聊 @ 回复验收 |
 | P0/P1 | compact 现场恢复与 checkpoint 链路 | 代码实现和自动化回归已完成；手工验收未执行/未记录 | 在 PowerShell/cmd.exe 验证 restored-context `/compact` 和 v3 `/resume`，并完成 QQchat same-conversation continuation/isolation 平台验收 |
 | P1 | `/QQchat init` + reload | 已写 spec/plan，未实现 | 实现配置骨架初始化和热部署 reload，项目级配置不能写 secret |
+| P1 | Auto memory recall v2 | 已写 spec/plan，未实现 | 从 `docs/superpowers/plans/2026-06-23-auto-memory-recall-v2-claude-like/task-01-trigger-gates-and-state.md` 开始实现 Claude-like `MEMORY.md` 短索引 + relevant topic prefetch |
 | P1 | `/context` cost 估算 | 未实现 | 在 token 统计外展示近似费用，未知模型显示 `unknown` |
 | P1 | 工具调用 UI 展开 | 默认摘要已完成，展开未做 | 设计并验证 `Ctrl+O` 展开摘要，重点看原生 Windows 热键兼容 |
 | P1 | task 面板持久展示 | 瞬时面板已完成，持久展示未做 | 评估 bottom toolbar 或固定区域，并验证与 Rich Live、streaming、审批菜单共存 |
@@ -41,6 +43,7 @@ Phase 5 生态扩展整体继续冻结。MCP 目前只完成 stdio tools 的安�
 | `/context` cost | 未实现 | 当前只有 token 估算，没有价格估算 |
 | compact 现场恢复与 checkpoint 链路 | 代码实现和自动化回归已完成；手工验收未执行/未记录 | `xcode.v3` restored context、checkpoint lineage metadata、v3 resume 和 external work-state isolation 已有自动化覆盖；仍需原生 Windows/QQchat 手工验收 |
 | `/QQchat init` + reload | 已写 spec/plan，未实现 | 需要实现配置文件骨架初始化和热部署 reload；项目级 config 不能写 secret |
+| Auto memory recall v2 | 已写 spec/plan，未实现 | 依赖 extraction v2 topic frontmatter、manifest 和质量规则；默认复用主 agent LLM 做 selector，不固定 Sonnet；实施入口见 `docs/superpowers/plans/2026-06-23-auto-memory-recall-v2-claude-like-plan.md` |
 | `/QQchat` 最终验证 | 未完成 | 需要记录真实 QQ/Windows 验收；自动化通过不能替代真实平台接入完成 |
 | QQ 真实平台验收 | 未完成 | 单聊被动回复、群聊 @ 被动回复、危险工具真实 QQ 场景均未验收 |
 | 工具调用 `Ctrl+O` 展开 | 未实现 | 默认摘要已完成；展开热键和原生 Windows 热键验收仍未做 |

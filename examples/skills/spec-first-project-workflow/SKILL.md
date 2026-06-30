@@ -93,6 +93,8 @@ docs/superpowers/plans/YYYY-MM-DD-<feature>/task-01-<topic>.md
 
 小型改动可以只有一个 plan；跨模块或多阶段功能使用总 plan 加 task 文件。
 
+对跨模块或多阶段功能，推荐采用“调度页式总 plan + 独立 task 文件”的结构：总 plan 是项目级调度页，保留状态、证据/引用、文件职责表、task 文件列表、全局执行约束和最终验证矩阵；具体 TDD 步骤、代码片段、命令和 review 检查点放到各 task 文件。这样总 plan 便于 review 和收口，task 文件便于 Coding Agent 独立执行。
+
 Plan 回答：
 
 - 以什么顺序实现。

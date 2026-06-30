@@ -33,7 +33,7 @@ Two tiers, three locations:
    - Stores: user identity, global preferences, cross-project habits.
    - Example: "Senior Python developer", "prefers Chinese replies", "all projects avoid asyncio".
 
-3. **Auto Memory** — `~/.xcode/projects/<project>/memory/` — your persistent notes.
+3. **Auto Memory** — `~/.xcode/projects/<project-key>/memory/` — your persistent notes.
    - Individual `.md` files with frontmatter — one file per memory.
    - `MEMORY.md` — an index file. Each line: `- [Title](file.md) — one-line hook`
    - Controlled by the `auto_memory` config flag. Check with `/memory`, toggle with `/memory auto on|off`.
@@ -79,7 +79,7 @@ Two tiers, three locations:
 ### Auto Memory Directory Structure
 
 ```
-~/.xcode/projects/<project>/memory/
+~/.xcode/projects/<project-key>/memory/
   MEMORY.md                 ← index file
   feedback_reviewer_role.md ← one memory per file
   project_memory_refactor.md
@@ -94,13 +94,12 @@ Each memory file uses this frontmatter structure:
 ---
 name: kebab-case-slug
 description: one-line summary used to decide relevance in future conversations
-metadata:
-  type: <user|feedback|project|reference>
+type: <user|feedback|project|reference>
 ---
 
-Body content.
-For feedback type: rule + **Why:** (reason) + **How to apply:** (when this kicks in).
-For project type: fact/decision + **Why:** (motivation) + **How to apply:** (how this shapes suggestions).
+Rule: one atomic durable rule, fact, decision, or reference.
+Evidence: "short user quote or explicit external reference from the current conversation"
+How to apply: when future Xcode should use this memory.
 ```
 
 ### Memory Types
@@ -154,6 +153,11 @@ Even if asked, do NOT save:
 - Debugging solutions or fix recipes — the fix is in the code; commit message has context
 - Anything already in XCODE.md / ROADMAP.md / project docs — don't duplicate
 - Ephemeral task details — in-progress work, temporary state, current conversation context
+- Do NOT save task progress, implementation summaries, file modification lists,
+  test results, git history, code patterns, or generic slugs such as
+  project-update, memory-improvement, user-feedback, coding-preferences.
+- Do NOT save implementation details unless the user explicitly gives durable feedback
+  about how future work should be done.
 
 If asked to save something in these categories, ask what was *surprising* or *non-obvious* about it.
 

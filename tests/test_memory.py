@@ -53,7 +53,9 @@ class TestMemoryPaths:
 
     def test_memory_dir_path(self, tmp_path: Path, monkeypatch) -> None:
         mm = _make_memory_manager(tmp_path, monkeypatch, project_name="demo")
-        expected = mm.xcode_home / "projects" / "demo" / "memory"
+        from xcode_cli.core.session import SessionStore
+
+        expected = mm.xcode_home / "projects" / SessionStore(cwd=str(mm.cwd)).project_key() / "memory"
         assert mm.memory_dir_path() == expected
 
     def test_memory_index_path(self, tmp_path: Path, monkeypatch) -> None:
@@ -64,6 +66,47 @@ class TestMemoryPaths:
         mm = _make_memory_manager(tmp_path, monkeypatch)
         assert mm.memory_dir_path().exists()
         assert mm.memory_dir_path().is_dir()
+
+
+def test_auto_memory_path_uses_stable_project_key(tmp_path: Path, monkeypatch) -> None:
+    import xcode_cli.paths
+    from xcode_cli.core.memory import MemoryManager
+    from xcode_cli.core.session import SessionStore
+
+    xcode_dir = tmp_path / ".xcode"
+    monkeypatch.setattr(xcode_cli.paths, "XCODE_DIR", xcode_dir, raising=True)
+    first = tmp_path / "a" / "repo"
+    second = tmp_path / "b" / "repo"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+
+    first_memory = MemoryManager(cwd=str(first))
+    second_memory = MemoryManager(cwd=str(second))
+
+    assert first_memory.memory_dir_path().parent.name == SessionStore(cwd=str(first)).project_key()
+    assert second_memory.memory_dir_path().parent.name == SessionStore(cwd=str(second)).project_key()
+    assert first_memory.memory_dir_path() != second_memory.memory_dir_path()
+
+
+def test_legacy_auto_memory_index_is_read_when_stable_index_missing(tmp_path: Path, monkeypatch) -> None:
+    import xcode_cli.paths
+    from xcode_cli.core.memory import MemoryManager
+    from xcode_cli.core.config import Config
+
+    xcode_dir = tmp_path / ".xcode"
+    monkeypatch.setattr(xcode_cli.paths, "XCODE_DIR", xcode_dir, raising=True)
+    project_dir = tmp_path / "repo"
+    project_dir.mkdir()
+
+    memory = MemoryManager(cwd=str(project_dir))
+    legacy_dir = memory.legacy_memory_dir_path()
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "MEMORY.md").write_text("- [Old](old.md) - old hook\n", encoding="utf-8")
+
+    context = memory.get_context_for_prompt(Config(auto_memory=True))
+
+    assert "Old" in context
+    assert memory.memory_index_path().exists() is False
 
 
 # ---------------------------------------------------------------------------

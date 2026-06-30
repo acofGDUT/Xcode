@@ -451,7 +451,7 @@ Memory 自管理权限也在 tool execution 层处理：`write_file` / `edit_fil
 
 ## 9. Memory 模型
 
-当前 memory 是文件驱动模型，不提供专用 `memory_save/list/get/delete` 工具。
+当前 memory 是文件驱动模型，不提供专用 `memory_save/list/get/delete` 工具。手动或模型主动写入仍通过普通文件工具完成；本地 REPL 成功 assistant turn 后，还会把 after-turn event 非阻塞提交给受限的 auto memory extraction v2 后台 runner。
 
 ```mermaid
 flowchart LR
@@ -466,9 +466,15 @@ flowchart LR
     MemoryManager --> Context["prompt memory context"]
     Paths --> PromptBuild["build_system_prompt"]
     Context --> PromptBuild
+
+    Turn["successful local REPL turn"] --> Runner["MemoryExtractionRunner<br/>single-flight background"]
+    Runner --> Extractor["MemoryExtractionSubagent<br/>memory-only tools"]
+    Extractor --> Writer["MemoryWriter<br/>v2 policy guard"]
+    Writer --> AutoFile
+    Writer --> Index
 ```
 
-`MemoryManager` 只负责路径管理、读取 Project/User XCODE.md、读取 auto memory index，以及向 prompt 注入 memory context。是否记、记什么、写到哪里，由 `BASE_SYSTEM_PROMPT` 规则驱动 LLM 使用文件工具完成。
+`MemoryManager` 只负责路径管理、读取 Project/User XCODE.md、读取 auto memory index，以及向 prompt 注入 memory context。普通写入由 `BASE_SYSTEM_PROMPT` 规则驱动 LLM 使用文件工具完成；自动沉淀由 `MemoryExtractionRunner` 在后台调度 `MemoryExtractionSubagent` 完成，主回复、`_history` 和 session transcript 不等待也不受 extraction 失败影响。
 
 注入顺序在 `build_system_prompt()` 中固定：
 
@@ -477,7 +483,9 @@ flowchart LR
 3. 当前项目 resolved memory paths
 4. Project XCODE.md、User XCODE.md、Auto Memory Index
 
-Auto memory 当前只自动注入 `MEMORY.md` 索引，详细内容需要 Agent 再用 `read_file` 读取具体 memory 文件。
+Auto memory 当前只自动注入 `MEMORY.md` 索引，详细内容需要 Agent 再用 `read_file` 读取具体 memory 文件。新写入 topic 使用 v2 frontmatter（`name`、`description`、顶层 `type`）并要求正文包含 `Evidence:`；旧 `metadata.type` topic 由 manifest scanner 以 warning 跳过。
+
+Extraction subagent 只暴露 memory-scoped `read_file`、`write_file`、`edit_file` 和 `glob`，不暴露 shell、git、MCP、项目任意读取、`dispatch_agent` 或 hooks。单次 extraction 最多 5 个模型 turn、最多保存 3 个 topic；runner 同一时间只执行一个 extraction，overlap 时保留 latest pending event 并在当前 run 后触发 trailing run。QQchat、external 和 headless turn 不触发 long-term auto memory extraction。
 
 ## 10. Context 和压缩模型
 
@@ -808,7 +816,17 @@ MCP Phase 1/2 自动化和原生 Windows 验收均已完成。Phase 1 的 PowerS
 | `src/xcode_cli/core/session.py` | transcript、history.jsonl 和 session listing |
 | `src/xcode_cli/core/session_resume.py` | transcript 到可恢复 history 的构造，以及 `/resume` 最近对话 replay 数据提取 |
 | `src/xcode_cli/core/runtime_status.py` | 当前活跃进程状态文件和 stale status 清理 |
-| `src/xcode_cli/core/memory.py` | memory 路径、读取和 prompt context 注入 |
+| `src/xcode_cli/core/project_key.py` | session 与 auto memory 共享的 stable project key 生成 |
+| `src/xcode_cli/core/memory.py` | memory 路径、legacy fallback、读取和 prompt context 注入 |
+| `src/xcode_cli/core/memory_manifest.py` | auto memory topic bounded manifest 扫描；v2 顶层 `type` 生效，legacy `metadata.type` 只产生 skip warning |
+| `src/xcode_cli/core/memory_writer.py` | memory-scoped v2 writer、slug 清洗、secret redaction、policy guard 和 `MEMORY.md` 相对链接索引更新 |
+| `src/xcode_cli/core/memory_extraction_policy.py` | v2 memory topic guard：`Evidence:`、泛化 slug、任务摘要和 secret-like 内容检查 |
+| `src/xcode_cli/core/memory_tools.py` | extraction subagent 的 memory-only read/write/edit/glob sandbox |
+| `src/xcode_cli/core/memory_extraction_subagent.py` | 受限 memory extraction subagent prompt、tool loop、manifest 注入和保存审计 |
+| `src/xcode_cli/core/memory_extraction_runner.py` | after-turn 后台 single-flight runner、latest pending、trailing run、timeout 和 shutdown |
+| `src/xcode_cli/core/memory_extraction.py` | 兼容 facade，委托 v2 `MemoryExtractionSubagent` |
+| `src/xcode_cli/core/memory_recall.py` | relevant auto memory selector、bounded topic 读取、session/touched 去重和 reminder 渲染 |
+| `src/xcode_cli/core/hooks.py` | 代码注册的内部 after-turn hook runner 和事件模型 |
 | `src/xcode_cli/core/turn.py` | `UserTurnInput`，区分 UI 展示内容、模型可见内容和当前 turn metadata |
 | `src/xcode_cli/core/prompting.py` | base system prompt 和 memory 规则 |
 | `src/xcode_cli/skills/loader.py` | 从 `.xcode/skills/*/SKILL.md` 加载项目 skill |

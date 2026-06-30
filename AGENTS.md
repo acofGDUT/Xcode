@@ -93,11 +93,13 @@ Review 输出应以问题为主，按严重程度排序，并提供文件和行�
 - 始终使用中文和用户沟通。
 - 项目文档默认使用中文编写；代码标识符、命令、外部 API 名称和原文引用可以保留英文。
 - Python >= 3.10。
-- 不引入 asyncio。
+- 允许受控引入 `asyncio`：不得把 `AgentRuntime`、`LLMClient.complete()`、`ToolCallExecutor.execute()` 或 REPL 主循环无 spec 地全局 async 化；后台子系统可以使用专用 event loop/thread 并向主流程暴露同步 wrapper、timeout、取消和 shutdown 语义。
 - 工具异常必须全部捕获，不能让 Agent 循环因为单个工具失败而崩溃。
 - 新工具必须注册 `is_read_only` 字段。
 - 文件编辑优先使用 edit-style 更新，避免整文件覆盖。
 - 用户界面字符串使用中文，代码标识符使用英文。
+- 修改中文文档时，禁止使用 PowerShell here-string、`Set-Content`、`Out-File`、重定向或文本管道写入中文内容，避免 Windows 代码页把 UTF-8 文档写成乱码；优先使用 `apply_patch`。如必须脚本处理文件，脚本源码尽量保持 ASCII，并显式用 `encoding="utf-8"` 读写。
+- 中文文档改动后必须做磁盘级编码抽样验证：用 Python 按 UTF-8 读取关键行，确认标题和新增中文段落真实正常；不能只相信 PowerShell 控制台显示或 `git diff --check`。
 - 流式输出 Rich 文本时注意 `markup=False`，避免 LLM token 中的 `[xxx]` 触发 markup 解析。
 - prompt_toolkit 在 Git Bash 等非原生 Windows 控制台下可能存在限制，关键交互应在 cmd.exe 或 PowerShell 中验收。
 
@@ -127,6 +129,7 @@ Review 输出应以问题为主，按严重程度排序，并提供文件和行�
 近期应优先推动：
 
 - 完成 `/QQchat init`、`/QQchat reload`、真实 QQ 单聊/群聊平台验收，以及 `/QQchat start|stop|status` 的原生 Windows 交互验收。
+- Auto memory extraction v2 已完成代码实现和自动化回归；下一步按 `docs/superpowers/specs/2026-06-23-auto-memory-recall-v2-claude-like-design.md` 升级 relevant memory recall v2。
 - 按 `docs/superpowers/plans/2026-06-12-compact-state-restoration-plan.md` 推进 compact 现场恢复和 `xcode.v3` checkpoint 链路。
 - 为 `/context` 增加 cost 估算，而不只是 token 统计。
 - 收口工具调用 `Ctrl+O` 展开、task 面板持久展示、可替换区域式 streaming 和对话 fork/rollback 设计。

@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from xcode_cli.core.project_key import project_key_for_path
 from xcode_cli.paths import ensure_xcode_home
 
 
@@ -33,11 +34,7 @@ class SessionStore:
         return str(uuid.uuid4())
 
     def project_key(self) -> str:
-        path = os.path.abspath(self._cwd)
-        key = path.replace(":", "").replace("\\", "--").replace("/", "--")
-        while key.startswith("-"):
-            key = key[1:]
-        return key
+        return project_key_for_path(self._cwd)
 
     @property
     def sessions_dir(self) -> Path:
