@@ -21,13 +21,13 @@
 
 ## Steps
 
-- [ ] 写失败测试：旧 `test_llm_loop_continues_after_user_denies_tool` 改成拒绝后第二次 LLM 不应被调用。
-- [ ] 写失败测试：assistant response 同时包含两个 ask tool calls 时，第一个被用户拒绝后第二个不执行。
-- [ ] 写失败测试：显式 `deny` 仍进入下一轮 LLM，证明没有扩大中断范围。
-- [ ] 扩展 `ToolExecutionResult`，增加 `interrupted_by_user` 和可选 `interruption_message` 字段。
-- [ ] 在 approval `"no"` 分支设置中断状态，写入拒绝 tool result，并停止处理 sibling tool calls。
-- [ ] 确保拒绝 tool result 文本包含 `User denied tool: <tool>`，并可作为失败显示。
-- [ ] 运行聚焦验证。
+- [x] 写失败测试：旧 `test_llm_loop_continues_after_user_denies_tool` 改成拒绝后第二次 LLM 不应被调用。
+- [x] 写失败测试：assistant response 同时包含两个 ask tool calls 时，第一个被用户拒绝后第二个不执行。
+- [x] 写失败测试：显式 `deny` 仍进入下一轮 LLM，证明没有扩大中断范围。
+- [x] 扩展 `ToolExecutionResult`，增加 `interrupted_by_user` 和可选 `interruption_message` 字段。
+- [x] 在 approval `"no"` 分支设置中断状态，写入拒绝 tool result，并停止处理 sibling tool calls。
+- [x] 确保拒绝 tool result 文本包含 `User denied tool: <tool>`，并可作为失败显示。
+- [x] 运行聚焦验证。
 
 ## Acceptance
 

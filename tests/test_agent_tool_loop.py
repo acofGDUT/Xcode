@@ -133,7 +133,7 @@ def test_llm_loop_allows_more_than_ten_tool_rounds(tmp_path: Path, monkeypatch) 
     assert len([m for m in history if m.get("role") == "tool"]) == 12
 
 
-def test_llm_loop_continues_after_user_denies_tool(tmp_path: Path, monkeypatch) -> None:
+def test_llm_loop_interrupts_after_user_denies_tool(tmp_path: Path, monkeypatch) -> None:
     agent = _make_agent(tmp_path, monkeypatch)
     calls = [0]
 
@@ -144,11 +144,7 @@ def test_llm_loop_continues_after_user_denies_tool(tmp_path: Path, monkeypatch) 
                 content="",
                 tool_calls=[ToolCall(id="call_shell", name="run_shell", args={"command": "echo hi"})],
             )
-        assert any(
-            m.get("role") == "tool" and "User denied tool" in str(m.get("content", ""))
-            for m in kwargs["messages"]
-        )
-        return LLMResponse(content="I will continue without shell.", tool_calls=[])
+        raise AssertionError("LLM should not be called again after local user denial")
 
     agent.llm.complete = fake_complete
     monkeypatch.setattr(agent.approval, "prompt", lambda tool_name, scope: "no")
@@ -156,8 +152,123 @@ def test_llm_loop_continues_after_user_denies_tool(tmp_path: Path, monkeypatch) 
     history: list[dict] = []
     result = agent._run_llm_loop(history, "system")
 
-    assert result == "I will continue without shell."
+    assert result == "User denied tool: run_shell"
+    assert calls[0] == 1
+    assert [m["role"] for m in history] == ["assistant", "tool", "system"]
+    assert history[1]["content"] == "User denied tool: run_shell"
+    assert history[2]["content"] == "[Request interrupted by user for tool use]"
+
+
+def test_user_denial_skips_later_sibling_tool_calls(tmp_path: Path, monkeypatch) -> None:
+    agent = _make_agent(tmp_path, monkeypatch)
+    calls = [0]
+    executed: list[str] = []
+
+    def fake_complete(**kwargs):
+        calls[0] += 1
+        if calls[0] == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(id="call_shell", name="run_shell", args={"command": "echo hi"}),
+                    ToolCall(id="call_read", name="read_file", args={"path": "README.md"}),
+                ],
+            )
+        raise AssertionError("LLM should not be called again after local user denial")
+
+    agent.llm.complete = fake_complete
+    agent.tools._tools["run_shell"].execute = lambda **kwargs: executed.append("run_shell") or "shell result"
+    agent.tools._tools["read_file"].execute = lambda **kwargs: executed.append("read_file") or "read result"
+    monkeypatch.setattr(agent.approval, "prompt", lambda tool_name, scope: "no")
+
+    history: list[dict] = []
+    result = agent._run_llm_loop(history, "system")
+
+    assert result == "User denied tool: run_shell"
+    assert calls[0] == 1
+    assert executed == []
+    assert [m["role"] for m in history] == ["assistant", "tool", "system"]
+    assert history[0]["tool_calls"] == [
+        {
+            "id": "call_shell",
+            "type": "function",
+            "function": {"name": "run_shell", "arguments": json.dumps({"command": "echo hi"})},
+        }
+    ]
+    assert history[1]["tool_call_id"] == "call_shell"
+    assert history[2]["content"] == "[Request interrupted by user for tool use]"
+
+
+def test_explicit_permission_deny_still_allows_model_followup(tmp_path: Path, monkeypatch) -> None:
+    agent = _make_agent(tmp_path, monkeypatch)
+    settings_dir = Path(agent.cwd) / ".xcode"
+    settings_dir.mkdir(exist_ok=True)
+    (settings_dir / "settings.json").write_text(
+        json.dumps({"permissions": {"run_shell": "deny"}}),
+        encoding="utf-8",
+    )
+    calls = [0]
+    executed: list[str] = []
+
+    def fake_complete(**kwargs):
+        calls[0] += 1
+        if calls[0] == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(id="call_shell", name="run_shell", args={"command": "echo hi"})],
+            )
+        assert any(
+            m.get("role") == "tool" and "Permission denied for tool: run_shell" in str(m.get("content", ""))
+            for m in kwargs["messages"]
+        )
+        return LLMResponse(content="continued after config deny", tool_calls=[])
+
+    agent.llm.complete = fake_complete
+    agent.tools._tools["run_shell"].execute = lambda **kwargs: executed.append("run_shell") or "shell result"
+
+    history: list[dict] = []
+    result = agent._run_llm_loop(history, "system")
+
+    assert result == "continued after config deny"
     assert calls[0] == 2
+    assert executed == []
+
+
+def test_next_user_turn_sees_prior_tool_denial_and_interruption_marker(
+    tmp_path: Path, monkeypatch
+) -> None:
+    agent = _make_agent(tmp_path, monkeypatch)
+    monkeypatch.setattr(agent, "_start_memory_prefetch", lambda query: None)
+    monkeypatch.setattr(agent.approval, "prompt", lambda tool_name, scope: "no")
+    calls = [0]
+    second_turn_messages: list[dict] = []
+
+    def fake_complete(**kwargs):
+        calls[0] += 1
+        if calls[0] == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(id="call_shell", name="run_shell", args={"command": "echo hi"})],
+            )
+        second_turn_messages.extend(kwargs["messages"])
+        return LLMResponse(content="second turn answer", tool_calls=[])
+
+    agent.llm.complete = fake_complete
+
+    agent._run_user_turn("please run this")
+    agent._run_user_turn("now continue")
+
+    assert calls[0] == 2
+    assert [message["role"] for message in second_turn_messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "system",
+        "user",
+    ]
+    assert second_turn_messages[2]["content"] == "User denied tool: run_shell"
+    assert second_turn_messages[3]["content"] == "[Request interrupted by user for tool use]"
+    assert second_turn_messages[4]["content"] == "now continue"
 
 
 def test_llm_loop_empty_response_returns_readable_fallback(tmp_path: Path, monkeypatch) -> None:
@@ -476,7 +587,7 @@ def test_dispatch_agent_explicit_deny_blocks_execution(tmp_path: Path, monkeypat
     assert executed == []
 
 
-def test_dispatch_agent_explicit_ask_still_prompts(tmp_path: Path, monkeypatch) -> None:
+def test_dispatch_agent_explicit_ask_prompts_and_user_denial_interrupts(tmp_path: Path, monkeypatch) -> None:
     agent = _make_agent(tmp_path, monkeypatch)
     settings_dir = Path(agent.cwd) / ".xcode"
     settings_dir.mkdir(exist_ok=True)
@@ -500,12 +611,7 @@ def test_dispatch_agent_explicit_ask_still_prompts(tmp_path: Path, monkeypatch) 
                     )
                 ],
             )
-        assert any(
-            m.get("role") == "tool"
-            and "User denied tool: dispatch_agent" in str(m.get("content", ""))
-            for m in kwargs["messages"]
-        )
-        return LLMResponse(content="continued after prompt", tool_calls=[])
+        raise AssertionError("LLM should not be called again after local user denial")
 
     agent.llm.complete = fake_complete
     monkeypatch.setattr(
@@ -516,5 +622,6 @@ def test_dispatch_agent_explicit_ask_still_prompts(tmp_path: Path, monkeypatch) 
 
     result = agent._run_llm_loop([], "system")
 
-    assert result == "continued after prompt"
+    assert result == "User denied tool: dispatch_agent"
     assert approvals == ["dispatch_agent:dispatch_agent"]
+    assert calls[0] == 1

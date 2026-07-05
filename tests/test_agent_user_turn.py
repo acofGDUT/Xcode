@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from xcode_cli.core.commands.slash import INIT_PROMPT
+from xcode_cli.core.llm import LLMResponse, ToolCall
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +127,42 @@ class TestRunUserTurn:
 
         assert len(agent._history) == 1
         assert agent._history[0] == {"role": "user", "content": "hello"}
+
+    def test_user_turn_does_not_append_fake_assistant_after_tool_denial(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        agent = _make_agent(tmp_path, monkeypatch)
+        monkeypatch.setattr(agent, "_start_memory_prefetch", lambda query: None)
+        monkeypatch.setattr(agent.approval, "prompt", lambda tool_name, scope: "no")
+        agent.llm.complete = lambda **kwargs: LLMResponse(
+            content="",
+            tool_calls=[ToolCall(id="call_shell", name="run_shell", args={"command": "echo hi"})],
+        )
+
+        agent._run_user_turn("please run this")
+
+        assert [message["role"] for message in agent._history] == ["user", "assistant", "tool", "system"]
+        assert agent._history[2]["content"] == "User denied tool: run_shell"
+        assert agent._history[3]["content"] == "[Request interrupted by user for tool use]"
+        saved = agent.sessions.load_history(agent._session_id)
+        assert [message["role"] for message in saved] == ["user", "assistant", "tool", "system"]
+
+    def test_user_turn_does_not_run_after_turn_hooks_after_tool_denial(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        agent = _make_agent(tmp_path, monkeypatch)
+        events = []
+        agent.after_turn_hooks.register(lambda event: events.append(event))
+        monkeypatch.setattr(agent, "_start_memory_prefetch", lambda query: None)
+        monkeypatch.setattr(agent.approval, "prompt", lambda tool_name, scope: "no")
+        agent.llm.complete = lambda **kwargs: LLMResponse(
+            content="",
+            tool_calls=[ToolCall(id="call_shell", name="run_shell", args={"command": "echo hi"})],
+        )
+
+        agent._run_user_turn("please run this")
+
+        assert events == []
 
 
 def test_missing_qq_config_does_not_break_normal_turn(tmp_path: Path, monkeypatch) -> None:

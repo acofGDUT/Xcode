@@ -19,6 +19,8 @@ class ToolExecutionResult:
     skill_invocations: list[dict[str, object]] = field(default_factory=list)
     wrote_memory: bool = False
     successful_tool_names: list[str] = field(default_factory=list)
+    interrupted_by_user: bool = False
+    interruption_message: str | None = None
 
 
 class ToolCallExecutor:
@@ -61,6 +63,8 @@ class ToolCallExecutor:
         skill_barrier_active = False
         wrote_memory = False
         successful_tool_names: list[str] = []
+        interrupted_by_user = False
+        interruption_message: str | None = None
 
         if render_output:
             self._render_tool_calls(response.tool_calls)
@@ -165,7 +169,9 @@ class ToolCallExecutor:
                     if render_output:
                         self.console.print(f"  [dim]{result}[/dim]")
                     executed_calls.append((tc, ToolOutput(content=result)))
-                    continue
+                    interrupted_by_user = True
+                    interruption_message = result
+                    break
                 if approval_result == "yes_all" and scope:
                     self.auto_approve[scope] = True
 
@@ -230,6 +236,8 @@ class ToolCallExecutor:
             skill_invocations=skill_invocations,
             wrote_memory=wrote_memory,
             successful_tool_names=successful_tool_names,
+            interrupted_by_user=interrupted_by_user,
+            interruption_message=interruption_message,
         )
 
     def _render_tool_calls(self, tool_calls: list[Any]) -> None:

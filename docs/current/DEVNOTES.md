@@ -299,7 +299,7 @@ Review 注意：
 当前收口：
 
 - `_run_llm_loop()` 已改为 `while True`，不再有固定 10 轮上限。
-- 已补多轮 tool call、用户拒绝后继续、空响应 fallback、`buffer_then_render` 最终渲染等回归测试。
+- 已补多轮 tool call、审批拒绝中断当前 turn、explicit `deny` 继续模型 follow-up、空响应 fallback、`buffer_then_render` 最终渲染等回归测试。
 - 当前重点回归已覆盖 `40 passed`。
 
 剩余风险：
@@ -834,7 +834,7 @@ Review 注意：
 
 ## 33. Auto memory recall v2 边界
 
-**状态**：代码实现和自动化回归已完成；PowerShell/cmd.exe 原生 PTY 手工交互验收未执行、未记录
+**状态**：代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 交互验收已完成
 **关联**：memory 模型 / relevant memory recall / AgentRuntime safe point / tool loop
 
 2026-06-30 已完成 auto memory recall v2 代码实现和自动化回归：
@@ -860,15 +860,24 @@ Review 注意：
 
 ## 34. 本地审批拒绝中断当前 turn 边界
 
-**状态**：Open，已写 spec/plan，代码未实现
+**状态**：代码实现和自动化回归已完成；PowerShell/cmd.exe 原生 PTY 手工交互验收未执行、未记录
 **关联**：权限审批 / tool loop / session transcript / 原生 Windows 交互
 
-2026-06-30 已完成设计和实施计划：
+2026-06-30 已完成设计、实施计划、代码实现和自动化回归：
 
 - `docs/superpowers/specs/2026-06-30-approval-denial-interrupts-turn-design.md`
 - `docs/superpowers/plans/2026-06-30-approval-denial-interrupts-turn-plan.md`
 
 目标语义：用户在本地 REPL 审批菜单中选择 `No` 后，Xcode 应写入被拒绝工具的 assistant/tool 配对和固定中断标记，然后立即结束当前 user turn，回到输入提示符等待下一次用户输入；不应在同一 turn 中继续请求模型主动找替代方案。
+
+当前实现：
+
+- `ToolCallExecutor` 只在本地 `ToolApprovalController.prompt()` 返回 `No` 时设置 `interrupted_by_user=True`，并停止同 batch 后续 sibling tool calls。
+- `AgentRuntime` 通过内部 `LLMLoopResult` 区分“返回给旧 wrapper 的文本”和“是否追加 assistant final text”；`_run_llm_loop(...) -> str` 对外兼容。
+- transcript 中保留 assistant tool_calls、tool denial 和 system marker `[Request interrupted by user for tool use]`；marker 不是 `role=user`，不会污染 `last_user_input`。
+- `_run_user_turn()` 在中断结果上不运行 after-turn success hooks，因此不会触发 auto memory extraction。
+- 聚焦回归覆盖 `tests/test_agent_tool_loop.py`、`tests/test_agent_user_turn.py`、`tests/test_session.py` 和 `tests/test_session_resume.py`；全量 `pytest -q` 为 `649 passed`。
+- 原生 PTY 验收使用 WinPTY 驱动 PowerShell/cmd.exe：PowerShell 和 cmd.exe 均覆盖拒绝 `run_shell` 后不执行工具、不在下一条用户输入前继续请求模型；PowerShell 覆盖 `write_file` diff preview 可见、拒绝后文件未修改。
 
 Review 注意：
 
@@ -876,4 +885,4 @@ Review 注意：
 - 不要把中断标记写成 `role=user`，避免污染 `/resume` session preview 和用户输入历史。
 - 中断前必须保持 OpenAI-compatible assistant/tool 配对；不能留下 orphan tool message 或缺 result 的 assistant tool call。
 - 中断后 `_run_user_turn()` 不能追加伪 assistant final text，也不能运行 after-turn success hooks 或 auto memory extraction。
-- 完成前必须补 PowerShell/cmd.exe 原生 PTY 验收，确认拒绝审批后不会继续主动思考。
+- 后续修改审批 UI 或 tool loop 时，必须保留 PowerShell/cmd.exe 原生 PTY 回归，确认拒绝审批后不会继续主动思考，并覆盖 `run_shell` 与 `write_file` / `edit_file` diff preview 场景。

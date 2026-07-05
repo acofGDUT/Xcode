@@ -224,6 +224,35 @@ class TestListSessions:
         sessions = store.list_sessions()
         assert sessions[0].last_user_input == "q2"
 
+    def test_interruption_marker_does_not_replace_last_user_input(self, tmp_path: Path, monkeypatch) -> None:
+        store = _make_store(tmp_path, monkeypatch)
+        sid = store.new_session_id()
+        store.append_message(sid, {"role": "user", "content": "please run this"})
+        store.append_message(sid, {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_shell",
+                    "type": "function",
+                    "function": {"name": "run_shell", "arguments": "{\"command\": \"echo hi\"}"},
+                }
+            ],
+        })
+        store.append_message(sid, {
+            "role": "tool",
+            "tool_call_id": "call_shell",
+            "content": "User denied tool: run_shell",
+        })
+        store.append_message(sid, {
+            "role": "system",
+            "content": "[Request interrupted by user for tool use]",
+        })
+
+        sessions = store.list_sessions()
+
+        assert sessions[0].last_user_input == "please run this"
+
     def test_has_checkpoint_true(self, tmp_path: Path, monkeypatch) -> None:
         store = _make_store(tmp_path, monkeypatch)
         sid = store.new_session_id()

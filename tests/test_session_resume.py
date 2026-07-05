@@ -394,6 +394,45 @@ class TestToolPairProtection:
                 )
                 assert matching, f"No matching assistant for tool {tm['tool_call_id']}"
 
+    def test_resume_preserves_tool_denial_interruption_pair(self, tmp_path: Path, monkeypatch) -> None:
+        store = _make_store(tmp_path, monkeypatch)
+        sid = store.new_session_id()
+        _write_messages(store, sid, [
+            {"role": "user", "content": "please run this"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_shell",
+                        "type": "function",
+                        "function": {"name": "run_shell", "arguments": "{\"command\": \"echo hi\"}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_shell",
+                "content": "User denied tool: run_shell",
+            },
+            {"role": "system", "content": "[Request interrupted by user for tool use]"},
+            {"role": "user", "content": "now continue"},
+        ])
+
+        ctx = ContextManager(max_tokens=128000)
+        result = SessionResumeBuilder(ctx, token_budget=100000).build(store.transcript_path(sid))
+
+        assert [message["role"] for message in result.history] == [
+            "user",
+            "assistant",
+            "tool",
+            "system",
+            "user",
+        ]
+        assert result.history[1]["tool_calls"][0]["id"] == "call_shell"
+        assert result.history[2]["tool_call_id"] == "call_shell"
+        assert result.history[3]["content"] == "[Request interrupted by user for tool use]"
+
     def test_malformed_tool_call_is_not_restored(self, tmp_path: Path, monkeypatch) -> None:
         store = _make_store(tmp_path, monkeypatch)
         sid = store.new_session_id()

@@ -23,18 +23,18 @@
 
 ## Steps
 
-- [ ] 运行聚焦自动化回归。
-- [ ] 运行 `python -m compileall -q src`。
-- [ ] 运行全量 `pytest -q`。
-- [ ] 运行 `git diff --check`。
-- [ ] PowerShell 原生 PTY 验收：拒绝 `run_shell` 后立即回到输入提示符，无模型继续回答。
-- [ ] cmd.exe 原生 PTY 验收：同上。
-- [ ] PowerShell 或 cmd.exe 验收：拒绝 `write_file` / `edit_file`，diff preview 可见，文件未修改。
-- [ ] 更新 `ARCHITECTURE.md` 当前机制。
-- [ ] 更新 `PROGRESS.md` 实现和验证证据。
-- [ ] 更新 `ROADMAP.md`，移除或改写待实现项。
-- [ ] 更新 `DEVNOTES.md`，保留仍有效的 review 边界。
-- [ ] 用 Python 按 UTF-8 读取 spec/plan/current docs 关键中文行，确认无乱码。
+- [x] 运行聚焦自动化回归。
+- [x] 运行 `python -m compileall -q src`。
+- [x] 运行全量 `pytest -q`。
+- [x] 运行 `git diff --check`。
+- [x] PowerShell 原生 PTY 验收：拒绝 `run_shell` 后立即回到输入提示符，无模型继续回答。
+- [x] cmd.exe 原生 PTY 验收：同上。
+- [x] PowerShell 或 cmd.exe 验收：拒绝 `write_file` / `edit_file`，diff preview 可见，文件未修改。
+- [x] 更新 `ARCHITECTURE.md` 当前机制。
+- [x] 更新 `PROGRESS.md` 实现和验证证据。
+- [x] 更新 `ROADMAP.md`，移除或改写待实现项。
+- [x] 更新 `DEVNOTES.md`，保留仍有效的 review 边界。
+- [x] 用 Python 按 UTF-8 读取 spec/plan/current docs 关键中文行，确认无乱码。
 
 ## Acceptance
 

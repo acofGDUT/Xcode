@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import threading
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 from prompt_toolkit import PromptSession
@@ -74,6 +74,16 @@ from xcode_cli.skills.catalog import SkillCatalog
 from xcode_cli.skills.invocation import SkillInvocationService
 from xcode_cli.skills.listing import SkillListingFormatter
 from xcode_cli.skills.loader import SkillLoader
+
+
+USER_TOOL_DENIAL_INTERRUPTION_MARKER = "[Request interrupted by user for tool use]"
+
+
+@dataclass(frozen=True)
+class LLMLoopResult:
+    text: str
+    append_assistant: bool = True
+    interrupted_by_user: bool = False
 
 
 class AgentRuntime:
@@ -335,7 +345,11 @@ class AgentRuntime:
             loop_kwargs: dict[str, Any] = {"history": self._history, "system_prompt": system_prompt}
             if memory_prefetch is not None:
                 loop_kwargs["memory_prefetch"] = memory_prefetch
+            self._last_llm_loop_result = None
             final_text = self._run_llm_loop(**loop_kwargs)
+            loop_result = getattr(self, "_last_llm_loop_result", None)
+            if not isinstance(loop_result, LLMLoopResult) or loop_result.text != final_text:
+                loop_result = LLMLoopResult(text=final_text)
         finally:
             self._runtime_status.update("idle")
 
@@ -345,6 +359,9 @@ class AgentRuntime:
 
         if is_llm_error or is_missing_key or is_missing_pkg:
             self.console.print(f"[bold red]{final_text}[/bold red]")
+            return
+
+        if not loop_result.append_assistant:
             return
 
         self.sessions.append_message(self._session_id, {"role": "assistant", "content": final_text})
@@ -1181,6 +1198,32 @@ class AgentRuntime:
         work_state=None,
         memory_prefetch: Future | None = None,
     ) -> str:
+        result = self._run_llm_loop_result(
+            history=history,
+            system_prompt=system_prompt,
+            tool_scope=tool_scope,
+            session_id=session_id,
+            render_output=render_output,
+            update_runtime_stats=update_runtime_stats,
+            turn_blocked_tools=turn_blocked_tools,
+            work_state=work_state,
+            memory_prefetch=memory_prefetch,
+        )
+        self._last_llm_loop_result = result
+        return result.text
+
+    def _run_llm_loop_result(
+        self,
+        history: list[dict[str, Any]],
+        system_prompt: str,
+        tool_scope: ToolScope | None = None,
+        session_id: str | None = None,
+        render_output: bool = True,
+        update_runtime_stats: bool = True,
+        turn_blocked_tools: set[str] | None = None,
+        work_state=None,
+        memory_prefetch: Future | None = None,
+    ) -> LLMLoopResult:
         cfg = self.config_store.load()
         render_mode = cfg.response_render_mode
         assistant_turn_started = False
@@ -1298,11 +1341,11 @@ class AgentRuntime:
                 stop_thinking()
                 if render_output:
                     self.console.print("[dim]Interrupted.[/dim]")
-                return "Interrupted."
+                return LLMLoopResult(text="Interrupted.")
             except Exception as exc:
                 stop_thinking()
                 friendly = _friendly_llm_error(exc)
-                return f"[v0] LLM request failed: {friendly}"
+                return LLMLoopResult(text=f"[v0] LLM request failed: {friendly}")
             finally:
                 stop_thinking()
             if update_runtime_stats:
@@ -1336,8 +1379,8 @@ class AgentRuntime:
                         if render_mode == "buffer_then_render":
                             self._print_assistant_bubble(final_text)
                 if not final_text:
-                    return "No response."
-                return final_text
+                    return LLMLoopResult(text="No response.")
+                return LLMLoopResult(text=final_text)
 
             tool_result = self.tool_executor.execute(
                 response,
@@ -1369,6 +1412,16 @@ class AgentRuntime:
                         transcript_session_id,
                         {"type": "skill_invocation", **invocation},
                     )
+            if tool_result.interrupted_by_user:
+                marker_message = {"role": "system", "content": USER_TOOL_DENIAL_INTERRUPTION_MARKER}
+                history.append(marker_message)
+                if transcript_session_id:
+                    self.sessions.append_message(transcript_session_id, marker_message)
+                return LLMLoopResult(
+                    text=tool_result.interruption_message or "User denied tool use.",
+                    append_assistant=False,
+                    interrupted_by_user=True,
+                )
 
     def _maybe_inject_relevant_memories(self, history: list[dict[str, Any]], future: Future) -> None:
         try:

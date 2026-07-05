@@ -118,14 +118,19 @@ sequenceDiagram
     else 有 tool_calls
         R->>T: ToolCallExecutor.execute(response)
         T-->>R: assistant tool_calls + tool results
-        R->>L: 带 assistant tool_calls + tool result 继续循环
+        alt 本地审批菜单选择 No
+            R->>S: append(assistant tool_calls + tool denial + system interruption marker)
+            R-->>R: 结束当前 user turn，不追加 assistant final text
+        else 普通工具结果或非交互拒绝
+            R->>L: 带 assistant tool_calls + tool result 继续循环
+        end
     end
     R->>S: append(assistant / tool messages)
 ```
 
 当前真正参与 LLM 推理的对话状态是运行时内存里的 `self._history`。`SessionStore` 负责 append-only transcript，`SessionResumeBuilder` 负责从 transcript 构造可恢复 history。普通输入、`/init` 展开的 prompt command、project skill prompt command、以及后续可能出现的外部入口都应复用 `_run_user_turn()`，避免出现第二条 user turn 路径。
 
-`_run_llm_loop()` 使用持续循环推进 assistant tool calls 和 tool results，不依赖固定轮数上限。2026-06-10 的原生 PowerShell/cmd.exe E2E 已确认多轮 tool call 可以持续推进，工具摘要和终端渲染状态不会让循环提前结束。
+`_run_llm_loop()` 对外仍保持返回 `str`，内部通过 `LLMLoopResult` 表达是否应由 `_run_user_turn()` 追加 assistant final text。普通工具结果会继续进入下一轮 LLM；本地审批菜单选择 `No` 时，执行层返回 `interrupted_by_user=True`，runtime 写入合法 assistant/tool 配对和固定 system marker 后结束当前 turn。2026-06-10 的原生 PowerShell/cmd.exe E2E 已确认多轮 tool call 可以持续推进，工具摘要和终端渲染状态不会让循环提前结束。
 
 ## 5. Slash Command 流程
 
@@ -428,6 +433,8 @@ Yes, for this conversation
 
 支持方向键上下选择 + Enter，也保留 `y/n/a` 快捷键。非 TTY fallback 才退回单行 `input()`。
 
+本地 REPL 中选择 `No` 是用户中断语义，不等同于配置拒绝。`ToolCallExecutor` 会写入 `"User denied tool: <tool>"` 的 tool result，停止同 batch 后续 sibling tool calls，并把 `interrupted_by_user` 返回给 runtime。`AgentRuntime` 随后把 assistant/tool 配对写入 `_history` 和 transcript，再追加固定 system marker `[Request interrupted by user for tool use]`，当前 turn 直接结束；`_run_user_turn()` 不追加伪 assistant final text，也不运行 after-turn success hooks。显式 `deny`、外部入口 `remote_approval=False`、blocked tool、unknown tool 和工具执行异常仍按普通 tool error 进入下一轮模型。
+
 Memory 自管理权限也在 tool execution 层处理：`write_file` / `edit_file` 命中 `MemoryManager.is_memory_write_target()` 的 resolved memory 路径时跳过用户审批，但显式 `deny` 仍优先生效，普通项目文件仍走原有审批流程。
 
 ## 8.1 输出渲染模型
@@ -539,6 +546,7 @@ transcript 是 JSONL，每行是一个 event。当前主要 event：
 {"type":"message","role":"user","content":"...","ts":"..."}
 {"type":"message","role":"assistant","content":"...","tool_calls":[...],"ts":"..."}
 {"type":"message","role":"tool","tool_call_id":"call_123","content":"...","ts":"..."}
+{"type":"message","role":"system","content":"[Request interrupted by user for tool use]","ts":"..."}
 {"type":"message","role":"system","content":"Compact boundary: earlier conversation has been summarized below. Do not treat omitted tool results as pending tool calls.","ts":"..."}
 {"type":"message","role":"system","content":"Conversation summary checkpoint:\n...","ts":"..."}
 {"type":"compaction_checkpoint","summary":"...","summary_format":"xcode.v3","checkpoint_id":"ckpt_000001_...","parent_checkpoint_id":null,"checkpoint_index":1,"summary_hash":"sha256:...","previous_summary_hash":"","restored_context_hash":"sha256:...","restored_context_sections":["active_file","recent_files"],"source_message_count":120,"protected_tail_messages":8,"micro_compacted_tool_results":1,"rejected_summary":false,"ts":"..."}
@@ -595,6 +603,7 @@ summary 请求使用 `LLMClient.complete(tool_schemas=[])` 的 no-tool 路径；
 - 对 `summary_format=xcode.v3` checkpoint，恢复时会重建 compact boundary + checkpoint summary，并保留 checkpoint event 后的 restored-context message 与后续 message events；旧 `xcode.v1/v2` checkpoint 继续按 summary + checkpoint 后消息恢复。
 - 无 checkpoint 时，只恢复 token budget 内的 recent tail。
 - 裁剪时保护 assistant `tool_calls` 和 tool result pair，避免恢复出非法 OpenAI-compatible message 顺序。
+- 本地审批拒绝中断 marker 是 `role=system`，不会替换 `SessionStore.list_sessions()` 的 `last_user_input`；resume 会保留其前面的 assistant/tool 拒绝配对，避免恢复出 orphan tool message。
 - skill invocation 的 transcript user event 保留 `/skill-name args` 展示文本，`metadata.model_content` 保留展开后的 hidden/model prompt；恢复 `_history` 时优先使用 `metadata.model_content`。
 - 恢复成功后，`ResumeCommandService` 会额外渲染 `Recent conversation since checkpoint:`，展示最新 checkpoint 后的 user/assistant 对话；无 checkpoint 时展示 transcript 内 user/assistant 对话。
 - 最近对话 replay 只用于终端 UI，不参与 LLM `_history`，也不写回 transcript。它使用 transcript display content，因此不会把 skill invocation 的 `metadata.model_content` hidden prompt 显示给用户；assistant tool_call-only 中间消息、tool result、system summary 和 audit event 都会跳过。

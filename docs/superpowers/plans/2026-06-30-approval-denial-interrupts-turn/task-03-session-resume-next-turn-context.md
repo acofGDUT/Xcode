@@ -22,12 +22,12 @@
 
 ## Steps
 
-- [ ] 写失败测试：拒绝中断后，下一次 user turn 的 LLM request 能看到 tool denial、system interruption marker 和新 user message。
-- [ ] 写失败测试：`SessionStore.list_sessions()` 的 `last_user_input` 仍是用户真实输入，不是中断 marker。
-- [ ] 写失败测试：`SessionResumeBuilder` 恢复 interrupted transcript 后，不产生 orphan tool message 或缺 result 的 assistant tool call。
-- [ ] 如果现有 `SessionResumeBuilder` 已天然通过，只保留测试证明；不要为了形式改实现。
-- [ ] 如果 `sanitize_model_messages()` 会裁掉中断 marker 或配对，按最小范围修复。
-- [ ] 运行聚焦验证。
+- [x] 写失败测试：拒绝中断后，下一次 user turn 的 LLM request 能看到 tool denial、system interruption marker 和新 user message。
+- [x] 写失败测试：`SessionStore.list_sessions()` 的 `last_user_input` 仍是用户真实输入，不是中断 marker。
+- [x] 写失败测试：`SessionResumeBuilder` 恢复 interrupted transcript 后，不产生 orphan tool message 或缺 result 的 assistant tool call。
+- [x] 如果现有 `SessionResumeBuilder` 已天然通过，只保留测试证明；不要为了形式改实现。
+- [x] 如果 `sanitize_model_messages()` 会裁掉中断 marker 或配对，按最小范围修复。
+- [x] 运行聚焦验证。
 
 ## Acceptance
 

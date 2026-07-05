@@ -22,15 +22,15 @@
 
 ## Steps
 
-- [ ] 写失败测试：`_run_user_turn()` 遇到审批 No 后，session transcript 没有额外 assistant final text。
-- [ ] 写失败测试：中断 turn 不调用 after-turn success hooks。
-- [ ] 引入 `LLMLoopResult` 或等价结构，表达 `text`、`append_assistant`、`interrupted_by_user`。
-- [ ] 推荐新增 `_run_llm_loop_result(...) -> LLMLoopResult` 承载真实逻辑，让旧 `_run_llm_loop(...) -> str` 调用它并返回 `.text`。
-- [ ] 在 tool execution 后，先 append assistant/tool messages，再检测 `interrupted_by_user`。
-- [ ] 追加固定 system marker：`[Request interrupted by user for tool use]`。
-- [ ] 返回 `append_assistant=False` 的 loop result，停止 while，不再请求 LLM。
-- [ ] 修改 `_run_user_turn()` 使用结构化结果；`append_assistant=False` 时直接结束本 turn。
-- [ ] 运行聚焦验证。
+- [x] 写失败测试：`_run_user_turn()` 遇到审批 No 后，session transcript 没有额外 assistant final text。
+- [x] 写失败测试：中断 turn 不调用 after-turn success hooks。
+- [x] 引入 `LLMLoopResult` 或等价结构，表达 `text`、`append_assistant`、`interrupted_by_user`。
+- [x] 推荐新增 `_run_llm_loop_result(...) -> LLMLoopResult` 承载真实逻辑，让旧 `_run_llm_loop(...) -> str` 调用它并返回 `.text`。
+- [x] 在 tool execution 后，先 append assistant/tool messages，再检测 `interrupted_by_user`。
+- [x] 追加固定 system marker：`[Request interrupted by user for tool use]`。
+- [x] 返回 `append_assistant=False` 的 loop result，停止 while，不再请求 LLM。
+- [x] 修改 `_run_user_turn()` 使用结构化结果；`append_assistant=False` 时直接结束本 turn。
+- [x] 运行聚焦验证。
 
 ## Acceptance
 

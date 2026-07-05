@@ -6,12 +6,11 @@
 
 ## 1. 当前焦点
 
-Xcode v0.1.0 的核心 CLI、session/resume、compact v2 可靠性、Skills Phase 1-2、MCP Phase 1/2、本地主会话 `dispatch_agent` 免审和 auto memory extraction v2 已经收口。compact v3 现场恢复代码和自动化回归已落地，但原生 Windows/QQchat 手工验收仍未收口。后续 roadmap 不再展开已完成项，只保留仍需实现或仍需真实平台验收的工作。
+Xcode v0.1.0 的核心 CLI、session/resume、compact v2 可靠性、Skills Phase 1-2、MCP Phase 1/2、本地主会话 `dispatch_agent` 免审、auto memory extraction v2 和本地审批拒绝中断当前 turn 已经收口。compact v3 现场恢复和 auto memory recall v2 的代码与自动化回归已落地，但原生 Windows/QQchat 手工验收仍未收口。后续 roadmap 不再展开已完成项，只保留仍需实现或仍需真实平台验收的工作。
 
 近期优先级：
 
 - 完成 `/QQchat init`、`/QQchat reload` 和真实 QQ 单聊/群聊平台验收。
-- 按 `docs/superpowers/plans/2026-06-30-approval-denial-interrupts-turn-plan.md` 实现本地审批拒绝后中断当前 turn，等待用户下一次输入。
 - 补齐 relevant memory recall v2 的 PowerShell/cmd.exe 原生 PTY 手工交互验收记录。
 - 为 `/context` 增加费用估算，而不只是 token 统计。
 - 补齐 compact v3 现场恢复与 `xcode.v3` checkpoint 链路的 PowerShell/cmd.exe 原生 PTY 和 QQchat 平台手工验收。
@@ -24,7 +23,6 @@ Phase 5 生态扩展整体继续冻结。MCP 目前只完成 stdio tools 的安�
 | 优先级 | 能力 | 状态 | 下一步 |
 |--------|------|------|--------|
 | P0 | QQchat 原生 Windows/真实平台 E2E | 未完成 | 在 PowerShell/cmd.exe 验证 `/QQchat start|stop|status` 与 prompt_toolkit 共存，并完成真实 QQ 单聊和群聊 @ 回复验收 |
-| P0 | 本地审批拒绝中断当前 turn | 已写 spec/plan，待实现 | 从 `docs/superpowers/plans/2026-06-30-approval-denial-interrupts-turn/task-01-distinguish-interactive-approval-denial.md` 开始，实现审批 `No` 后写入拒绝记录并停止本轮 LLM loop |
 | P0/P1 | compact 现场恢复与 checkpoint 链路 | 代码实现和自动化回归已完成；手工验收未执行/未记录 | 在 PowerShell/cmd.exe 验证 restored-context `/compact` 和 v3 `/resume`，并完成 QQchat same-conversation continuation/isolation 平台验收 |
 | P1 | `/QQchat init` + reload | 已写 spec/plan，未实现 | 实现配置骨架初始化和热部署 reload，项目级配置不能写 secret |
 | P1 | Auto memory recall v2 手工验收 | 代码实现和自动化回归已完成；手工验收未执行/未记录 | 在 PowerShell/cmd.exe 验证 non-blocking prefetch、安全点注入、late 丢弃和 memory 目录 bounded read；QQchat/external/headless 隔离目前只有自动化覆盖 |
@@ -42,7 +40,6 @@ Phase 5 生态扩展整体继续冻结。MCP 目前只完成 stdio tools 的安�
 | 项目 | 状态 | 说明 |
 |------|------|------|
 | CLI `--resume` / `--continue` | 延后 | 当前只做交互内 `/resume`，CLI 恢复入口后续如有明确需求再设计 |
-| 本地审批拒绝中断当前 turn | 已写 spec/plan，待实现 | 用户在本地 REPL 审批菜单选择 `No` 后应立即停止当前 turn，保留 assistant/tool 拒绝记录和中断标记，等待下一次用户输入；设计见 `docs/superpowers/specs/2026-06-30-approval-denial-interrupts-turn-design.md`，实施入口见 `docs/superpowers/plans/2026-06-30-approval-denial-interrupts-turn-plan.md` |
 | `/context` cost | 未实现 | 当前只有 token 估算，没有价格估算 |
 | compact 现场恢复与 checkpoint 链路 | 代码实现和自动化回归已完成；手工验收未执行/未记录 | `xcode.v3` restored context、checkpoint lineage metadata、v3 resume 和 external work-state isolation 已有自动化覆盖；仍需原生 Windows/QQchat 手工验收 |
 | `/QQchat init` + reload | 已写 spec/plan，未实现 | 需要实现配置文件骨架初始化和热部署 reload；项目级 config 不能写 secret |

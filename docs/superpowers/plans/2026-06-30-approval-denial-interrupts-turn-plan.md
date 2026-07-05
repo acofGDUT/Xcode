@@ -2,7 +2,7 @@
 
 > **给 Coding Agent：** REQUIRED SUB-SKILL: 使用 `superpowers:test-driven-development` 执行每个 P0 行为改动；如遇到现有测试或实现与本文冲突，先停下记录差异，不要把“拒绝后继续”旧语义保留下来。建议按 task 文件逐个实现和 review。
 
-状态：spec/plan 已写完；代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 交互验收均未执行。
+状态：代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 交互验收已完成。
 日期：2026-06-30
 
 **Goal:** 用户在本地 REPL 拒绝工具审批后，当前 turn 立即中断并等待下一次用户输入，同时保留拒绝记录供同 session 后续请求使用。

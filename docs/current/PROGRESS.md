@@ -36,9 +36,10 @@
 | `dispatch_agent` 免审优化 | 本地主会话子 Agent 分派默认免审批，explicit deny/ask 与 QQchat 远程过滤保持生效 | 代码实现并通过聚焦回归 | `2026-06-11-dispatch-agent-auto-allow-design.md` / `2026-06-11-dispatch-agent-auto-allow.md` |
 | Auto memory extraction v2 | Claude-like memory-only extraction subagent、v2 topic policy、后台 single-flight runner | 代码实现和自动化回归完成；原生 PTY 手工验收未执行/未记录 | `2026-06-23-auto-memory-extraction-v2-claude-like-plan.md` |
 | Auto memory recall v2 | Claude-like `MEMORY.md` 短索引 + relevant topic prefetch、bounded reminder、安全点注入 | 代码实现和自动化回归完成；PowerShell/cmd.exe 原生 PTY 手工验收未执行/未记录 | `2026-06-23-auto-memory-recall-v2-claude-like-plan.md` |
+| 本地审批拒绝中断当前 turn | 本地审批 `No` 后停止当前 turn、保留拒绝配对和 system marker | 代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 验收完成 | `2026-06-30-approval-denial-interrupts-turn-plan.md` |
 | Phase 5 | 生态扩展 | 冻结 | 未开始 |
 
-当前重点仍不是全面进入 Phase 5，而是补齐费用估算、QQchat 收口，以及 compact v3 现场恢复和 auto memory recall v2 的原生 Windows/QQchat 手工验收。MCP Phase 1 已完成 stdio tools 安全接入、自动化回归和 PowerShell/cmd.exe 原生 E2E，Phase 2 已完成 stdio tools 管理面与动态刷新代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 验收；后续不得无 spec 扩展到 resources/prompts/HTTP/SSE/OAuth。核心 CLI 的 `/resume`、`/compact` Live 进度、多轮 tool call、本地主会话 `dispatch_agent` 默认免审、本地 REPL auto memory extraction v2 和 auto memory recall v2 已完成聚焦回归；compact v3 的 restored-context `/compact`、v3 `/resume`、recall v2 原生 PTY 和 QQchat continuation/isolation 手工验收仍未记录。
+当前重点仍不是全面进入 Phase 5，而是补齐费用估算、QQchat 收口，以及 compact v3 现场恢复和 auto memory recall v2 的原生 Windows/QQchat 手工验收。MCP Phase 1 已完成 stdio tools 安全接入、自动化回归和 PowerShell/cmd.exe 原生 E2E，Phase 2 已完成 stdio tools 管理面与动态刷新代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 验收；后续不得无 spec 扩展到 resources/prompts/HTTP/SSE/OAuth。核心 CLI 的 `/resume`、`/compact` Live 进度、多轮 tool call、本地主会话 `dispatch_agent` 默认免审、本地 REPL auto memory extraction v2、auto memory recall v2 和审批拒绝中断语义已完成聚焦回归；compact v3 的 restored-context `/compact`、v3 `/resume`、recall v2 原生 PTY 和 QQchat continuation/isolation 手工验收仍未记录。
 
 ## 2. Phase 1：协议与工具升级
 
@@ -884,3 +885,34 @@ ARGUMENTS:
 - `python -m compileall -q src`：退出码 0。
 - `pytest -q`：`642 passed in 39.93s`。
 - `git diff --check`：退出码 0；仅输出 Windows LF/CRLF 行尾转换提示。
+
+## 33. 本地审批拒绝中断当前 turn：2026-06-30
+
+状态：代码实现、自动化回归和 PowerShell/cmd.exe 原生 PTY 交互验收已完成。
+
+本轮实现：
+
+- `ToolExecutionResult` 增加 `interrupted_by_user` 和 `interruption_message`，只有本地 `ToolApprovalController.prompt()` 返回 `No` 时置位。
+- 审批 `No` 后写入 `"User denied tool: <tool>"` 的 tool result，并停止同 batch 后续 sibling tool calls；被拒绝工具和后续工具均不会执行。
+- `AgentRuntime` 新增 `LLMLoopResult` 作为 `_run_llm_loop()` 的内部结构化结果；旧 `_run_llm_loop(...) -> str` wrapper 保持兼容。
+- runtime 在写入 assistant/tool 配对后追加 system marker `[Request interrupted by user for tool use]`，并结束当前 turn，不再向 LLM 发起第二次请求。
+- `_run_user_turn()` 对 `append_assistant=False` 的中断结果不追加伪 assistant final text，也不运行 after-turn success hooks，因此不会触发 auto memory extraction。
+- session/resume 回归证明：下一次 user turn 的模型请求能看到上一轮拒绝记录和中断 marker；`last_user_input` 不会被 system marker 替换；`SessionResumeBuilder` 恢复后不产生 orphan tool message。
+- 显式配置 `deny`、外部入口 `remote_approval=False`、blocked tool、unknown tool 和工具执行异常仍按普通 tool error 进入下一轮模型。
+
+逐 task review 结论：
+
+- Task 01：通过。发现并改写旧“用户拒绝后继续”的测试残留；执行层只在本地审批 `No` 时中断，explicit deny 仍继续模型 follow-up。
+- Task 02：通过。新增结构化 loop result 后，review 发现并修复了 `_run_user_turn()` 中 plan mode 分支缩进回归；相关 user-turn、memory hook 和 skill prompt command 测试通过。
+- Task 03：通过。新增 session/resume/下一轮上下文回归测试；现有实现天然满足，无需额外生产代码。
+- Task 04：通过。自动化验证、PowerShell/cmd.exe 原生 PTY 验收、文档更新和 UTF-8 编码抽样完成。
+
+验证：
+
+- `pytest tests/test_agent_tool_loop.py tests/test_agent_user_turn.py tests/test_session_resume.py -q`：`46 passed in 16.36s`。
+- `python -m compileall -q src`：退出码 0。
+- `pytest -q`：`649 passed in 39.90s`。
+- `git diff --check`：退出码 0；仅输出 Windows LF/CRLF 行尾转换提示。
+- PowerShell 原生 PTY `run_shell` 拒绝验收：WinPTY 驱动 `powershell.exe -NoLogo -NoProfile`，审批菜单输入 `n`；`calls=2`（第二次来自下一条用户输入）、`executed=[]`、拒绝后到下一条用户输入前无第二次模型请求、history 包含 tool denial 和 system marker，下一轮模型请求角色序列为 `user, assistant, tool, system, user`。
+- cmd.exe 原生 PTY `run_shell` 拒绝验收：WinPTY 驱动 `cmd.exe`，同场景同结果，`executed=[]` 且拒绝记录和中断 marker 保留。
+- PowerShell 原生 PTY `write_file` 拒绝验收：WinPTY 驱动 `powershell.exe -NoLogo -NoProfile`，diff preview 中可见 `old text` -> `new text`，审批输入 `n`；`calls=1`、`executed=[]`、文件内容仍为 `old text`，history 包含 tool denial 和 system marker。
