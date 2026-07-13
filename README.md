@@ -62,6 +62,8 @@ Root-level `ARCHITECTURE.md`, `ROADMAP.md`, `PROGRESS.md`, `DEVNOTES.md`, and `�
 
 Current reference notes:
 
+- [docs/reference/code-ownership-preparation-plan.md](docs/reference/code-ownership-preparation-plan.md): Seven-day execution plan for learning the core runtime, proving code ownership, and preparing for AI Agent interviews.
+- [docs/reference/project-interview-guide.md](docs/reference/project-interview-guide.md): Resume framing, architecture talking points, interview Q&A, limitations, and preparation checklist for the Xcode Agent project.
 - [docs/reference/qqchat-setup-guide.md](docs/reference/qqchat-setup-guide.md): QQ Chat 配置教程，面向 pull 项目后想要使用 QQ Chat 功能的用户。
 - [docs/reference/qq-bot-integration-guide.md](docs/reference/qq-bot-integration-guide.md): QQ bot API v2 investigation and target `/QQchat` usage guide.
 
@@ -95,6 +97,8 @@ Explainers:
 
 当前参考文档：
 
+- [docs/reference/code-ownership-preparation-plan.md](docs/reference/code-ownership-preparation-plan.md)：七天代码理解、独立修改、Ownership 证明与 AI Agent 面试补强计划。
+- [docs/reference/project-interview-guide.md](docs/reference/project-interview-guide.md)：Xcode Agent 项目的简历表述、架构讲解、面试问答、当前不足和准备清单。
 - [docs/reference/qqchat-setup-guide.md](docs/reference/qqchat-setup-guide.md)：QQ Chat 配置教程，面向 pull 项目后想要使用 QQ Chat 功能的用户。
 - [docs/reference/qq-bot-integration-guide.md](docs/reference/qq-bot-integration-guide.md)：QQ 机器人 API v2 调研与 `/QQchat` 目标接入教程。
 
