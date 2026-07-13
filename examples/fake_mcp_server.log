@@ -1,0 +1,130 @@
+2026-06-09T16:33:48 start
+2026-06-09T16:33:48 notification notifications/initialized
+2026-06-09T16:37:40 call echo {"text": "hello"}
+2026-06-09T17:17:29 call long_output {}
+2026-06-09T17:18:36 start
+2026-06-09T17:18:36 notification notifications/initialized
+2026-06-09T19:30:22 stop
+2026-06-09T19:50:31 start
+2026-06-09T19:50:31 notification notifications/initialized
+2026-06-09T19:51:09 stop
+2026-06-09T19:51:10 start
+2026-06-09T19:51:10 notification notifications/initialized
+2026-06-09T19:51:19 stop
+2026-06-09T19:51:19 start
+2026-06-09T19:51:19 notification notifications/initialized
+2026-06-10T09:49:02 stop
+2026-06-10T09:49:07 start
+2026-06-10T09:49:07 notification notifications/initialized
+2026-06-10T10:25:18 stop
+2026-06-10T10:25:23 start
+2026-06-10T10:25:23 notification notifications/initialized
+2026-06-10T14:49:58 start
+2026-06-10T14:49:58 notification notifications/initialized
+2026-06-10T14:55:05 start
+2026-06-10T14:55:05 notification notifications/initialized
+2026-06-10T14:55:20 stop
+2026-06-10T14:55:20 start
+2026-06-10T14:55:20 notification notifications/initialized
+2026-06-10T14:55:24 stop
+2026-06-10T14:55:27 start
+2026-06-10T14:55:27 notification notifications/initialized
+2026-06-10T14:55:31 stop
+2026-06-10T15:22:11 stop
+2026-06-10T15:22:15 start
+2026-06-10T15:22:15 notification notifications/initialized
+2026-06-11T15:08:28 start
+2026-06-11T15:08:28 notification notifications/initialized
+2026-06-11T15:15:11 stop
+2026-06-11T15:15:15 start
+2026-06-11T15:15:15 notification notifications/initialized
+2026-06-11T15:20:27 stop
+2026-06-11T15:21:04 start
+2026-06-11T15:21:04 notification notifications/initialized
+2026-06-12T15:38:04 start
+2026-06-12T15:38:04 notification notifications/initialized
+2026-06-12T16:02:35 start
+2026-06-12T16:02:35 notification notifications/initialized
+2026-06-12T16:05:11 stop
+2026-06-12T16:05:15 start
+2026-06-12T16:05:15 notification notifications/initialized
+2026-06-12T16:06:49 stop
+2026-06-12T16:06:52 start
+2026-06-12T16:06:52 notification notifications/initialized
+2026-06-14T19:22:16 start
+2026-06-14T19:22:16 notification notifications/initialized
+2026-06-14T22:57:56 stop
+2026-06-14T22:58:05 start
+2026-06-14T22:58:05 notification notifications/initialized
+2026-06-14T23:14:59 stop
+2026-06-14T23:15:04 start
+2026-06-14T23:15:04 notification notifications/initialized
+2026-06-14T23:15:49 stop
+2026-06-14T23:16:04 start
+2026-06-14T23:16:04 notification notifications/initialized
+2026-06-14T23:29:14 stop
+2026-06-14T23:29:19 start
+2026-06-14T23:29:19 notification notifications/initialized
+2026-06-15T10:04:06 start
+2026-06-15T10:04:06 notification notifications/initialized
+2026-06-15T10:41:39 stop
+2026-06-15T10:41:44 start
+2026-06-15T10:41:44 notification notifications/initialized
+2026-06-15T11:50:20 stop
+2026-06-15T11:50:26 start
+2026-06-15T11:50:26 notification notifications/initialized
+2026-06-15T11:59:55 stop
+2026-06-15T12:00:00 start
+2026-06-15T12:00:00 notification notifications/initialized
+2026-06-15T16:08:19 stop
+2026-06-17T11:26:27 start
+2026-06-17T11:26:27 notification notifications/initialized
+2026-06-17T11:26:51 stop
+2026-06-17T11:29:09 start
+2026-06-17T11:29:09 notification notifications/initialized
+2026-06-17T15:31:27 stop
+2026-06-23T14:37:43 start
+2026-06-23T14:37:43 notification notifications/initialized
+2026-06-23T14:49:32 stop
+2026-06-23T16:03:40 start
+2026-06-23T16:03:40 notification notifications/initialized
+2026-06-23T16:30:29 stop
+2026-06-24T10:38:46 start
+2026-06-24T10:38:46 notification notifications/initialized
+2026-06-24T11:57:21 stop
+2026-06-30T11:28:47 start
+2026-06-30T11:28:47 notification notifications/initialized
+2026-06-30T11:30:17 stop
+2026-06-30T11:30:26 start
+2026-06-30T11:30:26 notification notifications/initialized
+2026-06-30T11:31:26 stop
+2026-06-30T11:31:36 start
+2026-06-30T11:31:36 notification notifications/initialized
+2026-06-30T11:41:18 stop
+2026-06-30T23:03:18 start
+2026-06-30T23:03:18 notification notifications/initialized
+2026-06-30T23:11:12 stop
+2026-07-13T10:46:04 start
+2026-07-13T10:46:04 notification notifications/initialized
+2026-07-13T10:55:26 stop
+2026-07-13T10:55:31 start
+2026-07-13T10:55:31 notification notifications/initialized
+2026-07-13T10:56:39 stop
+2026-07-13T11:14:04 start
+2026-07-13T11:14:04 notification notifications/initialized
+2026-07-13T11:14:35 stop
+2026-07-13T11:15:17 start
+2026-07-13T11:15:17 notification notifications/initialized
+2026-07-13T11:16:24 stop
+2026-07-13T11:16:41 start
+2026-07-13T11:16:41 notification notifications/initialized
+2026-07-13T11:48:38 stop
+2026-07-13T11:50:06 start
+2026-07-13T11:50:06 notification notifications/initialized
+2026-07-13T11:51:40 stop
+2026-07-13T15:13:47 start
+2026-07-13T15:13:47 notification notifications/initialized
+2026-07-13T15:40:03 stop
+2026-07-13T16:08:14 start
+2026-07-13T16:08:14 notification notifications/initialized
+2026-07-13T16:09:45 stop

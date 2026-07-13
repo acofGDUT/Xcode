@@ -1,0 +1,70 @@
+---
+title: "Xcode v0.1.0 可用性评估：功能完成度与风险盘点"
+author: "小米"
+date: today
+---
+
+# 执行摘要
+
+Xcode v0.1.0 已具备基本实际可用性。核心链路（REPL 输入循环、LLM 流式调用与工具执行、三级权限审批、上下文压缩与会话恢复）全部闭环，649 项自动化测试覆盖 P0 安全与状态路径，原生 Windows cmd.exe 与 PowerShell 终端已通过 `/resume`、`/compact`、多轮工具调用、MCP 审批菜单等关键交互验收。当前版本可支撑"读代码、改代码、运行 shell、调试、提交"的完整开发闭环。主要短板在 QQ 外部聊天入口未完成真实平台验收、compact v3 现场恢复与 auto memory recall v2 的手工验收待补齐，以及工具调用展开、任务面板持久展示等 7 项 UX 打磨积压。总体判断：可实际使用，但需接受部分边缘交互不够流畅，不建议在 QQ 群等远程场景中依赖当前版本。
+
+# 功能完成度：核心链路全面闭环
+
+Xcode 的架构围绕一个同步 REPL 主循环构建，以 `AgentRuntime.run_chat()` 为入口，通过 `_run_user_turn()` 统一编排用户输入到 LLM 响应的完整链路^[Xcode 当前架构，`docs/current/ARCHITECTURE.md`，§3-4。]。当前版本已实现的组件覆盖编码代理的所有关键路径。
+
+LLM 客户端（`core/llm.py`）支持任意 OpenAI 兼容 API 的流式调用与工具调用解析，兼容 DeepSeek 等提供商的 reasoning_content 回传^[`src/xcode_cli/core/llm.py`，`LLMClient.complete()` 方法。]。配置通过环境变量（`XCODE_MODEL`、`XCODE_BASE_URL`、`XCODE_API_KEY`）和 `/env` TUI 仪表盘双重管理，灵活性足以覆盖从本地模型到云端 API 的部署场景。
+
+工具系统提供 13 个内置工具，覆盖文件读写（`read_file`、`write_file`、`edit_file`）、代码搜索（`grep`、`glob`）、shell 执行（`run_shell`）、子代理派发（`dispatch_agent`）、任务追踪（`task_create`、`task_update`、`task_list`）和计划模式（`enter_plan_mode`、`write_plan`、`exit_plan_mode`）^[同上，§7。]。工具注册通过 `ToolRegistry` 统一管理，异常全部捕获并转为可读错误返回 Agent，不会因单个工具失败打崩主循环。`edit_file` 优先于 `write_file` 的编辑策略在 prompt 层面已内化。
+
+权限系统采用 session 规则优先于项目 `.xcode/settings.json` 优先于全局配置的三级模型^[同上，§8。]。文件读取和搜索默认免审，写入和 shell 执行默认需审批。TTY 环境下使用方向键内联三选项菜单（Yes / No / Yes, for this conversation），2026-06-30 实现的关键改进是本地审批选择 No 后立即中断当前 turn，不再让模型主动寻找替代方案^[DEVNOTES §34，本地审批拒绝中断当前 turn 边界。]。Memory 自管理写入在路径校验通过后跳过审批，显式 deny 仍优先。
+
+上下文管理（`core/context.py`）按 ASCII 与非 ASCII 字符估算 token，达到 80% 上限时自动触发压缩，生成结构化累积摘要^[同上，§10。]。手动 `/compact` 提供 Rich Live 动态进度显示。压缩后的 protected tail 保证 assistant/tool 消息配对完整，malformed tool call 由 `sanitize_model_messages()` 在请求边界清洗^[同上，§10，`sanitize_model_messages` 清洗层。]。当前 checkpoint 格式为 `xcode.v3`，记录 lineage metadata（checkpoint_id、parent_checkpoint_id、summary hash）和 restored context 现场快照^[DEVNOTES §31，Compact v3 现场恢复与 checkpoint 链路边界。]。
+
+会话管理（`core/session.py`）使用 UUID session id 和 append-only JSONL transcript，`/resume` 通过方向键菜单选择历史会话，恢复后显示最近对话 replay^[ARCHITECTURE.md §11。]。resume 时 skill invocation 的 hidden model prompt 可正确恢复，不会因只拿到 `/skill-name args` 展示文本而丢失上下文。
+
+# 差异化能力：记忆与技能系统
+
+Xcode 的记忆系统在本地化 AI 编码代理中具有明显的差异化优势。
+
+三重记忆模型同时维护项目级 `XCODE.md`（项目约定和架构决策）、用户级 `~/.xcode/XCODE.md`（跨项目偏好）和 auto memory 目录（按主题持久化的学习笔记）^[ARCHITECTURE.md §9。]。Auto memory extraction v2 在每个成功的本地 REPL turn 后，通过后台 single-flight runner 异步触发受限子代理，仅暴露 memory-scoped 文件工具，按 v2 frontmatter 格式（`name`、`description`、顶层 `type`，正文必须含 `Evidence:`）写入^[DEVNOTES §32，Auto memory extraction v2 边界。]。Auto memory recall v2 进一步在每个本地 user turn 启动 relevant topic prefetch：selector 使用 no-tool side query，候选来自 `MEMORY.md` 索引和 v2 manifest，注入前再次过滤 session 已 surfaced 和本轮 touched 文件^[DEVNOTES §33，Auto memory recall v2 边界。]。reminder 包含 memory age 与 point-in-time verification 提醒，要求涉及代码行为或版本时重新验证^[同上。]。
+
+Skills 系统已完成两个阶段：Phase 1 实现项目内 `.xcode/skills/<name>/SKILL.md` 作为用户可手动调用的 prompt slash command，Phase 2 实现模型根据 compact listing 主动调用 `skill` 工具按需加载完整 prompt^[ARCHITECTURE.md §6。]。Skill 目录包模型（SKILL.md + references/ + scripts/ + templates/ + assets/）与 Claude Code 兼容，`allowed-tools` 语义对齐但不做 turn 级白名单。防递归措施包括 SkillTool 加载后 blocked-tools 禁用和同 batch barrier 机制^[同上，§6.7。]。当前项目已注册 7 个 skill，其中 `analyst-research` 可支持从轻量决策备忘录到旗舰深度报告的三级工作流。
+
+# 已知缺陷：从打磨不足到验收缺失
+
+尽管核心链路完整，v0.1.0 仍有若干值得关注的短板。
+
+流式输出与最终渲染的重复显示是当前最影响日常体验的问题。在 `streaming_plus_final_render` 模式下，结构化 Markdown 会先逐 token 打印，随后触发 Rich 最终渲染，导致用户看到两遍输出^[DEVNOTES §9，流式输出会和最终渲染重复显示。]。当前通过检测代码块和表格后停止 raw streaming 已缓解，但可替换区域式 streaming 仍未实现。
+
+工具调用 UI 已完成默认折叠摘要，但 `Ctrl+O` 展开热键和原生 Windows 热键兼容验收均未执行^[DEVNOTES §14，工具调用 UI 仍会刷屏；ROADMAP §7.1。]。任务面板当前只在工具执行后瞬时渲染，不像 Claude Code 那样持久驻留底部，用户需回滚才能看到当前任务状态^[DEVNOTES §21，Task 工具免审与 UI 展示。]。
+
+`/resume` 会话识别存在已知缺陷：列表展示的 `last_user_input` 是 transcript 中最新一条用户消息，随着用户继续对话而变化，同一 session 在不同时间点看到的预览文案完全不同^[DEVNOTES §22，`/resume` 的 last_user_input 预览不稳定。]。当前没有固定摘要或首条输入作为不变标识。
+
+QQ 外部聊天入口是最大的"已实现但不可用"风险。代码已完成 `/QQchat start|stop|status`、WebSocket gateway、事件归一化、去重、headless external turn runner 和四层工具安全检查^[ARCHITECTURE.md §12；DEVNOTES §27-28。]，自动化回归也已完成。但真实 QQ 单聊和群聊平台验收从未执行，`/QQchat init` 和 `/QQchat reload` 仅完成设计文档^[ROADMAP §4，P0/P1：QQchat 收口。]。这意味着 QQ Bot 接入能力在真实网络环境下的行为完全未知。
+
+Compact v3 现场恢复和 Auto memory recall v2 的代码与自动化回归已完成，但 PowerShell 和 cmd.exe 原生 PTY 手工验收记录仍缺失^[ROADMAP §2 近期优先级，P0/P1 项。]。自动化测试（649 passed）无法替代真实终端中对 restored context 注入、checkpoint lineage 链路和 non-blocking prefetch 安全点注入的端到端验证。
+
+# 架构风险评估
+
+Xcode 的架构质量整体较高，但仍存在几类需要持续关注的风险。
+
+AgentRuntime 的单一文件规模是长期维护风险。经过两轮模块化重构，命令路由（`core/commands/`）、审批 UI（`core/tooling/`）、会话恢复（`core/conversation/`）和 shell UI（`core/ui/`）已拆出，但 `agent.py` 仍承载约 1550 行代码，包括 LLM/tool loop orchestration、Thinking Live 动画、MCP 管理命令、QQchat 初始化和 memory prefetch 注入^[ARCHITECTURE.md §3，当前仍留在 agent.py 内的主要职责。]。`_run_llm_loop()` 的 streaming、Thinking Live、tool loop、task panel 和 transcript 写入路径交织紧密，后续如果继续重构需格外谨慎，避免打散稳定边界。
+
+同步架构的长期约束是明确的工程取舍。项目全局不引入 `asyncio`，并发仅通过 `ThreadPoolExecutor` 实现^[DEVNOTES §11，不引入 asyncio。]。MCP 子系统作为唯一例外，内部使用 async event loop/thread 并向 AgentRuntime 暴露同步 wrapper^[DEVNOTES §29，MCP Phase 1 安全接入边界。]。当前规模下这个选择合理，LLM 调用是 I/O 密集型而非 CPU 密集型。但如果未来引入 WebSocket 长连接、HTTP SSE 或 streaming MCP resources，同步模型可能成为瓶颈。好消息是当前架构已经证明：后台异步子系统加同步主循环的混合模式是可行的。
+
+Windows 平台兼容性已通过大量针对性修复（UTF-8 编码显式指定 `errors='replace'`^[DEVNOTES §20，Windows subprocess 解码问题。]、memory 路径 bug 修复^[DEVNOTES §5，Windows memory 路径 bug。]、prompt_toolkit 非原生控制台限制说明^[DEVNOTES §1，prompt_toolkit 控制台限制。]），核心 CLI 路径在 cmd.exe 和 PowerShell 下已验证通过。但 Git Bash、mingw 等非原生控制台仍存在 `NoConsoleScreenBufferError` 风险，关键交互必须回到原生终端验收^[同上。]。
+
+测试基线稳固。649 项测试覆盖 P0 安全与状态路径：权限 allow/ask/deny、工具异常捕获、tool loop 多轮推进、session resume/compact checkpoint、memory path 和 Windows 编码^[AGENTS.md，测试分层规范。]。项目采用 Spec-first + TDD-core + E2E-acceptance 三层流程^[DEVNOTES §23，开发流程与测试分层规范。]，bugfix 必须先补复现测试。但终端交互类改动不能只靠 pytest 结论收口，必须记录原生 Windows 验收情况^[同上。]。
+
+# 底线
+
+Xcode v0.1.0 是一个**可以实际使用**的本地 AI 编码代理。如果你是一个愿意偶尔接受终端渲染瑕疵、不需要 QQ 远程接入的开发者，它已经可以胜任日常编码工作。核心链路经过充分测试和原生 Windows 验收，记忆和技能系统提供了超越简单"代码补全"工具的长期价值。
+
+建议的短期优先级：
+
+1. 补齐 QQ 真实平台验收是最高优先级的不确定性消除项。
+2. 流式输出重复修复会直接影响每个用户的日常体验。
+3. Compact v3 和 recall v2 手工验收虽非阻塞，但可能隐藏仅在真实终端中触发的边缘 bug。
+4. 工具调用展开、任务面板持久展示等 UX 项可随日常使用逐步打磨，不必在 v0.1.0 阶段阻塞发布。
+
+如果你在评估是否用 Xcode 替代当前工具，当前答案是：**可以用，但别在 QQ 群里用**。
