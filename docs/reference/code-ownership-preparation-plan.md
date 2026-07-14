@@ -1,10 +1,10 @@
 # Xcode Agent 代码 Ownership 与面试补强计划
 
-> 状态：进行中（第一天必答问题、第二天学习任务已完成）
+> 状态：进行中（第一天必答问题、第二至第四天学习任务已完成）
 >
 > 制定日期：2026-07-10
 >
-> 最近更新：2026-07-12
+> 最近更新：2026-07-14
 >
 > 建议周期：7 天，每天 2–4 小时
 >
@@ -263,14 +263,14 @@ python -m pytest tests/test_tool_approval.py tests/test_agent_memory_permissions
 
 ### 8.3 必须回答
 
-- [ ] Transcript、`_history` 和 API Messages 有什么区别？
-- [ ] 什么是 orphan Tool Message？
-- [ ] 什么是 malformed Tool Call？
-- [ ] 为什么 Tool Result 必须紧随对应 Assistant Tool Call？
-- [ ] History Sanitizer 如何线性扫描消息？
-- [ ] Skill 的 display/model 双视图如何落盘和恢复？
-- [ ] Resume 为什么使用 60% Token Budget？
-- [ ] 裁剪 History 时如何防止制造新的 orphan？
+- [x] Transcript、`_history` 和 API Messages 有什么区别？
+- [x] 什么是 orphan Tool Message？
+- [x] 什么是 malformed Tool Call？
+- [x] 为什么 Tool Result 必须紧随对应 Assistant Tool Call？
+- [x] History Sanitizer 如何线性扫描消息？
+- [x] Skill 的 display/model 双视图如何落盘和恢复？
+- [x] Resume 为什么使用 60% Token Budget？
+- [x] 裁剪 History 时如何防止制造新的 orphan？
 
 ### 8.4 动手练习
 
@@ -287,10 +287,12 @@ python -m pytest tests/test_message_history.py tests/test_session.py tests/test_
 
 ### 8.5 当日验收
 
-- [ ] 能不看代码写出 Sanitizer 伪代码。
-- [ ] 能解释为什么不直接把 Transcript 原样发送给模型。
-- [ ] 能解释 Skill Hidden Prompt 的边界：UI 隐藏但磁盘未加密。
-- [ ] 能说明 Checkpoint 前的 Skill Prompt 为什么不会逐字恢复。
+- [x] 能不看代码写出 Sanitizer 伪代码。
+- [x] 能解释为什么不直接把 Transcript 原样发送给模型。
+- [x] 能解释 Skill Hidden Prompt 的边界：UI 隐藏但磁盘未加密。
+- [x] 能说明 Checkpoint 前的 Skill Prompt 为什么不会逐字恢复。
+
+进度记录（2026-07-13）：第三天的必答问题、动手学习和当日验收已完成。
 
 ## 9. 第四天：Context Compact 与 Work State
 
@@ -307,13 +309,13 @@ python -m pytest tests/test_message_history.py tests/test_session.py tests/test_
 
 ### 9.3 必须回答
 
-- [ ] 为什么不能简单保留最近 N 条消息？
-- [ ] pair-safe tail 如何保证 Assistant/Tool 配对？
-- [ ] micro-compaction 清除了什么、保留了什么？
-- [ ] 累积摘要如何使用 Previous Summary？
-- [ ] Work State 保存哪些现场？
-- [ ] Checkpoint lineage 和 hash 能证明什么、不能证明什么？
-- [ ] Summary 请求失败时为什么不能改写 `_history`？
+- [x] 为什么不能简单保留最近 N 条消息？
+- [x] pair-safe tail 如何保证 Assistant/Tool 配对？
+- [x] micro-compaction 清除了什么、保留了什么？
+- [x] 累积摘要如何使用 Previous Summary？
+- [x] Work State 保存哪些现场？
+- [x] Checkpoint lineage 和 hash 能证明什么、不能证明什么？
+- [x] Summary 请求失败时为什么不能改写 `_history`？
 
 ### 9.4 动手练习
 
@@ -330,9 +332,11 @@ python -m pytest tests/test_context.py tests/test_compaction.py tests/test_work_
 
 ### 9.5 当日验收
 
-- [ ] 能画出 Compact 完成后的 History 结构。
-- [ ] 能解释摘要幻觉为什么仍是当前边界。
-- [ ] 能说明 Transcript 为什么不被物理重写。
+- [x] 能画出 Compact 完成后的 History 结构。
+- [x] 能解释摘要幻觉为什么仍是当前边界。
+- [x] 能说明 Transcript 为什么不被物理重写。
+
+进度记录（2026-07-14）：第四天的必答问题、动手学习和当日验收已完成。
 
 ## 10. 第五天：Memory Extraction 与 Recall
 
