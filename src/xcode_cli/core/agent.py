@@ -51,10 +51,12 @@ from xcode_cli.core.prompting import build_skill_listing_section, build_system_p
 from xcode_cli.core.project_root import resolve_project_root
 from xcode_cli.core.runtime_status import RuntimeStatusStore
 from xcode_cli.core.session import SessionStore
+from xcode_cli.core.shell_tasks import ShellTaskManager
 from xcode_cli.core.task_tracker import TaskTracker, create_task_tools
 from xcode_cli.core.tool_registry import ToolDef, ToolRegistry
 from xcode_cli.core.tools import ALL_TOOLS
 from xcode_cli.core.tools.agent_tool import create_dispatch_agent_tool
+from xcode_cli.core.tools.shell import create_shell_tools
 from xcode_cli.core.tools.skill_tool import create_skill_tool
 from xcode_cli.core.turn import UserTurnInput, coerce_user_turn_input
 from xcode_cli.core.work_state import WorkStateTracker
@@ -115,6 +117,7 @@ class AgentRuntime:
         cfg = self.config_store.load()
         self.context = ContextManager(max_tokens=cfg.max_tokens, max_summary_chars=cfg.max_summary_chars)
         self.task_tracker = TaskTracker()
+        self.shell_task_manager = ShellTaskManager()
         self.work_state = WorkStateTracker(cwd=self.cwd)
         self.memory = MemoryManager(cwd=self.cwd)
         self.permissions = PermissionManager(cwd=self.cwd)
@@ -160,6 +163,8 @@ class AgentRuntime:
         self.tools = ToolRegistry()
         for t in ALL_TOOLS:
             self.tools.register(t)
+        for shell_tool in create_shell_tools(self.shell_task_manager):
+            self.tools.register(shell_tool)
         self.tools.register(create_dispatch_agent_tool(self.llm, self.config_store))
         for task_tool in create_task_tools(self.task_tracker):
             self.tools.register(task_tool)
@@ -285,6 +290,10 @@ class AgentRuntime:
 
                 self._run_user_turn(user_input)
         finally:
+            try:
+                self.shell_task_manager.shutdown()
+            except Exception:
+                pass
             try:
                 self.memory_extraction_runner.shutdown(wait=False)
             except Exception:

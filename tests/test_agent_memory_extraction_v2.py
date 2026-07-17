@@ -57,6 +57,14 @@ class RecordingRunner:
         self.shutdown_calls.append(wait)
 
 
+class RecordingShellTaskManager:
+    def __init__(self) -> None:
+        self.shutdown_calls = 0
+
+    def shutdown(self) -> None:
+        self.shutdown_calls += 1
+
+
 def test_agent_after_turn_submits_to_memory_runner(tmp_path: Path, monkeypatch) -> None:
     agent = _make_agent(tmp_path, monkeypatch)
     runner = RecordingRunner()
@@ -83,9 +91,12 @@ def test_agent_memory_hook_submit_exception_is_swallowed(tmp_path: Path, monkeyp
 def test_run_chat_shutdowns_memory_runner(tmp_path: Path, monkeypatch) -> None:
     agent = _make_agent(tmp_path, monkeypatch)
     runner = RecordingRunner()
+    shell_tasks = RecordingShellTaskManager()
     agent.memory_extraction_runner = runner
+    agent.shell_task_manager = shell_tasks
     monkeypatch.setattr(agent.prompt, "prompt", lambda *args, **kwargs: "/exit")
 
     agent.run_chat()
 
     assert runner.shutdown_calls == [False]
+    assert shell_tasks.shutdown_calls == 1

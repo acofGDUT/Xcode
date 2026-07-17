@@ -55,7 +55,7 @@ flowchart TD
 
     Registry --> FileTools["read_file / write_file / edit_file"]
     Registry --> SearchTools["grep / glob"]
-    Registry --> ShellTool["run_shell"]
+    Registry --> ShellTool["run_shell / shell_task_output / shell_task_list / shell_task_stop"]
     Registry --> Dispatch["dispatch_agent"]
     Registry --> TaskTools["task_create / task_update / task_list"]
     Registry --> PlanTools["enter_plan_mode / write_plan / exit_plan_mode"]
@@ -70,7 +70,7 @@ flowchart TD
 | `xcode` | 没有子命令时直接启动 `AgentRuntime().run_chat()` |
 | `xcode chat` | 启动交互式聊天 |
 | `xcode dashboard` | 打开 API 配置 TUI |
-| `xcode tool run` | 直接运行 read/write/edit/shell/grep/glob |
+| `xcode tool run` | 直接运行 read/write/edit/shell/grep/glob；其中 shell 是一次性硬超时调用，不保留后台任务 |
 | `xcode tool grep` / `xcode tool glob` | PowerShell 友好的搜索子命令 |
 | `xcode skill list/show/validate` | 查看和校验项目 `.xcode/skills` skill；旧 install/enable/disable 仅输出迁移提示 |
 
@@ -345,7 +345,7 @@ MAX_LISTING_DESC_CHARS = 250
 - invocation service 将工具名归一化后写入 `audit_metadata["allowed_tools"]` 和 `model_metadata["allowed_tools"]`。
 - `allowed-tools` 不收窄 `ToolRegistry.get_openai_schemas()`。
 - `allowed-tools` 不参与 `ToolCallExecutor` 的执行拒绝逻辑。
-- `allowed-tools` 不自动提权；`write_file`、`edit_file`、`run_shell` 仍必须经过 `PermissionManager` 和审批流程。
+- `allowed-tools` 不自动提权；`write_file`、`edit_file`、`run_shell`、`shell_task_stop` 仍必须经过 `PermissionManager` 和审批流程。
 
 如果后续需要“严格限制某个 skill 能看到哪些工具”，应设计独立字段，例如 `tool-scope`、`visible-tools` 或 `restricted-tools`。如果后续需要“信任某个 skill 后免审”，应设计独立 trust policy。不要把这两类语义混进 Claude-compatible `allowed-tools`。
 
@@ -386,16 +386,26 @@ session / resume / compact 的保存策略：
 
 `ToolRegistry.get_openai_schemas()` 把工具转换成 OpenAI-compatible tool schema，并支持按 blocked-tools 过滤。`ToolRegistry.execute()` 捕获所有工具异常并返回 `"Tool error: ..."`，避免单个工具异常打崩 Agent 主循环。`ToolCallExecutor` 也会在执行层检查 blocked-tools，防止模型调用当前 turn 禁用的工具。
 
-当前 13 个内置工具：
+本地 `AgentRuntime` 当前注册 16 个内置工具：
 
 | 类别 | 工具 |
 |------|------|
 | 文件 | `read_file`, `write_file`, `edit_file` |
 | 搜索 | `grep`, `glob` |
-| Shell | `run_shell` |
+| Shell | `run_shell`, `shell_task_output`, `shell_task_list`, `shell_task_stop` |
 | 子 Agent | `dispatch_agent` |
 | 任务 | `task_create`, `task_update`, `task_list` |
 | 计划模式 | `enter_plan_mode`, `write_plan`, `exit_plan_mode` |
+
+### Shell 任务生命周期
+
+交互式 `run_shell` 由 runtime 持有的 `ShellTaskManager` 执行。每条命令只 spawn 一次，启动后立即注册；快速命令在前台等待预算内结束时返回 bounded 输出和真实 `exit_code`，`run_in_background=true` 时立即返回 task ID，未显式后台但耗尽等待预算时则把同一进程原地标记为后台任务。后台化只改变任务状态，不重启命令。
+
+Manager 从进程启动起使用固定大小二进制块持续 drain 合并后的 stdout/stderr，并把内存尾部和 runtime 临时日志都限制在硬上限内。`shell_task_output` 查询 bounded 输出和状态，`shell_task_list` 返回本 runtime 快照，`shell_task_stop` 停止仍受管且未自行 detach 的进程树。Windows 使用无 shell 的 `taskkill.exe /T /F`，POSIX 使用独立 process group；只有确认进程树停止后才发布 `stopped`，root-only fallback 会返回错误而不谎报成功。
+
+`AgentRuntime.run_chat()` 在 `finally` 中 shutdown manager，停止本会话仍在运行的任务并在 drain/文件关闭后清理 `~/.xcode/shell_tasks/<runtime-id>/`。General sub-agent 仍只继承一次性硬超时 `run_shell`，不获得后台任务查询、列表或停止能力；Explore/Plan sub-agent 不暴露 shell。`xcode tool run shell` 同样使用一次性硬超时路径，因为进程返回后没有持续存在的 manager。
+
+首版不支持 `Ctrl+B`、主动完成通知、ready 探测、跨 session 恢复或交互式 stdin。调用方必须直接运行目标服务并使用 `run_in_background=true`；若命令内部再次使用 `start`、`Start-Process`、`&` 等机制自行 detach，脱离受管 shell 的后代不保证可查询或停止。
 
 工具调用显示当前分两层：
 
@@ -414,9 +424,9 @@ session rule > project .xcode/settings.json > global ~/.xcode/settings.json > de
 
 | 工具 | 默认权限 |
 |------|----------|
-| `read_file`, `grep`, `glob` | `allow` |
+| `read_file`, `grep`, `glob`, `shell_task_output`, `shell_task_list` | `allow`（后两项通过 `is_read_only=True`） |
 | `task_create`, `task_update`, `dispatch_agent` | `allow` |
-| `write_file`, `edit_file`, `run_shell` | `ask` |
+| `write_file`, `edit_file`, `run_shell`, `shell_task_stop` | `ask`；`run_shell` 与 `shell_task_stop` 共用 `shell` 审批域 |
 | 其他工具 | `ask` |
 
 `dispatch_agent` 仍注册为非只读工具，因为它会执行本地编排并消耗模型/工具工作；本地 REPL turn 中只是在 `PermissionManager` 默认策略层面允许它免审批。显式 session/project/global `deny` 或 `ask` 规则仍优先于默认值。QQchat 等外部入口继续通过 `ToolScope` 过滤 `dispatch_agent`。
@@ -698,7 +708,7 @@ Layer 2: schema visible_tools (tool_registry.py)
   schema 暴露阶段只给模型看到 visible_tools
       ↓ 通过
 Layer 3: execution_allowlist + is_read_only (execution.py)
-  执行阶段检查工具是否在白名单内
+  执行阶段再次拒绝 FORBIDDEN_EXTERNAL_TOOLS，并检查工具是否在白名单内
   QQ 来源还必须是 ToolDef.is_read_only
       ↓ 通过
 Layer 4: permissions + remote_approval (execution.py + permissions.py)
@@ -714,6 +724,7 @@ Layer 4: permissions + remote_approval (execution.py + permissions.py)
 | `write_file` | 写文件 |
 | `edit_file` | 编辑文件 |
 | `run_shell` | 执行 shell 命令 |
+| `shell_task_output`, `shell_task_list`, `shell_task_stop` | 读取本地命令日志或控制本地进程 |
 | `dispatch_agent` | 派发子 Agent |
 | `skill` | 加载 skill（可间接执行任意工具） |
 
@@ -725,7 +736,7 @@ Layer 4: permissions + remote_approval (execution.py + permissions.py)
 
 **Layer 3 — `execution_allowlist` 与只读检查（执行阶段）**
 
-`ToolCallExecutor.execute()` 会检查工具是否在 `tool_scope.execution_allowlist` 中。不在白名单内的工具直接返回 `"blocked by entry tool scope"` 错误，不执行。对 `source == "qqchat"`，即使工具被用户加入 allowlist，也必须满足 `ToolRegistry.is_read_only(tool_name)`；因此 `task_create`、`task_update`、`write_plan` 这类非只读本地状态修改工具会在 execution 层被拒绝。
+`ToolCallExecutor.execute()` 对 `source == "qqchat"` 先再次拒绝 `FORBIDDEN_EXTERNAL_TOOLS`，因此即使伪造 allowlist，标记为只读的 `shell_task_output/list` 也不能读取本地主会话日志。随后执行层检查工具是否在 `tool_scope.execution_allowlist` 中；不在白名单内的工具直接返回 `"blocked by entry tool scope"` 错误。剩余 QQ 工具还必须满足 `ToolRegistry.is_read_only(tool_name)`，因此 `task_create`、`task_update`、`write_plan` 这类非只读本地状态修改工具也会被拒绝。
 
 **Layer 4 — `permissions` + `remote_approval`（执行阶段）**
 
@@ -828,9 +839,10 @@ MCP Phase 1/2 自动化和原生 Windows 验收均已完成。Phase 1 的 PowerS
 | `src/xcode_cli/core/ui/env_dashboard.py` | `/env` 全屏 TUI 仪表盘，管理 max_tokens、max_summary_chars、render_mode、syntax_theme、auto_memory |
 | `src/xcode_cli/core/llm.py` | OpenAI-compatible API 调用、streaming、tool call 解析 |
 | `src/xcode_cli/core/tool_registry.py` | 工具定义、schema 转换、异常捕获执行 |
+| `src/xcode_cli/core/shell_tasks.py` | 会话内 shell 进程状态、bounded 输出、进程树停止和 shutdown |
 | `src/xcode_cli/core/tools/files.py` | read/write/edit 文件工具 |
 | `src/xcode_cli/core/tools/search.py` | ripgrep 和 glob 搜索工具 |
-| `src/xcode_cli/core/tools/shell.py` | shell 执行工具 |
+| `src/xcode_cli/core/tools/shell.py` | manager-bound shell 工具协议和一次性硬超时兼容入口 |
 | `src/xcode_cli/core/permissions.py` | session/project/global 三级权限 |
 | `src/xcode_cli/core/context.py` | token 估算和历史压缩 |
 | `src/xcode_cli/core/work_state.py` | compact 现场状态 dataclass、工具结果摘要记录、脱敏和 restored-context 渲染 |

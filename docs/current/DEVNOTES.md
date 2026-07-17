@@ -402,15 +402,15 @@ python -c "from xcode_cli.core.agent import AgentRuntime; print('ok')"
 **状态**：Resolved
 **关联**：`run_shell` 工具 / 中文 Windows 控制台
 
-现象：在中文 Windows 环境下，`run_shell` 读取外部命令输出时，可能因为 `subprocess.run(..., text=True)` 走系统默认 GBK 解码而触发 `UnicodeDecodeError`。
+现象：在中文 Windows 环境下，旧版 `run_shell` 读取外部命令输出时，可能因为 `subprocess.run(..., text=True)` 走系统默认 GBK 解码而触发 `UnicodeDecodeError`。
 
 根因：外部命令输出并不一定是 GBK；当 UTF-8 或混合编码字节流被系统默认编码解码时，reader thread 可能直接抛异常。
 
 当前收口：
 
-- `src/xcode_cli/core/tools/shell.py` 显式使用 `encoding="utf-8"`。
-- 同时使用 `errors="replace"`，把不可解码字符降级为可显示占位，而不是打崩工具调用。
-- 已增加回归测试，锁定 `run_shell()` 必须传入 `encoding` 和 `errors`。
+- `ShellTaskManager` 现在用固定大小二进制块读取 stdout/stderr，不再让 `TextIOWrapper` reader thread 因解码异常退出，也不会因无换行大输出在 `readline()` 内无限积累。
+- 查询或返回工具结果时统一使用 UTF-8 `errors="replace"` 解码，把不可解码字节降级为占位符而不是打崩工具调用。
+- 自动化回归覆盖无换行大输出、bounded 日志、快速退出尾部输出和后台持续 drain。
 
 Review 注意：这次修复只覆盖 `run_shell`。其他使用 `subprocess.run(..., text=True)` 的工具如果后续也在 Windows 下读取非默认编码输出，需要单独审查，不要默认已经一起解决。
 
@@ -886,3 +886,24 @@ Review 注意：
 - 中断前必须保持 OpenAI-compatible assistant/tool 配对；不能留下 orphan tool message 或缺 result 的 assistant tool call。
 - 中断后 `_run_user_turn()` 不能追加伪 assistant final text，也不能运行 after-turn success hooks 或 auto memory extraction。
 - 后续修改审批 UI 或 tool loop 时，必须保留 PowerShell/cmd.exe 原生 PTY 回归，确认拒绝审批后不会继续主动思考，并覆盖 `run_shell` 与 `write_file` / `edit_file` diff preview 场景。
+
+## 35. Shell 后台任务生命周期边界
+
+**状态**：代码实现、自动化回归和 PowerShell/cmd.exe 原生进程验收已完成
+**关联**：`run_shell` / Windows 进程树 / runtime shutdown / QQchat 工具边界
+
+2026-07-17 完成 `run_shell` 最小后台任务闭环：
+
+- 本地交互式 runtime 持有唯一 `ShellTaskManager`；显式 `run_in_background=true` 立即返回 task ID，前台等待预算耗尽时同一进程原地转后台，不按命令关键词猜测服务类型。
+- `timeout` 在交互式 manager-bound 工具中是前台等待预算，不再表示“到期杀服务”；一次性 `xcode tool run shell` 和 General sub-agent 没有持续 manager，仍使用硬超时并停止进程树。
+- monitor 必须固定块二进制 drain；进程终态发布前等待 bounded `drain_done`，内存保留 bounded tail，日志达到上限后停止落盘但继续读取，防止 pipe 反压和磁盘无限增长。
+- Windows 使用 `taskkill.exe /PID <pid> /T /F`；只有树终止成功才标记 `stopped`。若只能 fallback 杀 root，工具返回明确错误并保持非 `stopped`，不能掩盖可能仍存活的后代。
+- stop、自然退出和 monitor 的终态更新由 task lock/stop lock 串行化；重复 stop 和 shutdown 幂等。runtime 退出先停止任务，再等待 drain/关闭日志，最后 best-effort 删除 runtime 临时目录。
+- `shell_task_output/list` 虽标记只读，但包含本地命令和日志，仍属于本地能力。QQchat/external 在 scope sanitize 与执行层都硬拒绝三个 shell task 工具；General sub-agent 也不继承它们。
+
+Review 注意：
+
+- 不要把 `start`、`Start-Process`、shell `&` 等自行 detach 的后代宣称为可管理；调用方应直接运行目标服务并使用 `run_in_background=true`。
+- 首版没有 stdin、`Ctrl+B`、主动完成通知、ready/health 探测或跨 session 恢复。`status=running` 只说明进程仍受管，不等于服务已经 ready。
+- 不要把交互式等待预算和一次性 CLI 硬超时重新混成一种语义；无人继续持有 manager 的入口不得返回后台 task ID。
+- 修改 stop 逻辑后必须保留 Windows 原生子进程树和监听端口释放验收；只断言 root PID 退出不足以证明服务已停止。

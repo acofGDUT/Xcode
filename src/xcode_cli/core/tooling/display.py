@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-DANGEROUS_TOOLS = {"write_file", "edit_file", "run_shell"}
+DANGEROUS_TOOLS = {"write_file", "edit_file", "run_shell", "shell_task_stop"}
 
 
 @dataclass

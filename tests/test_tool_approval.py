@@ -26,6 +26,11 @@ def test_scope_for_run_shell() -> None:
     assert ctrl.scope_for_tool("run_shell") == "shell"
 
 
+def test_scope_for_shell_task_stop() -> None:
+    ctrl = ToolApprovalController(MagicMock(), {})
+    assert ctrl.scope_for_tool("shell_task_stop") == "shell"
+
+
 def test_scope_for_read_only_tool() -> None:
     ctrl = ToolApprovalController(MagicMock(), {})
     assert ctrl.scope_for_tool("read_file") == "read_file"

@@ -135,8 +135,8 @@ def test_tool_scope_visible_tools_are_intersected_with_execution_allowlist():
     runner = ExternalTurnRunner(session_store=sessions, run_llm_loop=loop, build_system_prompt=lambda: "system")
     unsafe_scope = ToolScope(
         source="qqchat",
-        visible_tools=("read_file", "grep", "write_file"),
-        execution_allowlist=("read_file", "run_shell"),
+        visible_tools=("read_file", "grep", "write_file", "shell_task_output", "shell_task_list"),
+        execution_allowlist=("read_file", "run_shell", "shell_task_output", "shell_task_list", "shell_task_stop"),
         remote_approval=True,
     )
 
@@ -146,6 +146,8 @@ def test_tool_scope_visible_tools_are_intersected_with_execution_allowlist():
     assert tool_scope.visible_tools == ("read_file",)
     assert tool_scope.execution_allowlist == ("read_file",)
     assert tool_scope.remote_approval is False
+    assert "shell_task_output" not in tool_scope.visible_tools
+    assert "shell_task_stop" not in tool_scope.execution_allowlist
 
 
 def test_qq_turn_never_allows_dangerous_tools_even_if_config_attempts_to_add_them():

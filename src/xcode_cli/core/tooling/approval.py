@@ -55,7 +55,7 @@ class ToolApprovalController:
     def scope_for_tool(self, tool_name: str) -> str | None:
         if tool_name in {"edit_file", "write_file"}:
             return "write"
-        if tool_name == "run_shell":
+        if tool_name in {"run_shell", "shell_task_stop"}:
             return "shell"
         return tool_name
 

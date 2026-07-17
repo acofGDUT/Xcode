@@ -13,6 +13,9 @@ FORBIDDEN_EXTERNAL_TOOLS = {
     "write_file",
     "edit_file",
     "run_shell",
+    "shell_task_output",
+    "shell_task_list",
+    "shell_task_stop",
     "dispatch_agent",
     "skill",
 }

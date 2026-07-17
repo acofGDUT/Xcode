@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from xcode_cli.core.external_turn import FORBIDDEN_EXTERNAL_TOOLS
 from xcode_cli.core.llm import LLMResponse
 from xcode_cli.core.tool_registry import ToolOutput
 from xcode_cli.core.tooling.display import ToolCallDisplay, ToolDisplayState
@@ -75,6 +76,17 @@ class ToolCallExecutor:
                     f"Tool error: tool '{tc.name}' must be called in the next assistant step "
                     "after the loaded skill takes effect."
                 )
+                if render_output:
+                    self.console.print(f"  [bold red]{result}[/bold red]")
+                executed_calls.append((tc, ToolOutput(content=result)))
+                continue
+
+            if (
+                tool_scope is not None
+                and getattr(tool_scope, "source", None) == "qqchat"
+                and tc.name in FORBIDDEN_EXTERNAL_TOOLS
+            ):
+                result = f"Tool error: tool '{tc.name}' is blocked by entry tool scope."
                 if render_output:
                     self.console.print(f"  [bold red]{result}[/bold red]")
                 executed_calls.append((tc, ToolOutput(content=result)))
@@ -270,7 +282,15 @@ class ToolCallExecutor:
             return f"matched {len(result.splitlines())} file(s)"
         if tool_name == "run_shell":
             exit_line = next((line for line in reversed(result.splitlines()) if line.startswith("exit_code=")), "")
-            return exit_line or "command finished"
+            if exit_line:
+                return exit_line
+            task_line = next((line for line in result.splitlines() if line.startswith("task_id=")), "")
+            status_line = next((line for line in result.splitlines() if line.startswith("status=")), "")
+            if task_line:
+                task_id = task_line.partition("=")[2]
+                status = status_line.partition("=")[2] or "running"
+                return f"background task {task_id} ({status})"
+            return "command finished"
         if tool_name == "skill":
             name = str(args.get("skill", "")).strip().lstrip("/")
             return f"loaded skill {name}" if name else "loaded skill"

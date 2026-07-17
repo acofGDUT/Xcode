@@ -369,6 +369,68 @@ def test_llm_loop_blocks_tool_calls_outside_execution_scope(tmp_path: Path, monk
     assert calls[0] == 2
 
 
+def test_run_shell_background_result_summary_is_not_finished(tmp_path: Path, monkeypatch) -> None:
+    agent = _make_agent(tmp_path, monkeypatch)
+
+    summary = agent.tool_executor._summarize_tool_result(
+        "run_shell",
+        {"command": "server", "run_in_background": True},
+        "\n".join(
+            [
+                "Command is running in background.",
+                "task_id=shell-123",
+                "pid=42",
+                "status=running",
+                "background_reason=explicit",
+            ]
+        ),
+    )
+
+    assert summary == "background task shell-123 (running)"
+
+
+def test_qq_scope_cannot_forge_read_only_shell_task_access(tmp_path: Path, monkeypatch) -> None:
+    agent = _make_agent(tmp_path, monkeypatch)
+    calls = [0]
+    executed: list[str] = []
+    scope = ToolScope(
+        source="qqchat",
+        visible_tools=("shell_task_output",),
+        execution_allowlist=("shell_task_output",),
+        remote_approval=False,
+    )
+
+    def fake_complete(**kwargs):
+        calls[0] += 1
+        if calls[0] == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="call_shell_output",
+                        name="shell_task_output",
+                        args={"task_id": "forged"},
+                    )
+                ],
+            )
+        assert any(
+            m.get("role") == "tool" and "blocked by entry tool scope" in str(m.get("content", ""))
+            for m in kwargs["messages"]
+        )
+        return LLMResponse(content="blocked safely", tool_calls=[])
+
+    agent.llm.complete = fake_complete
+    agent.tools._tools["shell_task_output"].execute = (
+        lambda **kwargs: executed.append("shell_task_output") or "should not execute"
+    )
+
+    result = agent._run_llm_loop([], "system", tool_scope=scope)
+
+    assert result == "blocked safely"
+    assert calls[0] == 2
+    assert executed == []
+
+
 def test_external_llm_loop_does_not_render_to_terminal(tmp_path: Path, monkeypatch) -> None:
     agent = _make_agent(tmp_path, monkeypatch)
     printed: list[object] = []

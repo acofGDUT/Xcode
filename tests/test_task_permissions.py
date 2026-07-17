@@ -50,6 +50,19 @@ def test_task_list_is_read_only_allow(tmp_path: Path) -> None:
     assert pm.check("task_list", is_read_only=True) == "allow"
 
 
+def test_shell_task_read_tools_are_read_only_allow(tmp_path: Path) -> None:
+    pm = PermissionManager(str(tmp_path))
+
+    assert pm.check("shell_task_output", is_read_only=True) == "allow"
+    assert pm.check("shell_task_list", is_read_only=True) == "allow"
+
+
+def test_shell_task_stop_defaults_to_ask(tmp_path: Path) -> None:
+    pm = PermissionManager(str(tmp_path))
+
+    assert pm.check("shell_task_stop", is_read_only=False) == "ask"
+
+
 def test_is_read_only_deny_overrides(tmp_path: Path) -> None:
     """Explicit deny takes precedence over is_read_only=True."""
     settings_dir = tmp_path / ".xcode"

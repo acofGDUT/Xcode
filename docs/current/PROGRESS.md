@@ -916,3 +916,31 @@ ARGUMENTS:
 - PowerShell 原生 PTY `run_shell` 拒绝验收：WinPTY 驱动 `powershell.exe -NoLogo -NoProfile`，审批菜单输入 `n`；`calls=2`（第二次来自下一条用户输入）、`executed=[]`、拒绝后到下一条用户输入前无第二次模型请求、history 包含 tool denial 和 system marker，下一轮模型请求角色序列为 `user, assistant, tool, system, user`。
 - cmd.exe 原生 PTY `run_shell` 拒绝验收：WinPTY 驱动 `cmd.exe`，同场景同结果，`executed=[]` 且拒绝记录和中断 marker 保留。
 - PowerShell 原生 PTY `write_file` 拒绝验收：WinPTY 驱动 `powershell.exe -NoLogo -NoProfile`，diff preview 中可见 `old text` -> `new text`，审批输入 `n`；`calls=1`、`executed=[]`、文件内容仍为 `old text`，history 包含 tool denial 和 system marker。
+
+## 34. Shell 后台任务最小闭环：2026-07-17
+
+状态：代码实现、自动化回归和 PowerShell/cmd.exe 原生进程验收已完成。
+
+本轮按以下设计和计划完成：
+
+- `docs/superpowers/specs/2026-07-17-shell-background-task-design.md`
+- `docs/superpowers/plans/2026-07-17-shell-background-task-plan.md`
+
+完成内容：
+
+- 新增 `ShellTaskManager`，从 spawn 起注册同一进程，支持快速完成、`run_in_background=true` 显式后台和等待预算耗尽原地后台三条路径。
+- 新增 `shell_task_output`、`shell_task_list`、`shell_task_stop`；后台输出继续以固定二进制块 drain，内存与临时日志 bounded，未知 task ID 和 stop 失败均转换为可控工具错误。
+- Windows 使用 `taskkill.exe /T /F` 停止未 detach 的受管进程树，POSIX 使用独立 process group；root-only fallback 不标记 `stopped`。重复 stop/shutdown 幂等，监听端口和子进程树释放已有回归与原生 smoke 证据。
+- `AgentRuntime` 持有 manager-bound 四工具并在 `run_chat()` 的 `finally` shutdown；一次性 CLI 和 General sub-agent 保留硬超时 `run_shell`，General/Explore/Plan 均不获得后台任务管理工具。
+- `shell_task_stop` 复用 shell 审批域；QQchat/external 在 scope sanitize 和执行层双重禁止 shell task 工具，伪造只读 allowlist 也不能读取本地日志。
+- 未实现 `Ctrl+B`、后台完成主动通知、ready 探测、跨 session 恢复或命令关键词识别；shell 内部自行 detach 的后代不承诺可管理。
+
+验收证据：
+
+- 聚焦回归：`pytest tests/test_shell_tasks.py tests/test_shell.py tests/test_tool_approval.py tests/test_task_permissions.py tests/test_external_turn.py tests/test_agent_tool_loop.py tests/test_agent_memory_extraction_v2.py -q`，`84 passed in 17.75s`。
+- `python -m compileall -q src`：退出码 0。
+- 全量 `pytest -q`：`672 passed in 54.97s`。
+- `git diff --check`：退出码 0；仅输出 Windows LF/CRLF 行尾转换提示。
+- PowerShell 原生宿主：8 条生命周期、监听端口和并发 shutdown 聚焦测试，`8 passed in 9.34s`。
+- cmd.exe 原生宿主：同 8 条聚焦测试，`8 passed in 10.10s`。
+- 两种宿主额外运行真实 OS smoke，均输出 `PASS explicit timeout output process-tree-stop runtime-shutdown`：覆盖显式后台短时间返回、后台追加 `LATE`、50ms 后同 task/PID 自动后台、worker + grandchild 全树停止，以及 `/exit` finally shutdown。该场景无 stdin 或终端热键，不需要 WinPTY。
