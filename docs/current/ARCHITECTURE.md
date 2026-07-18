@@ -6,7 +6,7 @@
 
 Xcode 是一个 terminal-native AI coding agent，核心形态是 Python CLI REPL。它通过 OpenAI-compatible API 调用 LLM，并向模型暴露文件、搜索、shell、子 Agent、任务追踪、计划模式和记忆相关工具。
 
-当前版本的主循环是同步实现，不引入 `asyncio`。并发只用于子 Agent，由 `ThreadPoolExecutor` 承担。
+当前版本的 REPL、LLM/tool loop 和 `ToolRegistry.execute()` 保持同步外观，不做全局 `asyncio` 化。受控后台并发用于子 Agent、memory runner、MCP 生命周期以及 Shell 任务监控等独立子系统；其中 `ShellTaskManager` 使用专用 monitor/stop 线程持续 drain 输出并执行有界 shutdown，但向主循环暴露的仍是同步工具接口。
 
 ## 2. 组件关系图
 
@@ -41,6 +41,7 @@ flowchart TD
     Runtime --> SkillLoader["SkillLoader<br/>skills/loader.py"]
     Runtime --> CommandRegistry["CommandRegistry<br/>core/commands/registry.py"]
     Runtime --> Renderer["OutputRenderer<br/>ui/renderer.py"]
+    Runtime --> ShellManager["ShellTaskManager<br/>core/shell_tasks.py"]
 
     ResumeSvc --> Resume
     Compactor --> Context
@@ -56,6 +57,7 @@ flowchart TD
     Registry --> FileTools["read_file / write_file / edit_file"]
     Registry --> SearchTools["grep / glob"]
     Registry --> ShellTool["run_shell / shell_task_output / shell_task_list / shell_task_stop"]
+    ShellTool --> ShellManager
     Registry --> Dispatch["dispatch_agent"]
     Registry --> TaskTools["task_create / task_update / task_list"]
     Registry --> PlanTools["enter_plan_mode / write_plan / exit_plan_mode"]
@@ -397,15 +399,116 @@ session / resume / compact 的保存策略：
 | 任务 | `task_create`, `task_update`, `task_list` |
 | 计划模式 | `enter_plan_mode`, `write_plan`, `exit_plan_mode` |
 
-### Shell 任务生命周期
+### Shell 工具注册与实现选择
 
-交互式 `run_shell` 由 runtime 持有的 `ShellTaskManager` 执行。每条命令只 spawn 一次，启动后立即注册；快速命令在前台等待预算内结束时返回 bounded 输出和真实 `exit_code`，`run_in_background=true` 时立即返回 task ID，未显式后台但耗尽等待预算时则把同一进程原地标记为后台任务。后台化只改变任务状态，不重启命令。
+Shell 相关代码保留两种 `run_shell` 实现，但同一个 LLM 入口不会同时看到两个同名工具：
 
-Manager 从进程启动起使用固定大小二进制块持续 drain 合并后的 stdout/stderr，并把内存尾部和 runtime 临时日志都限制在硬上限内。`shell_task_output` 查询 bounded 输出和状态，`shell_task_list` 返回本 runtime 快照，`shell_task_stop` 停止仍受管且未自行 detach 的进程树。Windows 使用无 shell 的 `taskkill.exe /T /F`，POSIX 使用独立 process group；只有确认进程树停止后才发布 `stopped`，root-only fallback 会返回错误而不谎报成功。
+- `RUN_SHELL_TOOL` 是 `ALL_TOOLS` 中的一次性兼容版本，`execute` 指向模块级 `run_shell()`；它创建临时 manager，把 `timeout` 作为硬截止时间，结束时必定 shutdown，不能留下无人持有的后台任务。
+- `create_shell_tools(manager)` 返回绑定到指定 `ShellTaskManager` 的 `run_shell`、`shell_task_output`、`shell_task_list`、`shell_task_stop` 四个 `ToolDef`。其中受管 `run_shell` 的 `execute` 指向闭包 `managed_run_shell()`，`timeout` 表示前台等待预算。
 
-`AgentRuntime.run_chat()` 在 `finally` 中 shutdown manager，停止本会话仍在运行的任务并在 drain/文件关闭后清理 `~/.xcode/shell_tasks/<runtime-id>/`。General sub-agent 仍只继承一次性硬超时 `run_shell`，不获得后台任务查询、列表或停止能力；Explore/Plan sub-agent 不暴露 shell。`xcode tool run shell` 同样使用一次性硬超时路径，因为进程返回后没有持续存在的 manager。
+`AgentRuntime.__init__()` 的注册顺序决定本地主 Agent 最终使用哪种实现：
 
-首版不支持 `Ctrl+B`、主动完成通知、ready 探测、跨 session 恢复或交互式 stdin。调用方必须直接运行目标服务并使用 `run_in_background=true`；若命令内部再次使用 `start`、`Start-Process`、`&` 等机制自行 detach，脱离受管 shell 的后代不保证可查询或停止。
+```text
+创建会话级 ShellTaskManager
+  -> 创建 ToolRegistry
+  -> 注册 ALL_TOOLS
+       -> run_shell = RUN_SHELL_TOOL（一次性硬超时版）
+  -> 注册 create_shell_tools(shell_task_manager)
+       -> run_shell = managed_run_shell（覆盖同名旧值）
+       -> shell_task_output
+       -> shell_task_list
+       -> shell_task_stop
+  -> 注册 dispatch/task/plan/skill/MCP 等其他工具
+  -> 创建 ToolCallExecutor
+```
+
+`ToolRegistry.register()` 当前按 `self._tools[tool.name] = tool` 写入字典，因此后注册的 manager-bound `run_shell` 会覆盖前面的 `RUN_SHELL_TOOL`，不会在最终 schema 中形成两个同名函数。正常本地交互式主 Agent 最终向 LLM 暴露四个 Shell 工具，且所有主 Agent `run_shell` tool call 都进入同一个会话级 manager。工具注册发生在 runtime 构造期；每轮 LLM 请求前，`get_openai_schemas()` 再从当前 registry 生成 schema，并应用 blocked/visible tool 过滤。
+
+不同入口的最终 Shell 能力如下：
+
+| 入口 | LLM/调用方可用的 Shell 能力 | timeout 语义 |
+|------|-----------------------------|--------------|
+| 本地交互式主 Agent | manager-bound `run_shell` + `shell_task_output/list/stop` | 前台等待预算；到期原地转后台 |
+| General sub-agent | 仅 `ALL_TOOLS` 中的一次性 `run_shell` | 硬超时；到期停止进程树 |
+| Explore / Plan sub-agent | 不暴露 Shell | 不适用 |
+| `xcode tool run shell` | 不经过 LLM，直接调用模块级一次性 `run_shell()` | 硬超时；调用结束即 shutdown |
+| QQchat / external | schema 层隐藏，执行层再次硬拒绝四个 Shell 工具 | 不允许执行 |
+
+### 从 LLM tool call 到 ShellTaskManager
+
+```mermaid
+sequenceDiagram
+    participant L as LLM
+    participant R as AgentRuntime
+    participant E as ToolCallExecutor
+    participant T as ToolRegistry
+    participant S as managed_run_shell
+    participant M as ShellTaskManager
+    participant P as OS Process
+
+    R->>L: complete(tools=get_openai_schemas())
+    L-->>R: run_shell(command, cwd, timeout, run_in_background)
+    R->>E: execute(LLMResponse)
+    E->>E: scope / permission / approval checks
+    E->>T: execute("run_shell", args)
+    T->>S: ToolDef.execute(**args)
+    S->>M: run(..., background_on_timeout=true)
+    M->>P: Popen once
+    M->>M: register task + start monitor
+    alt run_in_background=true
+        M-->>S: same task snapshot + explicit task ID
+    else process exits and output drain completes in budget
+        P-->>M: exit code + pipe EOF
+        M-->>S: bounded output + terminal status
+    else foreground wait budget expires
+        M->>M: mark same task backgrounded(reason=timeout)
+        M-->>S: same PID/task ID; process continues
+    end
+    S-->>T: formatted tool result
+    T-->>E: ToolOutput
+    E-->>R: assistant tool_call + paired tool message
+    R->>L: next model round may query output/list/stop
+```
+
+LLM 通过工具描述判断 server、watcher 或不会自行退出的命令是否应传 `run_in_background=true`；后端不按 `mvn`、`nginx`、`vite` 等关键词分类命令。若模型漏传后台参数，兜底依据只是等待预算是否耗尽，因此很慢但最终会退出的 build/test 命令也可能转成后台任务。工具调用返回后没有异步完成通知，模型只有在后续调用 `shell_task_output` 或 `shell_task_list` 时才会获知新状态。
+
+### Shell Task 的职责与状态
+
+Shell Task 是 OS 进程的会话内管理记录，不是 `TaskTracker` 中用于计划展示的任务卡片，也不会为了后台化再启动一个进程。内部 `_ShellTask` 持有 `Popen` 句柄、root PID、命令、cwd、输出文件、bounded 内存尾部、monitor thread、锁和 `drain_done` 事件；对外只返回不可变 `ShellTaskSnapshot`。
+
+任务状态机为：
+
+```text
+spawn -> running foreground
+running foreground -> completed | failed
+running foreground -> running background (explicit | timeout)
+running background -> completed | failed
+running foreground/background -> stopped
+runtime shutdown -> stop all running tasks
+```
+
+`backgrounded` 和 `background_reason` 是运行方式元数据，不是额外终态。`completed` 表示退出码为 0，非零退出码或 monitor 错误发布为 `failed`；只有用户 stop 或 runtime shutdown 确认停止受管进程树后才发布 `stopped`。`status=running` 只说明进程仍受 manager 管理，不代表服务端口或健康检查已经 ready。
+
+四个工具的职责边界为：
+
+| 工具 | 职责 |
+|------|------|
+| `run_shell` | spawn 一次、登记 task，并在“输出 drain 完成”或“任务转后台”时结束本次工具调用 |
+| `shell_task_output` | 返回指定 task 的 bounded 最新输出、状态、PID、退出码、截断标记和日志路径 |
+| `shell_task_list` | 返回当前 runtime 登记过的 running/completed/failed/stopped 快照，不做跨 session 恢复 |
+| `shell_task_stop` | 幂等停止受管进程树，等待 bounded drain 后返回最终快照 |
+
+### 进程启动、输出与停止
+
+Manager 对所有命令使用同一条启动路径：`shell=True`、`stdin=DEVNULL`、`stdout=PIPE`、`stderr=STDOUT`、无缓冲二进制读取；`cwd` 作为结构化参数传给 `Popen`。Windows 由系统 shell 解释命令并创建新 process group，POSIX 创建独立 session。调用方应优先传 `cwd` 并直接运行目标程序，例如把 `cd D:\\app && mvn spring-boot:run 2>&1` 表达为 `command="mvn spring-boot:run"` 加 `cwd="D:\\app"`；stderr 已在进程层合并，不需要再次写 `2>&1`。
+
+spawn 成功后 task 立即登记，daemon monitor 从进程启动起用固定大小二进制块持续 drain stdout/stderr。内存只保留 bounded tail，runtime 临时日志只写到硬上限；达到上限后标记 `output_truncated=true` 并停止继续落盘，但仍持续读取 pipe，避免服务因 stdout 反压而阻塞。快速命令必须等进程退出、pipe EOF 和终态发布后才设置 `drain_done`，避免丢失尾部输出。
+
+`shell_task_stop` 在 Windows 使用不经 shell 包装的 `taskkill.exe /PID <pid> /T /F`，POSIX 使用 process group；只有确认进程树停止后才发布 `stopped`。若树停止失败、只 fallback 杀掉 root，工具返回明确错误，不把可能仍存活的后代伪装成已停止。stop、自然退出和 monitor 发布终态通过 task lock/stop lock 串行化。
+
+`AgentRuntime.run_chat()` 在 `finally` 中 shutdown manager：先禁止新任务，再并发请求停止当前 runtime 的存量任务，在统一有界预算内等待 monitor drain/关闭文件，最后 best-effort 清理 `~/.xcode/shell_tasks/<runtime-id>/`。后台 task 的生命周期因此长于单次 tool call，但不长于持有它的本地 runtime。
+
+首版不支持交互式 stdin、`Ctrl+B`、主动完成通知、ready/health 探测或跨 session 恢复。调用方必须直接运行目标服务并使用 `run_in_background=true`；若命令内部再次使用 `start`、`Start-Process`、shell `&` 等机制自行 detach，外层 shell 可能先退出或遗留被后代持有的管道句柄，manager 不保证脱离后的进程仍可查询或停止。
 
 工具调用显示当前分两层：
 
