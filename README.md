@@ -1,24 +1,46 @@
 # Xcode
 
-> A terminal-native AI coding agent. Tools, sub-agents, plan mode, persistent memory, and an approval-first terminal workflow for local coding.
+简体中文 | [English](README.en.md)
 
-## Quick Start
+> 一个面向本地开发工作的终端原生 AI 编码 Agent。它把模型推理、工具执行、权限审批、会话恢复和持久记忆组织成一条可观察、可控制、可扩展的工程工作流。
+
+## 项目简介
+
+Xcode 不是给聊天界面再套一层命令行，而是让大模型能够在真实代码仓库中持续工作：理解项目上下文、搜索和编辑文件、运行命令、拆解任务，并在执行有副作用的操作前交由用户确认。
+
+项目通过 OpenAI-compatible API 连接模型，围绕同步 `AgentRuntime` 构建 LLM/tool loop；工具、权限、上下文、会话与记忆均有独立边界。Windows 是当前主要目标平台，核心终端交互会优先在 PowerShell 和 cmd.exe 中验收。
+
+![Xcode 核心架构](docs/assets/readme/xcode-core-architecture.png)
+
+## 核心能力
+
+- **终端原生交互**：基于 Typer、Rich 与 prompt_toolkit，支持流式回答、Markdown 渲染、语法高亮、状态栏和命令补全。
+- **真实工具调用**：模型可读取、写入和增量编辑文件，执行搜索与 shell 命令，并通过任务工具和子 Agent 拆分工作。
+- **审批优先**：写文件、编辑文件和 shell 等有副作用操作先展示信息再执行；权限支持会话、项目和全局三级规则。
+- **上下文与会话恢复**：提供 token 预算、自动压缩、`/compact` checkpoint、append-only transcript，以及 `/resume` 会话恢复。
+- **持久记忆**：通过项目级 `XCODE.md`、用户级 `XCODE.md` 和自动记忆主题文件保存规则、偏好与跨会话知识。
+- **计划与任务管理**：支持 Plan Mode、任务追踪和受限子 Agent，把复杂目标拆成可检查的执行步骤。
+- **可扩展能力**：项目 Skill 可由用户或模型按需调用；MCP 已支持受信任的 stdio tool server、工具刷新与本机启停管理。
+- **外部入口**：提供可选 QQChat 网关，并用独立会话、只读 ToolScope 和远程禁审批约束不可信输入。
+
+## 快速开始
+
+要求 Python 3.10 或更高版本。在仓库根目录安装并启动：
 
 ```bash
 pip install -e .
 xcode
 ```
 
-Configure an OpenAI-compatible provider:
+首次使用时，可以在 Xcode 内配置任意 OpenAI-compatible 服务：
 
-```bash
-xcode
+```text
 /env set <your-api-key>
 /env base-url <provider-base-url>
 /env model <model-name>
 ```
 
-Environment variables are also supported:
+也可以使用环境变量：
 
 ```bash
 export XCODE_API_KEY=<key>
@@ -26,106 +48,133 @@ export XCODE_BASE_URL=<url>
 export XCODE_MODEL=<model>
 ```
 
-## Core Features
+PowerShell 示例：
 
-- 13 built-in tools: file read/write/edit, search, shell, sub-agent dispatch, task tracking, and plan mode.
-- Streaming LLM output with tool calling through OpenAI-compatible APIs.
-- Approval-first workflow for write/edit/shell tools, including diff preview before file changes.
-- Inline approval menu with `Yes`, `No`, and `Yes, for this conversation`.
-- Project/user/auto memory model based on XCODE.md and indexed memory files.
-- Context token estimation, configurable `max_tokens`, and automatic compression.
-- Slash commands for environment config, context inspection, memory status, plan mode, and skills.
+```powershell
+$env:XCODE_API_KEY = "<key>"
+$env:XCODE_BASE_URL = "<url>"
+$env:XCODE_MODEL = "<model>"
+xcode
+```
 
-## Documentation
+## 常用命令
 
-The root `README.md` is the single documentation index. Detailed current project documents live in `docs/current/`:
-
-| Document | Answers | Boundary |
-|----------|---------|----------|
-| [docs/current/PROGRESS.md](docs/current/PROGRESS.md) | How the project reached its current state | Phase/Batch history, review conclusions, acceptance evidence, completed migrations |
-| [docs/current/ARCHITECTURE.md](docs/current/ARCHITECTURE.md) | How the system works now | Current component relationships, data flows, memory/context/session/approval models |
-| [docs/current/ROADMAP.md](docs/current/ROADMAP.md) | What remains to build | Current backlog, blockers, unfinished capabilities, implementation sketches, acceptance ideas |
-| [docs/current/DEVNOTES.md](docs/current/DEVNOTES.md) | Why decisions were made and where risks are | Known issues, design decisions, compatibility limits, validation risks |
-
-Documentation ownership rule: completed work and evidence live in `PROGRESS.md`; current implementation contracts live in `ARCHITECTURE.md`; open work, blockers, and next steps live in `ROADMAP.md`; design rationale and recurring risks live in `DEVNOTES.md`.
-
-Recommended reading order:
-
-1. `docs/current/PROGRESS.md`
-2. `docs/current/ARCHITECTURE.md`
-3. `docs/current/ROADMAP.md`
-4. `docs/current/DEVNOTES.md`
-
-Root-level `ARCHITECTURE.md`, `ROADMAP.md`, `PROGRESS.md`, `DEVNOTES.md`, and `日期计划.md` are compatibility entrypoints. Old root documents were archived to `docs/old/2026-05-25-before-docs-restructure/`.
-
-`日期计划.md` is now a journal rather than a primary project document. The current journal copy is `docs/journal/2026-05-25-日期计划.md`.
-
-Current reference notes:
-
-- [docs/reference/mcp-knowledge-guide.md](docs/reference/mcp-knowledge-guide.md): MCP concepts, protocol flow, Xcode client implementation, configuration, trust model, commands, and security boundaries.
-- [docs/reference/qqchat-setup-guide.md](docs/reference/qqchat-setup-guide.md): QQ Chat 配置教程，面向 pull 项目后想要使用 QQ Chat 功能的用户。
-- [docs/reference/qq-bot-integration-guide.md](docs/reference/qq-bot-integration-guide.md): QQ bot API v2 investigation and target `/QQchat` usage guide.
-
-Explainers:
-
-- [docs/explainers/auto-memory-recall-v2.md](docs/explainers/auto-memory-recall-v2.md): Auto memory recall v2 为什么这样升级、每个升级点有什么用，以及升级后的效果和边界。
-
-## 中文文档导航
-
-根目录 `README.md` 是当前唯一的文档索引，核心项目文档都在 `docs/current/`：
-
-| 文档 | 说明 |
+| 命令 | 作用 |
 |------|------|
-| [docs/current/PROGRESS.md](docs/current/PROGRESS.md) | 项目是怎么一步步推进到现在的，包含阶段历史、review 结论、验收证据和完成项迁移记录 |
-| [docs/current/ARCHITECTURE.md](docs/current/ARCHITECTURE.md) | 当前系统怎么工作，包含组件关系、数据流、memory/context/session/approval 模型 |
-| [docs/current/ROADMAP.md](docs/current/ROADMAP.md) | 后续还要做什么，包含当前 backlog、阻塞、遗留项、未完成能力、目标态和实现草案 |
-| [docs/current/DEVNOTES.md](docs/current/DEVNOTES.md) | 踩坑、边界、设计决策、兼容性风险和问题状态 |
+| `/help` | 查看当前可用命令 |
+| `/init` | 分析仓库并创建或改进项目级 `XCODE.md` |
+| `/env` | 打开模型、上下文和渲染配置面板 |
+| `/context` | 查看当前 token 使用量与上下文预算 |
+| `/compact` | 压缩当前对话并写入恢复 checkpoint |
+| `/resume` | 浏览并恢复当前项目的历史会话 |
+| `/memory` | 查看记忆路径与自动记忆状态 |
+| `/plan` | 进入、查看、批准或拒绝计划模式 |
+| `/skill` | 列出、查看或校验项目 Skill |
+| `/mcp` | 管理受信任的 MCP stdio server 与工具 |
+| `/QQchat` | 启动、停止或查看 QQChat 网关状态 |
 
-文档职责约定：已完成工作和证据放 `PROGRESS.md`；当前实现契约放 `ARCHITECTURE.md`；未完成项、阻塞、遗留和下一步放 `ROADMAP.md`；设计取舍、坑点和长期风险放 `DEVNOTES.md`。
+## 扩展与安全边界
 
-推荐阅读顺序：
+Skill、MCP 和 QQChat 最终都复用同一套工具注册、权限检查、异常捕获与审计链路，但入口拥有不同的能力范围。
 
-1. [docs/current/PROGRESS.md](docs/current/PROGRESS.md)
-2. [docs/current/ARCHITECTURE.md](docs/current/ARCHITECTURE.md)
-3. [docs/current/ROADMAP.md](docs/current/ROADMAP.md)
-4. [docs/current/DEVNOTES.md](docs/current/DEVNOTES.md)
+![Xcode 的 Skill、MCP 与 QQChat 扩展关系](docs/assets/readme/xcode-extensions.png)
 
-根目录的 `ARCHITECTURE.md`、`ROADMAP.md`、`PROGRESS.md`、`DEVNOTES.md`、`日期计划.md` 现在主要作为兼容入口。旧版主文档归档在 [docs/old/2026-05-25-before-docs-restructure](docs/old/2026-05-25-before-docs-restructure)。
+- **Skill**：从 `.xcode/skills/<name>/SKILL.md` 加载项目能力，可作为 slash command 使用，也可由模型按需调用。
+- **MCP**：当前仅支持本机 stdio tools。配置必须先通过 trust gate；工具默认视为可写，只有显式声明后才按只读工具处理。
+- **QQChat**：外部消息使用独立 conversation history，危险工具不会暴露给远程模型，远程用户也不能批准本地副作用操作。
+- **异常隔离**：工具失败会转为可读结果返回给 Agent，单个工具异常不应打崩主循环。
 
-`日期计划.md` 现在是工作日志，当前副本位于 [docs/journal/2026-05-25-日期计划.md](docs/journal/2026-05-25-%E6%97%A5%E6%9C%9F%E8%AE%A1%E5%88%92.md)。
+## 当前状态
 
-当前参考文档：
+当前版本为 `v0.1.0`。核心 CLI、权限、会话恢复、上下文压缩、Skills 和 MCP stdio tools 已形成可用闭环；auto memory extraction/recall v2 已完成主体实现与自动化回归，仍有部分策略和原生终端验收需要收口。
 
-- [docs/reference/mcp-knowledge-guide.md](docs/reference/mcp-knowledge-guide.md)：MCP 核心概念、协议流程、Xcode Client 实现、配置与信任模型、命令和安全边界。
-- [docs/reference/qqchat-setup-guide.md](docs/reference/qqchat-setup-guide.md)：QQ Chat 配置教程，面向 pull 项目后想要使用 QQ Chat 功能的用户。
-- [docs/reference/qq-bot-integration-guide.md](docs/reference/qq-bot-integration-guide.md)：QQ 机器人 API v2 调研与 `/QQchat` 目标接入教程。
+QQChat 已具备 `start`、`stop`、`status`、WebSocket gateway、消息队列和安全 ToolScope，但真实 QQ 单聊/群聊以及完整原生 Windows 交互仍在验收中。项目不会把这部分描述为已完全完成。
 
-解释性文档：
+最新状态与未完成项请分别查看 [开发进度](docs/current/PROGRESS.md) 和 [路线图](docs/current/ROADMAP.md)。
 
-- [docs/explainers/auto-memory-recall-v2.md](docs/explainers/auto-memory-recall-v2.md)：Auto memory recall v2 为什么这样升级、每个升级点有什么用，以及升级后的效果和边界。
+## 真实使用截图
 
-## Development Workflow
+以下截图来自项目报告中的实际运行记录，展示 Xcode 在原生终端和 QQChat 中的真实交互效果。
 
-Xcode uses a **Spec-first + TDD-core + E2E-acceptance** workflow:
+### Memory 与上下文管理
 
-- Spec-first: meaningful feature, architecture, permission, context, session, or tool-loop changes start from `docs/superpowers/specs/` and `docs/superpowers/plans/`.
-- TDD-core: high-risk behavior is protected by failing tests before implementation, especially permissions, tool errors, session recovery, memory paths, context accounting, and regression fixes.
-- E2E-acceptance: terminal-native behavior is validated in real cmd.exe/PowerShell when prompt_toolkit, Rich rendering, approval menus, hotkeys, or Windows paths are involved.
+`/memory` 展示项目记忆、用户记忆和自动记忆索引的实际路径与状态：
 
-Testing is risk-layered:
+![Xcode 的 Memory 状态与文件索引](docs/assets/readme/memory-status.png)
 
-| Layer | Scope | Expectation |
-|-------|-------|-------------|
-| P0 | Security, state, tool loop, session, memory, context, Windows compatibility | Automated regression tests required. |
-| P1 | User-visible commands, task/sub-agent behavior, config merge, rendering state | Focused behavior tests expected. |
-| P2 | Simple wrappers, wording, low-risk display details, docs | Smoke/manual validation is enough when tests would be noisy. |
+执行 `/compact` 后，可通过 `/context` 查看压缩结果、各类消息的 token 占用和剩余上下文预算：
 
-## Requirements
+![Xcode 的 compact 结果与 context 面板](docs/assets/readme/context-compact.png)
+
+### 会话恢复
+
+`/resume` 提供方向键选择菜单，并显示 checkpoint、最近输入和外部会话摘要，便于恢复此前的工作现场：
+
+![Xcode 的会话恢复选择菜单](docs/assets/readme/session-resume.png)
+
+### Skill 与 MCP
+
+项目 Skill 可以由用户显式调用，也可以由模型按需调用。下图展示 Skill 对代码文件进行检查并输出结构化建议：
+
+![Xcode 的 Skill 调用与代码检查结果](docs/assets/readme/skill-invocation.png)
+
+MCP 管理面能够展示已发现和注册的工具、只读属性、输出限制与状态，并让模型调用受信任的 stdio tools：
+
+![Xcode 的 MCP 工具列表与实际调用](docs/assets/readme/mcp-tools.png)
+
+### QQChat
+
+QQChat 网关可在本地查看运行状态和工具边界，并将真实 QQ 单聊消息交给独立的外部会话处理：
+
+![Xcode 的 QQChat 状态与真实单聊效果](docs/assets/readme/qqchat-demo.png)
+
+## 项目结构
+
+```text
+src/xcode_cli/
+├── core/          # AgentRuntime、LLM/tool loop、上下文、会话、权限、记忆
+├── core/tools/    # 文件、搜索、shell、Skill 与子 Agent 工具
+├── mcp/           # MCP stdio 连接、trust、状态、工具适配
+├── qqchat/        # QQ 网关、事件、鉴权、消息与服务编排
+├── skills/        # 项目 Skill 的加载、校验与 prompt 展开
+└── ui/            # Rich 渲染
+
+tests/             # 自动化回归测试
+docs/              # 当前文档、规格、计划、说明与历史归档
+```
+
+## 文档导航
+
+| 文档 | 内容 |
+|------|------|
+| [开发进度](docs/current/PROGRESS.md) | 已完成阶段、review 结论和验收证据 |
+| [当前架构](docs/current/ARCHITECTURE.md) | 已实现的组件关系、数据流和系统契约 |
+| [路线图](docs/current/ROADMAP.md) | 当前 backlog、阻塞、遗留项和下一步 |
+| [开发笔记](docs/current/DEVNOTES.md) | 设计取舍、兼容性限制、已知风险和踩坑记录 |
+| [MCP 指南](docs/reference/mcp-knowledge-guide.md) | MCP 概念、配置、信任模型与安全边界 |
+| [QQChat 配置指南](docs/reference/qqchat-setup-guide.md) | QQChat 的配置和使用说明 |
+| [自动记忆召回 v2](docs/explainers/auto-memory-recall-v2.md) | relevant memory recall v2 的设计与边界 |
+
+推荐按“开发进度 → 当前架构 → 路线图 → 开发笔记”的顺序阅读。根目录的 `ARCHITECTURE.md`、`ROADMAP.md`、`PROGRESS.md` 和 `DEVNOTES.md` 仅作为兼容入口。
+
+## 开发与验证
+
+项目采用 **Spec-first + TDD-core + E2E-acceptance**：中等以上行为变更先写规格与计划；核心安全和状态行为以回归测试保护；终端交互、审批菜单、快捷键和 Windows 路径等能力在原生 PowerShell/cmd.exe 中验收。
+
+```bash
+pytest -q
+```
+
+## 运行要求
 
 - Python >= 3.10
-- Windows is the primary target
-- Linux/macOS are partial targets; ripgrep bootstrap is currently Windows-focused
+- Windows 为主要目标平台
+- Linux/macOS 为部分支持平台；当前 ripgrep bootstrap 主要面向 Windows
 
 ## License
 
 MIT
+
+---
+
+Read this document in English: [README.en.md](README.en.md)
