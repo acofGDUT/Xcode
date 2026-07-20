@@ -2,16 +2,17 @@
 
 > 本文只记录未来计划、未完成能力和仍需验收的风险。已完成实现请看 `PROGRESS.md`，当前实现细节请看 `ARCHITECTURE.md`，坑点和设计取舍请看 `DEVNOTES.md`。
 
-最后更新：2026-06-30
+最后更新：2026-07-17
 
 ## 1. 当前焦点
 
-Xcode v0.1.0 的核心 CLI、session/resume、compact v2 可靠性、Skills Phase 1-2、MCP Phase 1/2、本地主会话 `dispatch_agent` 免审、auto memory extraction v2 和本地审批拒绝中断当前 turn 已经收口。compact v3 现场恢复和 auto memory recall v2 的代码与自动化回归已落地，但原生 Windows/QQchat 手工验收仍未收口。后续 roadmap 不再展开已完成项，只保留仍需实现或仍需真实平台验收的工作。
+Xcode v0.1.0 的核心 CLI、session/resume、compact v2 可靠性、Skills Phase 1-2、MCP Phase 1/2、本地主会话 `dispatch_agent` 免审和本地审批拒绝中断当前 turn 已经收口。Auto memory extraction v2 的主体代码与自动化回归已落地，但写入策略一致性、索引同步、runner timeout 和部分成功语义仍需加固；compact v3 现场恢复和 auto memory recall v2 的代码与自动化回归已落地，但原生 Windows/QQchat 手工验收仍未收口。后续 roadmap 不再展开已完成项，只保留仍需实现或仍需真实平台验收的工作。
 
 近期优先级：
 
 - 完成 `/QQchat init`、`/QQchat reload` 和真实 QQ 单聊/群聊平台验收。
 - 补齐 relevant memory recall v2 的 PowerShell/cmd.exe 原生 PTY 手工交互验收记录。
+- 收口 auto memory extraction v2 的策略一致性、`MEMORY.md` 同步、bounded shutdown 和部分成功语义。
 - 为 `/context` 增加费用估算，而不只是 token 统计。
 - 补齐 compact v3 现场恢复与 `xcode.v3` checkpoint 链路的 PowerShell/cmd.exe 原生 PTY 和 QQchat 平台手工验收。
 - 继续收口工具调用展开、task 面板持久展示、对话回退/分叉和渲染模式。
@@ -26,6 +27,7 @@ Phase 5 生态扩展整体继续冻结。MCP 目前只完成 stdio tools 的安�
 | P0/P1 | compact 现场恢复与 checkpoint 链路 | 代码实现和自动化回归已完成；手工验收未执行/未记录 | 在 PowerShell/cmd.exe 验证 restored-context `/compact` 和 v3 `/resume`，并完成 QQchat same-conversation continuation/isolation 平台验收 |
 | P1 | `/QQchat init` + reload | 已写 spec/plan，未实现 | 实现配置骨架初始化和热部署 reload，项目级配置不能写 secret |
 | P1 | Auto memory recall v2 手工验收 | 代码实现和自动化回归已完成；手工验收未执行/未记录 | 在 PowerShell/cmd.exe 验证 non-blocking prefetch、安全点注入、late 丢弃和 memory 目录 bounded read；QQchat/external/headless 隔离目前只有自动化覆盖 |
+| P1 | Auto memory extraction v2 边界加固 | 边界已确认；修复 spec、代码实现和自动化回归未开始 | 统一两条写入路径的 generic slug 策略，定义 topic/`MEMORY.md` 一致性，落实真正 bounded shutdown，并明确三条已落盘后第四条被拒绝的部分成功结果 |
 | P1 | `/context` cost 估算 | 未实现 | 在 token 统计外展示近似费用，未知模型显示 `unknown` |
 | P1 | 工具调用 UI 展开 | 默认摘要已完成，展开未做 | 设计并验证 `Ctrl+O` 展开摘要，重点看原生 Windows 热键兼容 |
 | P1 | task 面板持久展示 | 瞬时面板已完成，持久展示未做 | 评估 bottom toolbar 或固定区域，并验证与 Rich Live、streaming、审批菜单共存 |
@@ -44,6 +46,7 @@ Phase 5 生态扩展整体继续冻结。MCP 目前只完成 stdio tools 的安�
 | compact 现场恢复与 checkpoint 链路 | 代码实现和自动化回归已完成；手工验收未执行/未记录 | `xcode.v3` restored context、checkpoint lineage metadata、v3 resume 和 external work-state isolation 已有自动化覆盖；仍需原生 Windows/QQchat 手工验收 |
 | `/QQchat init` + reload | 已写 spec/plan，未实现 | 需要实现配置文件骨架初始化和热部署 reload；项目级 config 不能写 secret |
 | Auto memory recall v2 | 代码实现和自动化回归已完成；手工验收未执行/未记录 | Claude-like `MEMORY.md` 短索引 + relevant topic prefetch 已实现；仍需 PowerShell/cmd.exe 原生 PTY 验证 non-blocking prefetch、安全点注入、late 丢弃、memory 目录 bounded read；QQchat/external/headless 隔离目前只有自动化覆盖 |
+| Auto memory extraction v2 边界加固 | 边界已确认；修复未开始 | `validate_v2_memory()` 与 `validate_v2_topic_text()` 的 generic slug 策略不一致；topic 与 `MEMORY.md` 两步写入缺少一致性保证；runner timeout 不是正常运行时硬超时且 `shutdown(wait=True)` 未保证 bounded wait；第四个 topic 被拒绝时前三个已落盘但结果仍为 `failed` |
 | `/QQchat` 最终验证 | 未完成 | 需要记录真实 QQ/Windows 验收；自动化通过不能替代真实平台接入完成 |
 | QQ 真实平台验收 | 未完成 | 单聊被动回复、群聊 @ 被动回复、危险工具真实 QQ 场景均未验收 |
 | 工具调用 `Ctrl+O` 展开 | 未实现 | 默认摘要已完成；展开热键和原生 Windows 热键验收仍未做 |
@@ -199,7 +202,21 @@ output_cost_per_1m: float | None = None
 - 验证与 Rich Live、streaming、审批菜单共存。
 - 原生 Windows 验收优先于视觉增强。
 
-## 10. Phase 5：生态扩展候选
+## 10. P1：Auto memory extraction v2 边界收口
+
+状态：边界已确认并纳入 backlog；修复 spec、代码实现和自动化回归均未开始。
+日期：2026-07-15
+
+Auto memory extraction v2 的主体流程、memory-only subagent、single-flight runner 和现有自动化回归已经落地。本节只记录新确认且尚未修复的工程边界，不改变既有完成证据：
+
+1. **写入策略一致性**：`MemoryWriter` 的结构化写入会经 `validate_v2_memory()` 拒绝 `GENERIC_SLUGS`，但 extraction subagent 的 `write_file` / `edit_file` 走 `validate_v2_topic_text()`，目前不校验 filename/frontmatter `name` 是否属于 generic slug。后续应统一两条写入路径的可接受 topic 契约，并覆盖 filename、frontmatter `name` 和更新已有 topic 的回归测试。
+2. **Topic 与短索引一致性**：subagent prompt 要求先写 topic、再更新 `MEMORY.md`，代码只按 `audit.saved_topic_paths` 判断是否保存成功，没有确认索引同步成功。后续需先写 spec 明确原子 upsert、失败回滚或可恢复对账策略；在此之前不能把“topic 已写入”等同于“两步保存完成”。
+3. **Runner timeout / shutdown 语义**：`timeout_seconds` 当前只用于 `_wait_until_idle()`，不限制正常 extraction 运行；`shutdown(wait=True)` 在该等待返回后仍调用 `ThreadPoolExecutor.shutdown(wait=True)`，不能据此声称 bounded shutdown。后续需定义 running task 的 timeout、取消和退出语义，并补不会无限阻塞 REPL 关闭的自动化回归。
+4. **部分成功结果**：一次 extraction 尝试第四个不同 topic 时，前三个可能已经落盘，第四个被 policy cap 拒绝，最终却返回 `action="failed"`。后续需明确 preflight、结构化 `partial` 状态或“保存成功并附 warning”等契约，使返回状态与磁盘事实一致，并验证 `saved_paths`、`MEMORY.md` 和用户可审计结果。
+
+本项属于 P1 用户可见行为与后台状态边界；进入实现前应补 spec，关键状态转换应先写失败测试。除聚焦自动化回归外，还需验证退出流程不会因 extraction runner 卡住。
+
+## 11. Phase 5：生态扩展候选
 
 Phase 5 整体仍冻结。MCP 只允许在已完成的 stdio tools 基线之上按 spec 小步推进；不得把已完成的 MCP Phase 1/2 当作继续扩张到 HTTP/OAuth/resources/prompts 的默认许可。
 

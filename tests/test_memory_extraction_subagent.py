@@ -56,6 +56,34 @@ def test_memory_tools_write_topic_and_ignore_index_as_saved_path(tmp_path: Path,
     assert audit.saved_topic_paths == [topic]
 
 
+def test_memory_tools_write_file_append_preserves_existing_index(tmp_path: Path, monkeypatch) -> None:
+    memory = _memory(tmp_path, monkeypatch)
+    tools, _audit = create_memory_extraction_tools(memory, PermissionManager(cwd=str(tmp_path)))
+    index = memory.memory_index_path()
+    index.parent.mkdir(parents=True, exist_ok=True)
+    index.write_text("- [Existing](existing.md) - existing hook\n", encoding="utf-8")
+
+    result = tools.execute(
+        "write_file",
+        {
+            "path": str(index),
+            "content": "- [New](new.md) - new hook\n",
+            "append": True,
+        },
+    )
+    write_schema = next(
+        schema for schema in tools.get_openai_schemas() if schema["function"]["name"] == "write_file"
+    )
+
+    assert not result.content.startswith(("Error:", "Tool error:"))
+    assert index.read_text(encoding="utf-8") == (
+        "- [Existing](existing.md) - existing hook\n"
+        "- [New](new.md) - new hook\n"
+    )
+    assert write_schema["function"]["parameters"]["properties"]["append"] == {"type": "boolean"}
+    assert "append" not in write_schema["function"]["parameters"]["required"]
+
+
 def test_memory_tools_reject_invalid_v2_topic_before_write(tmp_path: Path, monkeypatch) -> None:
     memory = _memory(tmp_path, monkeypatch)
     tools, audit = create_memory_extraction_tools(memory, PermissionManager(cwd=str(tmp_path)))

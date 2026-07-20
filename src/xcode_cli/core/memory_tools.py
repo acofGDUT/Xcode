@@ -34,18 +34,28 @@ def create_memory_extraction_tools(
         audit.read_paths.add(resolved)
         return ToolOutput(content=content)
 
-    def write_file(path: str, content: str) -> ToolOutput:
+    def write_file(path: str, content: str, append: bool = False) -> ToolOutput:
         resolved = _resolve_auto_memory_path(memory, path)
         if resolved is None:
             return ToolOutput(content="Error: path outside auto memory")
         if permissions.check("write_file", is_read_only=False) == "deny":
             return ToolOutput(content="Error: permission denied")
+        candidate_content = content
+        if append and resolved.exists():
+            try:
+                candidate_content = resolved.read_text(encoding="utf-8") + content
+            except Exception as exc:
+                return ToolOutput(content=f"Error: {exc}")
         if resolved.name != "MEMORY.md":
-            policy = validate_v2_topic_text(content)
+            policy = validate_v2_topic_text(candidate_content)
             if not policy.accepted:
                 return ToolOutput(content=f"Error: policy rejected: {policy.reason}")
         resolved.parent.mkdir(parents=True, exist_ok=True)
-        resolved.write_text(content, encoding="utf-8")
+        if append:
+            with resolved.open("a", encoding="utf-8") as handle:
+                handle.write(content)
+        else:
+            resolved.write_text(content, encoding="utf-8")
         _record_saved_topic(memory, audit, resolved)
         return ToolOutput(content=f"Wrote {resolved}")
 
@@ -92,7 +102,11 @@ def create_memory_extraction_tools(
         ToolDef(
             "write_file",
             "Write an auto memory file.",
-            {"path": {"type": "string"}, "content": {"type": "string"}},
+            {
+                "path": {"type": "string"},
+                "content": {"type": "string"},
+                "append": {"type": "boolean"},
+            },
             ["path", "content"],
             write_file,
             False,
